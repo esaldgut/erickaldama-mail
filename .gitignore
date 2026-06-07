@@ -1,0 +1,20 @@
+# Brainstorm companion (local, ephemeral)
+.superpowers/
+
+# Python venv for the diagrams tooling (regenerable from architecture_icons.py)
+docs/diagrams/.venv/
+__pycache__/
+*.pyc
+
+# Go build artifacts (when the TUI client lands)
+/bin/
+*.exe
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
