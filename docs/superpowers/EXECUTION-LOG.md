@@ -24,7 +24,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | # | Tarea | Estado | Commit | Review (spec/calidad) | Notas/hallazgos |
 |---|---|---|---|---|---|
 | T1 | Hook test harness + fail-safe skeleton | ✅ done | 87e3646 | spec ✅ / calidad ✅ | TDD red→green ok; fail-safe-deny verificado por construcción. Minor: añadir comentario "stdin=pipe-EOF" en T2 |
-| T2 | permission_mode gate + scope check | pending | — | — | — |
+| T2 | permission_mode gate + scope check | ✅ done | c22922e→6219898 | spec ✅ / calidad ✅ (tras fix) | quality cazó I-1: scope debía ir ANTES de bypass (hook no-op fuera del mail) + M-1 empty-cwd deny. Fix + test regresión. 4 tests verdes |
 | T3 | Metachar deny + allowlist + aws/cdk refine | pending | — | — | — |
 | T4 | Wire settings.json + audit log | pending | — | — | — |
 | T5 | Plugin manifest + .mcp.json | pending | — | — | — |
@@ -43,3 +43,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 - 2026-06-08 — T1 ✅ (commit 87e3646). go.mod (erickaldama-mail, go 1.26.4) + test/hook harness + fail-safe-deny
   skeleton. Spec-review ✅ (cero over-build), quality-review ✅ (invariante fail-safe verificado en todo path).
   Pendiente menor para T2: comentario "stdin es pipe que alcanza EOF". Siguiente: T2.
+- 2026-06-08 — T2 ✅ (c22922e + fix 6219898). Gate permission_mode + scope check. Quality-review cazó un
+  defecto REAL de diseño (I-1): el gate de bypass disparaba antes del scope → denegaba trabajo en OTROS
+  proyectos (sample-ios-app) en modo bypass, violando "hook = no-op fuera del mail". Fix: scope ANTES de bypass
+  + guard empty-cwd (M-1) + test de regresión. La review valió. 4 tests verdes. Comentario stdin-EOF añadido. Siguiente: T3.
