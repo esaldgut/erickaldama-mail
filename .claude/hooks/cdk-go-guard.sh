@@ -3,8 +3,25 @@
 # NOT a security boundary (docs: hooks fail open). The boundary is IAM (see iam/readonly-policy.json).
 # Default action is DENY; any internal error self-denies. Reads JSON on stdin.
 
-emit_deny() { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$1"; exit 0; }
-emit_allow() { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}\n'; exit 0; }
+DECISION_LOG="${DECISION_LOG:-$HOME/.claude/hooks/decision-log.json}"
+
+# Sanitize: strip secret-shaped tokens before logging (SEC E1/N1).
+sanitize() {
+  printf '%s' "$1" | sed -E \
+    -e 's/(AKIA|ASIA)[A-Z0-9]{16}/<AWS_KEY>/g' \
+    -e 's/AWS_SECRET_ACCESS_KEY=[^[:space:]]+/AWS_SECRET_ACCESS_KEY=<redacted>/g' \
+    -e 's/--token-code[[:space:]]+[0-9]+/--token-code <redacted>/g'
+}
+
+audit() { # $1=decision $2=tool
+  local line
+  line="$(jq -nc --arg d "$1" --arg t "$2" --arg c "$(sanitize "${CMD:-}")" \
+    '{ts:(now|todate),decision:$d,tool:$t,command:$c}')" || return 0
+  printf '%s\n' "$line" >> "$DECISION_LOG" 2>/dev/null || true
+}
+
+emit_deny() { audit deny "${TOOL:-Bash}"; printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$1"; exit 0; }
+emit_allow() { audit allow "${TOOL:-Bash}"; printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}\n'; exit 0; }
 
 # SEC-C1: any error path -> deny, never trust the harness to fail closed.
 trap 'emit_deny "\"hook error, fail-safe deny\""' ERR
@@ -17,6 +34,17 @@ command -v jq >/dev/null 2>&1 || emit_deny '"jq missing, fail-safe deny"'
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
 CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty')"
 PMODE="$(printf '%s' "$INPUT" | jq -r '.permission_mode // "default"')"
+
+TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // "Bash"')"
+if [[ "$TOOL" == mcp__aws-api__* ]]; then
+  # Inspect the MCP call's AWS command; allowlist of reads, else deny (best-effort; IAM is the boundary).
+  MCMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.cli_command // .tool_input.command // empty')"
+  MSUB="$(printf '%s' "$MCMD" | awk '{print $3}')"
+  case "$MSUB" in
+    describe*|list*|get*|ls) emit_allow ;;
+    *) emit_deny '"AWS mutation via MCP denied; IAM enforces, runs out-of-band"' ;;
+  esac
+fi
 
 # SEC-I4 (scope FIRST): the hook is a no-op outside the mail project. Judge scope before any mode reasoning,
 # so out-of-scope work in ANY permission mode passes through untouched (the hook is friction, not a boundary).
