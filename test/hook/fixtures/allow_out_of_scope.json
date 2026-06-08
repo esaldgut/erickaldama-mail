@@ -1,0 +1,1 @@
+{"tool_name":"Bash","tool_input":{"command":"aws s3 mb s3://x"},"cwd":"/Users/example/dev/src/swift/sample-ios-app","permission_mode":"default"}

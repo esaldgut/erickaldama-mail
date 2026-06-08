@@ -43,3 +43,21 @@ func TestDeniesAwsWrite(t *testing.T) {
 		t.Fatalf("expected deny, got: %s", got)
 	}
 }
+
+func TestAllowsOutOfScopeProject(t *testing.T) {
+	// A mutating command but cwd is NOT under the mail project → hook is a no-op (allow).
+	fixture, _ := os.ReadFile("fixtures/allow_out_of_scope.json")
+	got := runHook(t, string(fixture), "/Users/esaldgut/dev/src/go/src/erickaldama-mail")
+	if !strings.Contains(got, `"permissionDecision":"allow"`) {
+		t.Fatalf("expected allow (out of scope), got: %s", got)
+	}
+}
+
+func TestDeniesBypassPermissionMode(t *testing.T) {
+	// In-scope read that would normally allow, but permission_mode=bypassPermissions → deny.
+	fixture, _ := os.ReadFile("fixtures/deny_bypass_mode.json")
+	got := runHook(t, string(fixture), "/Users/esaldgut/dev/src/go/src/erickaldama-mail")
+	if !strings.Contains(got, `"permissionDecision":"deny"`) {
+		t.Fatalf("expected deny (bypass mode), got: %s", got)
+	}
+}
