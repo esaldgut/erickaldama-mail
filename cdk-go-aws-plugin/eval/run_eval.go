@@ -4,10 +4,9 @@ package eval
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
-	"time"
+	"path/filepath"
 )
 
 type caseDef struct {
@@ -27,38 +26,53 @@ type baselineEntry struct {
 	Date    string  `json:"date"`
 }
 
-// RunEval invokes each golden prompt k times via `claude -p`, asserts, computes the pass fraction, writes baseline.json.
-// Invoked manually / CI nightly: `go run -tags eval .` from the eval dir. NOT a unit test (LLM, non-deterministic).
-func RunEval(k int, date string) error {
+// RunEval invokes each golden prompt k times via `claude -p`, asserts, computes
+// the Pass@1 / Pass@3 metrics, and writes baseline.json under evalDir.
+//
+// Pass@1 is the fraction of individual runs that passed. Pass@3 is computed over
+// consecutive NON-overlapping triples of runs (so k should be a multiple of 3):
+// the fraction of triples in which AT LEAST ONE of the 3 runs passed.
+//
+// Golden files are read via filepath.Join(evalDir, c.file) and baseline.json is
+// written to filepath.Join(evalDir, "baseline.json"). Run from the eval dir, or
+// set EVAL_DIR; invoked via `go run -tags eval ./cmd/runeval` from the eval dir.
+// NOT a unit test (LLM, non-deterministic).
+func RunEval(evalDir string, k int, date string) error {
 	var out []baselineEntry
 	for _, c := range cases {
-		prompt, err := os.ReadFile(c.file)
+		prompt, err := os.ReadFile(filepath.Join(evalDir, c.file))
 		if err != nil {
 			return err
 		}
-		var passes int
+		results := make([]bool, 0, k)
 		for range k {
 			b, err := exec.Command("claude", "-p", string(prompt)).Output()
-			if err != nil {
-				continue // a failed run counts as a non-pass
-			}
-			if c.assertFn(string(b)).Pass {
-				passes++
+			results = append(results, err == nil && c.assertFn(string(b)).Pass)
+		}
+		// Pass@1 = mean of per-run results.
+		p1 := 0.0
+		for _, r := range results {
+			if r {
+				p1++
 			}
 		}
-		frac := 0.0
 		if k > 0 {
-			frac = float64(passes) / float64(k)
+			p1 /= float64(k)
 		}
-		out = append(out, baselineEntry{Prompt: c.file, PassAt1: frac, PassAt3: frac, Date: date})
+		// Pass@3 over non-overlapping triples: a triple passes if any of its 3 runs passed.
+		triples, passTriples := 0, 0
+		for i := 0; i+3 <= len(results); i += 3 {
+			triples++
+			if results[i] || results[i+1] || results[i+2] {
+				passTriples++
+			}
+		}
+		p3 := p1
+		if triples > 0 {
+			p3 = float64(passTriples) / float64(triples)
+		}
+		out = append(out, baselineEntry{Prompt: c.file, PassAt1: p1, PassAt3: p3, Date: date})
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
-	return os.WriteFile("baseline.json", data, 0o644)
-}
-
-func main() {
-	if err := RunEval(3, time.Now().UTC().Format("2006-01-02")); err != nil {
-		fmt.Fprintln(os.Stderr, "eval error:", err)
-		os.Exit(1)
-	}
+	return os.WriteFile(filepath.Join(evalDir, "baseline.json"), data, 0o644)
 }

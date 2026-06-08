@@ -22,7 +22,7 @@ func AssertSESIdentity(out string) Result {
 	if !contains(out, "awsses.NewEmailIdentity") {
 		f = append(f, "missing awsses.NewEmailIdentity")
 	}
-	if !matches(out, `jsii\.String\(`) {
+	if !matches(out, `jsii\s*\.\s*String\s*\(`) {
 		f = append(f, "missing jsii.String usage")
 	}
 	if contains(out, "dkim.amazonses.com") {
@@ -43,13 +43,13 @@ func AssertS3Bucket(out string) Result {
 	if !contains(out, "awss3.NewBucket") {
 		f = append(f, "missing awss3.NewBucket")
 	}
-	if !matches(out, `jsii\.String\(`) {
+	if !matches(out, `jsii\s*\.\s*String\s*\(`) {
 		f = append(f, "missing jsii usage")
 	}
 	if !matches(out, `(?i)BUCKET_OWNER_ENFORCED|S3_MANAGED|SSE`) {
 		f = append(f, "missing SSE/encryption config")
 	}
-	if matches(out, `(?i)PublicReadAccess:\s*jsii\.Bool\(true\)`) {
+	if matches(out, `(?i)PublicReadAccess\s*:\s*jsii\s*\.\s*Bool\s*\(\s*true\s*\)`) {
 		f = append(f, "negative: bucket is public")
 	}
 	if matches(out, `cdk\s+deploy`) {

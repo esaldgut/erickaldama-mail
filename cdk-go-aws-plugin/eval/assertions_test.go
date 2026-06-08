@@ -1,6 +1,18 @@
 package eval
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func hasFailure(res Result, substr string) bool {
+	for _, f := range res.Failures {
+		if strings.Contains(f, substr) {
+			return true
+		}
+	}
+	return false
+}
 
 func TestAssertSESIdentityOutput(t *testing.T) {
 	good := `
@@ -17,6 +29,12 @@ func TestAssertSESIdentityOutput(t *testing.T) {
 	if res.Pass {
 		t.Fatalf("bad output should fail (hardcoded dkim + cdk deploy)")
 	}
+	if !hasFailure(res, "hardcoded dkim suffix") {
+		t.Fatalf("bad output should pin the dkim trap, failures: %v", res.Failures)
+	}
+	if !hasFailure(res, "cdk deploy") {
+		t.Fatalf("bad output should pin the cdk deploy negative, failures: %v", res.Failures)
+	}
 }
 
 func TestAssertS3BucketOutput(t *testing.T) {
@@ -25,7 +43,14 @@ func TestAssertS3BucketOutput(t *testing.T) {
 		t.Fatalf("good s3 output should pass: %v", res.Failures)
 	}
 	bad := `b := awss3.NewBucket(stack, jsii.String("Raw"), &awss3.BucketProps{ PublicReadAccess: jsii.Bool(true) }); run("cdk deploy")`
-	if res := AssertS3Bucket(bad); res.Pass {
+	res := AssertS3Bucket(bad)
+	if res.Pass {
 		t.Fatalf("public+deploy s3 output should fail")
+	}
+	if !hasFailure(res, "bucket is public") {
+		t.Fatalf("bad output should pin the public-bucket negative, failures: %v", res.Failures)
+	}
+	if !hasFailure(res, "cdk deploy") {
+		t.Fatalf("bad output should pin the cdk deploy negative, failures: %v", res.Failures)
 	}
 }
