@@ -61,3 +61,12 @@ func TestDeniesBypassPermissionMode(t *testing.T) {
 		t.Fatalf("expected deny (bypass mode), got: %s", got)
 	}
 }
+
+func TestAllowsOutOfScopeEvenInBypassMode(t *testing.T) {
+	// I-1 regression lock: out-of-scope project must be a no-op even under bypassPermissions.
+	fixture, _ := os.ReadFile("fixtures/allow_out_of_scope_bypass.json")
+	got := runHook(t, string(fixture), "/Users/esaldgut/dev/src/go/src/erickaldama-mail")
+	if !strings.Contains(got, `"permissionDecision":"allow"`) {
+		t.Fatalf("out-of-scope + bypass must allow (no-op), got: %s", got)
+	}
+}

@@ -18,18 +18,21 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
 CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty')"
 PMODE="$(printf '%s' "$INPUT" | jq -r '.permission_mode // "default"')"
 
-# SEC-C2: bypass mode must not evaporate the deny.
-if [[ "$PMODE" != "default" && "$PMODE" != "plan" ]]; then
-  emit_deny '"permission_mode not default/plan; governed command denied"'
-fi
-
-# SEC-I4: scope to the mail project. MAIL_ROOT overridable for tests; default to the canonical path.
+# SEC-I4 (scope FIRST): the hook is a no-op outside the mail project. Judge scope before any mode reasoning,
+# so out-of-scope work in ANY permission mode passes through untouched (the hook is friction, not a boundary).
 MAIL_ROOT="${MAIL_ROOT:-$HOME/dev/src/go/src/erickaldama-mail}"
+# M-1: empty cwd is unresolvable → fail-safe deny (don't rely on `cd ""` staying in the hook's own dir).
+[[ -z "$CWD" ]] && emit_deny '"missing cwd, fail-safe deny"'
 real_cwd="$(cd "$CWD" 2>/dev/null && pwd -P || printf '%s' "$CWD")"
 real_root="$(cd "$MAIL_ROOT" 2>/dev/null && pwd -P || printf '%s' "$MAIL_ROOT")"
 # segment-boundary match (not raw prefix): cwd == root OR cwd starts with root + "/"
 if [[ "$real_cwd" != "$real_root" && "$real_cwd" != "$real_root"/* ]]; then
-  emit_allow  # out of scope → no-op
+  emit_allow  # out of scope → no-op (wins over the bypass gate below)
+fi
+
+# SEC-C2 (in-scope only): bypass/non-default modes must not evaporate the deny WITHIN the mail project.
+if [[ "$PMODE" != "default" && "$PMODE" != "plan" ]]; then
+  emit_deny '"permission_mode not default/plan; governed command denied"'
 fi
 
 # (command-inspection logic added in Task 3)
