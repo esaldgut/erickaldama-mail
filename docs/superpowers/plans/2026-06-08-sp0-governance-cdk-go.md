@@ -519,7 +519,7 @@ The plugin is self-contained and validated offline with `claude plugin validate 
 - Create: `cdk-go-aws-plugin/.claude-plugin/plugin.json`
 - Create: `cdk-go-aws-plugin/.mcp.json`
 
-- [ ] **Step 1: Write the manifest (author as OBJECT, defaultEnabled:false, mcpServers pointer)**
+- [x] **Step 1: Write the manifest (author as OBJECT, defaultEnabled:false, mcpServers pointer)**
 
 `cdk-go-aws-plugin/.claude-plugin/plugin.json`:
 ```json
@@ -556,12 +556,12 @@ The plugin is self-contained and validated offline with `claude plugin validate 
 }
 ```
 
-- [ ] **Step 2: Validate (this is the test for this task)**
+- [x] **Step 2: Validate (this is the test for this task)**
 
 Run: `claude plugin validate ./cdk-go-aws-plugin --strict`
 Expected: validation errors about missing skills (skills dir not created yet) OR a clean structural pass for the manifest. If it complains the plugin has no components, that's expected until Task 6 — note it and proceed; re-validate at end of Task 6.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/.claude-plugin/plugin.json cdk-go-aws-plugin/.mcp.json
