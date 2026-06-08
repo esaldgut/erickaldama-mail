@@ -12,6 +12,9 @@ __pycache__/
 *.test
 *.out
 
+# CDK-Go verification cache (SP-0) — derived, machine-local, time-sensitive; never commit (stale-truth trap)
+docs/cdk-verified.json
+
 # OS / editor
 .DS_Store
 *.swp
