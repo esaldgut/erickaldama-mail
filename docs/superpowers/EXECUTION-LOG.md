@@ -34,7 +34,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | T9 | Verify call_aws tool_input shape (spike) | ✅ done | 944784b | spec ✅ (research+doc) | verificado vs server.py: key=cli_command, YA cubierto (sin cambio de hook). Caveat: cli_command puede ser list[str] (batch) → awk ve solo 1ª línea → un batch podría esconder mutación; pero cae a *)deny y Capa 1 IAM es el límite. Caveat → input para tarea #20 (hook global). 12 tests intactos |
 | T10 | Canonical IAM allowlist policy | ✅ done | 3438ad5 | spec ✅ (boundary fidelity) | EL LÍMITE. Allow 15 acciones exactas (region-pinned us-east-1), Deny 5 (ses:Send*/AssumeRole/GetObject/GetTemplate/iam:*). Ausencias SEC2 confirmadas (sin s3:GetObject/iam:*/sts:Get*/GetTemplate). Lógica deny+allow = reads-only sin recon/mint/mail-content |
 | T11 | Bootstrap doc + acceptance-gate script | ✅ done | 0187a65 | spec ✅ | BOOTSTRAP.md (excepción t=0, ownership SP-0/SP-1/SP-3) + bootstrap-gate.sh (pre-flight account + 5 probes espejo de policy T10: 4 deny + 1 allow). bash -n ok, NO corrido (principal no existe hasta T13) |
-| T12 | simulate-principal-policy matrix | pending | — | — | — |
+| T12 | simulate-principal-policy matrix | ✅ done | 076c567 | spec ✅ | simulate-matrix.sh: 3 intended-allow + 6 intended-deny vía iam:simulate-principal-policy (corre con admin profile separado, NO el read-only). Alinea con policy T10. bash -n ok, NO corrido (necesita principal T13) |
 | T13 | Live bootstrap acceptance (GATE HUMANO) | pending | — | — | humano crea principal admin; agente solo verifica read-only |
 
 ## Bitácora cronológica (append-only)
@@ -63,3 +63,9 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   quality cazó 2 Important (runner sin ignición → cmd/runeval package main; Pass@1==Pass@3 → métrica real).
   >>> FASE 2 (el plugin completo, validate --strict + eval) COMPLETA. 8/13. Siguiente: FASE 3 — T9..T13 (IAM,
   read-only; T13 = GATE HUMANO, el humano crea el principal IAM admin).
+- 2026-06-08 — T9 ✅ (944784b): call_aws=cli_command verificado, batch caveat → #20. T10 ✅ (3438ad5): policy
+  IAM canónica (EL LÍMITE), allowlist-pure region-pinned + hard-deny, fidelidad de boundary verificada. T11 ✅
+  (0187a65): BOOTSTRAP.md + bootstrap-gate.sh (5 probes espejo de policy). T12 ✅ (076c567): simulate-matrix.sh
+  (falsabilidad vía simulate-principal-policy, admin separado). 12/13. >>> Solo queda T13 = GATE HUMANO:
+  el HUMANO crea el principal mail-readonly con su cred admin (el agente NO); luego el agente corre las
+  verificaciones read-only (gate + simulate-matrix + test negativo out-of-band). Pausa para el humano.

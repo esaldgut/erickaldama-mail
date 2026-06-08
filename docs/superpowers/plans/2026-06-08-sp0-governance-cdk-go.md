@@ -1143,7 +1143,7 @@ git commit -m "feat(sp-0): bootstrap doc + acceptance-gate script (deny/allow pr
 **Files:**
 - Create: `iam/simulate-matrix.sh`
 
-- [ ] **Step 1: Write the simulate-matrix script (run with a SEPARATE principal, not the read-only one)**
+- [x] **Step 1: Write the simulate-matrix script (run with a SEPARATE principal, not the read-only one)**
 
 `iam/simulate-matrix.sh`:
 ```bash
@@ -1184,12 +1184,12 @@ sim "*Deny"  lambda:InvokeFunction
 [[ "$fail" -eq 0 ]] && echo "SIMULATE MATRIX PASS" || { echo "SIMULATE MATRIX FAIL"; exit 1; }
 ```
 
-- [ ] **Step 2: Lint (offline)**
+- [x] **Step 2: Lint (offline)**
 
 Run: `bash -n iam/simulate-matrix.sh && echo "syntax ok"`
 Expected: `syntax ok`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 chmod +x iam/simulate-matrix.sh
