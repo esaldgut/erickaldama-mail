@@ -1,0 +1,1 @@
+{"tool_name":"Bash","tool_input":{"command":"aws s3 mb s3://x"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"default"}
