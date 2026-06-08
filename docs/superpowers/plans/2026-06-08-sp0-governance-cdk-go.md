@@ -1000,34 +1000,70 @@ git commit -m "docs(sp-0): verify aws-api MCP call_aws input shape; reconcile ho
 
 - [x] **Step 1: Write the pure, scoped allowlist policy**
 
-`iam/readonly-policy.json` (allowlist-pure; scoped to us-east-1 / project resources; explicit Deny on AssumeRole + Send):
+`iam/readonly-policy.json` (allowlist-pure; **4 statements verified action-by-action vs the AWS Service
+Authorization Reference, SAR 2026-06-08**; structure = global-unconditioned + 2 regional-pinned + hard-deny).
+The global/regional split is the key correction: STS `GetCallerIdentity` and Route53 are GLOBAL, so pinning
+them to a region would WRONGLY DENY them (latent bug in the prior 2-statement shape). Copy verbatim:
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadOnlyScopedReads",
+      "Sid": "AllowGlobalReadsUnconditioned",
       "Effect": "Allow",
       "Action": [
-        "ses:Get*", "ses:List*", "ses:Describe*",
-        "cloudformation:Describe*", "cloudformation:List*",
-        "route53:List*", "route53:Get*",
-        "cloudwatch:Describe*", "cloudwatch:List*",
         "sts:GetCallerIdentity",
-        "s3:ListBucket", "s3:GetBucketLocation", "s3:GetBucketPolicy",
-        "s3:GetBucketPublicAccessBlock", "s3:GetEncryptionConfiguration"
+        "route53:ListHostedZones",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowRegionalReadsUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "ses:Get*",
+        "ses:List*",
+        "ses:Describe*",
+        "cloudformation:Describe*",
+        "cloudformation:List*",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics"
       ],
       "Resource": "*",
       "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
     },
     {
-      "Sid": "HardDenyMutationAndRecon",
+      "Sid": "AllowS3BucketLevelScopedUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::*erickaldama*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+    },
+    {
+      "Sid": "HardDenyMutationReconAndCredentialMinting",
       "Effect": "Deny",
       "Action": [
         "ses:Send*",
         "sts:AssumeRole",
+        "sts:AssumeRoleWithWebIdentity",
+        "sts:AssumeRoleWithSAML",
+        "sts:GetSessionToken",
+        "sts:GetFederationToken",
         "s3:GetObject",
         "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
+        "ses:GetIdentityPolicies",
+        "ses:GetEmailIdentityPolicies",
         "iam:*"
       ],
       "Resource": "*"
@@ -1035,7 +1071,18 @@ git commit -m "docs(sp-0): verify aws-api MCP call_aws input shape; reconcile ho
   ]
 }
 ```
-> Notes baked into the policy per audit: `sts:GetCallerIdentity` (not `sts:Get*`, avoids GetSessionToken); NO `s3:GetObject` (no mail-body reads, SEC2-C1); NO `iam:*` (no account recon, SEC2-C2); NO `cloudformation:GetTemplate`; explicit `Deny ses:Send*` covers v1+v2 (same `ses:` prefix); region condition pins reads to us-east-1. `Resource:"*"` is acceptable only because the Allow set is read-only-and-region-pinned and the Deny set closes the dangerous reads — Resource-level ARN scoping is SP-1's CDK-Go formalization (ownership boundary).
+> Notes baked into the policy per SAR audit (full findings: `09-iam-policy-verified-vs-sar.md`):
+> **(1) Global vs regional split** — `sts:GetCallerIdentity` + Route53 reads are GLOBAL and go in the
+> UNCONDITIONED Statement 1 (a region-pin breaks GetCallerIdentity: the STS global endpoint reports
+> `aws:RequestedRegion=us-east-1` regardless of the real region under CLI v2 → false AccessDenied). Statements 2 & 3
+> carry the `us-east-1` region condition. **(2) No `sesv2:` IAM prefix** — SES v1+v2 are both `ses:`, so `ses:Get*`
+> covers v2 reads and the Deny `ses:Send*` covers SendEmail/SendRaw/SendBulk* of both. **(3) No `cloudformation:Deploy*`**
+> — it is NOT a real action (`aws cloudformation deploy` = CreateChangeSet+ExecuteChangeSet) → a Deny on it would be a
+> dead statement; omitted. **(4) `sts:GetSessionToken`/`GetFederationToken` are Read-classified by the SAR but mint
+> credentials**, so they are denied BY NAME (which is why the Allow uses `sts:GetCallerIdentity`, not `sts:Get*`).
+> NO `s3:GetObject` (no mail-body reads, SEC2-C1); NO `iam:*` (no account recon, SEC2-C2); `GetIdentityPolicies`/`GetTemplate`
+> denied (expose authz JSON / template bodies). `Resource:"*"` is acceptable because the Allow set is read-only-and-region-pinned
+> and the Deny set closes the dangerous reads — Resource-level ARN scoping is SP-1's CDK-Go formalization (ownership boundary).
 
 - [x] **Step 2: Validate the JSON is well-formed**
 
@@ -1084,18 +1131,22 @@ on another machine / CloudShell. The agent's session is pinned to `mail-readonly
 
 - [x] **Step 2: Write the acceptance-gate script (the test for this task — read-only probes)**
 
-`iam/bootstrap-gate.sh`:
+`iam/bootstrap-gate.sh` (probes cover the 4-statement policy: 5 HardDeny + 2 allow [1 regional, 1 global] +
+1 region-pin deny; `sesv2`/`s3api` here are CLI command namespaces — they map to the `ses:`/`s3:` IAM actions,
+NOT a `sesv2:` IAM prefix):
 ```bash
 #!/usr/bin/env bash
 # Bootstrap acceptance gate (SEC2-I1). Run BEFORE pointing the agent at the read-only principal.
 # All probes are read-only or expected-to-be-denied; nothing here mutates.
+# Applies aws-cli-pre-flight-canonical: verify identity + account before any service call.
 set -uo pipefail
 PROFILE="${MAIL_RO_PROFILE:-mail-readonly}"
 fail=0
 
 echo "== aws-cli-pre-flight-canonical =="
 acct="$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text 2>/dev/null)"
-[[ "$acct" == "367707589526" ]] || { echo "FAIL: wrong account: $acct"; exit 1; }
+[[ "$acct" == "367707589526" ]] || { echo "FAIL: wrong/empty account: '$acct' (expected 367707589526)"; exit 1; }
+echo "ok: account 367707589526"
 
 # expect_denied <description> <aws args...>
 expect_denied() {
@@ -1116,11 +1167,19 @@ expect_allowed() {
   fi
 }
 
+# --- DENY: mutation / credential-minting / recon (HardDeny + implicit-deny) ---
 expect_denied  "ses send-email"        sesv2 send-email --region us-east-1 --from-email-address a@b.com --destination ToAddresses=c@d.com --content '{"Simple":{"Subject":{"Data":"x"},"Body":{"Text":{"Data":"y"}}}}'
 expect_denied  "sts assume-role"       sts assume-role --role-arn arn:aws:iam::367707589526:role/none --role-session-name s
+expect_denied  "sts get-session-token" sts get-session-token   # Read-classified but credential-minting → explicit Deny by name
 expect_denied  "s3 get-object (mail)"  s3api get-object --bucket erickaldama-mail-raw --key any /dev/null
 expect_denied  "iam list-access-keys"  iam list-access-keys
+
+# --- ALLOW: regional read (region-pinned) + global read (unconditioned) ---
 expect_allowed "ses get-account read"  sesv2 get-account --region us-east-1
+expect_allowed "route53 list-zones (global, unconditioned)"  route53 list-hosted-zones
+
+# --- region-pin enforcement: the SAME regional read in a different region must be DENIED ---
+expect_denied  "ses get-account in eu-west-1 (region-pin)"  sesv2 get-account --region eu-west-1
 
 [[ "$fail" -eq 0 ]] && echo "GATE PASS" || { echo "GATE FAIL"; exit 1; }
 ```
@@ -1145,7 +1204,10 @@ git commit -m "feat(sp-0): bootstrap doc + acceptance-gate script (deny/allow pr
 
 - [x] **Step 1: Write the simulate-matrix script (run with a SEPARATE principal, not the read-only one)**
 
-`iam/simulate-matrix.sh`:
+`iam/simulate-matrix.sh` (region-context-aware: the REGIONAL intended-allows of Statements 2 & 3 pass
+`aws:RequestedRegion=us-east-1` via `--context-entries` so the StringEquals condition is satisfied — without
+it `simulate-principal-policy` evaluates WITHOUT a region context and the region-pinned Allow returns a
+false implicitDeny; the GLOBAL allows of Statement 1 and the explicit denies use no context):
 ```bash
 #!/usr/bin/env bash
 # Falsifiability of the allowlist (SEC2-I2): simulate the read-only principal's policy and assert the matrix.
@@ -1155,12 +1217,12 @@ ADMIN="${ADMIN_PROFILE:-AdministratorAccess-367707589526}"
 PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:?set RO_PRINCIPAL_ARN to the mail-readonly user/role arn}"
 fail=0
 
-sim() { # $1=expected(allowed|*Deny) $2..=action
-  local expect="$1"; shift
-  local action="$1"
+# _sim <expected> <action> [extra args...] — core evaluator; pass-through extra args to the CLI.
+_sim() {
+  local expect="$1"; local action="$2"; shift 2
   local dec
   dec="$(aws iam simulate-principal-policy --profile "$ADMIN" \
-    --policy-source-arn "$PRINCIPAL_ARN" --action-names "$action" \
+    --policy-source-arn "$PRINCIPAL_ARN" --action-names "$action" "$@" \
     --query 'EvaluationResults[0].EvalDecision' --output text 2>/dev/null)"
   if [[ "$dec" == "$expect" || ( "$expect" == "*Deny" && "$dec" == *Deny ) ]]; then
     echo "ok $action -> $dec"
@@ -1169,16 +1231,33 @@ sim() { # $1=expected(allowed|*Deny) $2..=action
   fi
 }
 
-# intended-allow
-sim allowed  ses:GetAccount
-sim allowed  cloudformation:DescribeStacks
+# sim <expected> <action> — global / unconditioned actions and all denies (no region context).
+sim() { _sim "$1" "$2"; }
+
+# sim_regional <expected> <action> — region-pinned Allows (Statements 2 & 3). Pass aws:RequestedRegion=us-east-1
+# so the StringEquals condition is satisfied; without it simulate evaluates WITHOUT region context and the
+# region-pinned Allow would WRONGLY return implicitDeny (latent false-FAIL).
+sim_regional() {
+  _sim "$1" "$2" \
+    --context-entries ContextKeyName=aws:RequestedRegion,ContextKeyValues=us-east-1,ContextKeyType=string
+}
+
+# intended-allow — REGIONAL (Statements 2 & 3): pass region context so the us-east-1 condition is met.
+sim_regional allowed  ses:GetAccount
+sim_regional allowed  cloudformation:DescribeStacks
+# intended-allow — GLOBAL (Statement 1, unconditioned): NO region context; allows regardless of region.
 sim allowed  sts:GetCallerIdentity
-# intended-deny (explicit or implicit)
+sim allowed  route53:ListHostedZones
+# intended-deny — explicit HardDeny set (verified vs SAR 2026-06-08). Explicit Deny wins regardless of region.
 sim "*Deny"  ses:SendEmail
 sim "*Deny"  sts:AssumeRole
+sim "*Deny"  sts:GetSessionToken
+sim "*Deny"  sts:GetFederationToken
 sim "*Deny"  s3:GetObject
-sim "*Deny"  iam:ListAccessKeys
 sim "*Deny"  cloudformation:GetTemplate
+sim "*Deny"  ses:GetIdentityPolicies
+sim "*Deny"  iam:ListAccessKeys
+# intended-deny — implicit (not in any Allow)
 sim "*Deny"  lambda:InvokeFunction
 
 [[ "$fail" -eq 0 ]] && echo "SIMULATE MATRIX PASS" || { echo "SIMULATE MATRIX FAIL"; exit 1; }
@@ -1209,12 +1288,12 @@ Prompt the human (via the chat): "Create the `mail-readonly` IAM principal with 
 
 Run (after pre-flight `aws sts get-caller-identity --profile mail-readonly` confirms account 367707589526):
 `MAIL_RO_PROFILE=mail-readonly bash iam/bootstrap-gate.sh`
-Expected: `GATE PASS` (4 denies + 1 allow). If any FAIL → the hand-typed policy is wrong; fix in AWS, re-run. Do NOT proceed until PASS.
+Expected: `GATE PASS` — 5 HardDeny probes (ses send-email, sts assume-role, sts get-session-token, s3 get-object, iam list-access-keys) + 2 allow probes (ses get-account in us-east-1 = regional, route53 list-hosted-zones = global/unconditioned) + 1 region-pin deny (ses get-account in eu-west-1 must be DENIED). If any FAIL → the hand-typed policy is wrong; fix in AWS, re-run. Do NOT proceed until PASS.
 
 - [ ] **Step 3: Run the simulate matrix (separate admin principal)**
 
 Run: `RO_PRINCIPAL_ARN=arn:aws:iam::367707589526:user/mail-readonly ADMIN_PROFILE=AdministratorAccess-367707589526 bash iam/simulate-matrix.sh`
-Expected: `SIMULATE MATRIX PASS` (intended-allow=allowed, intended-deny=*Deny).
+Expected: `SIMULATE MATRIX PASS` — regional intended-allows (ses:GetAccount, cloudformation:DescribeStacks) evaluated WITH `aws:RequestedRegion=us-east-1` context = allowed; global intended-allows (sts:GetCallerIdentity, route53:ListHostedZones) WITHOUT context = allowed; intended-deny set (incl. sts:GetSessionToken/GetFederationToken) = *Deny.
 
 - [ ] **Step 4: Negative out-of-band test (SEC2-C3)**
 
