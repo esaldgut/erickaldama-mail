@@ -65,7 +65,7 @@ The hook is the most deterministic, self-contained artifact. We TDD it with a Go
 - Create: `test/hook/fixtures/deny_aws_write.json`
 - Create: `.claude/hooks/cdk-go-guard.sh` (empty stub, non-executable logic yet)
 
-- [ ] **Step 1: Write the failing test (Go harness that runs the hook script with a fixture and asserts deny)**
+- [x] **Step 1: Write the failing test (Go harness that runs the hook script with a fixture and asserts deny)**
 
 `test/hook/guard_test.go`:
 ```go
@@ -127,12 +127,12 @@ func TestDeniesAwsWrite(t *testing.T) {
 echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
 ```
 
-- [ ] **Step 2: Run the test, verify it FAILS**
+- [x] **Step 2: Run the test, verify it FAILS**
 
 Run: `cd test/hook && go test -run TestDeniesAwsWrite -v`
 Expected: FAIL — got `"permissionDecision":"allow"`, expected deny. (Confirms the harness wires stdin→script→stdout and the assertion is real.)
 
-- [ ] **Step 3: Make the script executable + add the shebang/trap skeleton (self-deny on error, SEC-C1)**
+- [x] **Step 3: Make the script executable + add the shebang/trap skeleton (self-deny on error, SEC-C1)**
 
 Replace `.claude/hooks/cdk-go-guard.sh` with the fail-safe skeleton:
 ```bash
@@ -159,12 +159,12 @@ PMODE="$(printf '%s' "$INPUT" | jq -r '.permission_mode // "default"')"
 emit_deny '"unimplemented, fail-safe deny"'
 ```
 
-- [ ] **Step 4: Run the test, verify it PASSES**
+- [x] **Step 4: Run the test, verify it PASSES**
 
 Run: `cd test/hook && go test -run TestDeniesAwsWrite -v`
 Expected: PASS (the stub now denies by default).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add test/hook/guard_test.go test/hook/fixtures/deny_aws_write.json .claude/hooks/cdk-go-guard.sh
