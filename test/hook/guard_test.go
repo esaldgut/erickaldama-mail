@@ -126,3 +126,42 @@ func TestDeniesStsCredentialMinting(t *testing.T) {
 		}
 	}
 }
+
+func TestWritesAuditLog(t *testing.T) {
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "decision-log.json")
+	cmd := exec.Command("bash", scriptPath(t))
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"aws s3 mb s3://x"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"default"}`)
+	cmd.Env = append(os.Environ(),
+		"MAIL_ROOT=/Users/esaldgut/dev/src/go/src/erickaldama-mail",
+		"DECISION_LOG="+logPath,
+	)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	_ = cmd.Run()
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("audit log not written: %v", err)
+	}
+	if !strings.Contains(string(data), `"decision":"deny"`) {
+		t.Fatalf("audit log missing decision: %s", data)
+	}
+}
+
+func TestMcpWriteDenied(t *testing.T) {
+	root := "/Users/esaldgut/dev/src/go/src/erickaldama-mail"
+	fixture := `{"tool_name":"mcp__aws-api__call_aws","tool_input":{"cli_command":"aws s3 rb s3://x --force"},"cwd":"` + root + `","permission_mode":"default"}`
+	got := runHook(t, fixture, root)
+	if !strings.Contains(got, `"permissionDecision":"deny"`) {
+		t.Fatalf("mcp aws write must deny, got: %s", got)
+	}
+}
+
+func TestMcpReadAllowed(t *testing.T) {
+	root := "/Users/esaldgut/dev/src/go/src/erickaldama-mail"
+	fixture := `{"tool_name":"mcp__aws-api__call_aws","tool_input":{"cli_command":"aws s3 ls"},"cwd":"` + root + `","permission_mode":"default"}`
+	got := runHook(t, fixture, root)
+	if !strings.Contains(got, `"permissionDecision":"allow"`) {
+		t.Fatalf("mcp aws read should allow, got: %s", got)
+	}
+}
