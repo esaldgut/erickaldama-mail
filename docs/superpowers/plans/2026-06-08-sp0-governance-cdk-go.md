@@ -258,7 +258,7 @@ git commit -m "feat(sp-0): hook permission_mode gate + project scope check"
 - Create fixtures: `deny_metachar.json`, `deny_go_test.json`, `allow_aws_read.json`, `allow_cdk_go_synth.json`, `deny_cdk_non_go.json`, `deny_aws_assume_role.json`
 - Create: `test/hook/fixtures/cdkjson_go/cdk.json`, `test/hook/fixtures/cdkjson_ts/cdk.json`
 
-- [ ] **Step 1: Write the failing tests (table-driven, covers the adversarial cases the audit found)**
+- [x] **Step 1: Write the failing tests (table-driven, covers the adversarial cases the audit found)**
 
 Append to `test/hook/guard_test.go`:
 ```go
@@ -322,12 +322,12 @@ Fixtures (each one line):
 `test/hook/fixtures/cdkjson_go/cdk.json`: `{"app":"go mod download && go run ."}`
 `test/hook/fixtures/cdkjson_ts/cdk.json`: `{"app":"npx ts-node bin/app.ts"}`
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd test/hook && go test -run 'TestDecisionTable|TestCdkGoVsNonGo' -v`
 Expected: FAIL (the unimplemented fall-through denies everything → the allow cases fail).
 
-- [ ] **Step 3: Implement the command-inspection logic**
+- [x] **Step 3: Implement the command-inspection logic**
 
 In `cdk-go-guard.sh`, replace the final `emit_deny '"unimplemented..."'` with:
 ```bash
@@ -372,12 +372,12 @@ case "$FIRST" in
 esac
 ```
 
-- [ ] **Step 4: Run the full hook suite, verify PASS**
+- [x] **Step 4: Run the full hook suite, verify PASS**
 
 Run: `cd test/hook && go test ./... -v`
 Expected: all PASS — metachar deny, go-test deny, aws-read allow, assume-role deny, cdk-Go synth allow, cdk-TS deny, cdk deploy deny, plus Task 1/2 cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .claude/hooks/cdk-go-guard.sh test/hook/

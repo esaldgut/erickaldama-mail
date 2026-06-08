@@ -25,7 +25,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 |---|---|---|---|---|---|
 | T1 | Hook test harness + fail-safe skeleton | ✅ done | 87e3646 | spec ✅ / calidad ✅ | TDD red→green ok; fail-safe-deny verificado por construcción. Minor: añadir comentario "stdin=pipe-EOF" en T2 |
 | T2 | permission_mode gate + scope check | ✅ done | c22922e→6219898 | spec ✅ / calidad ✅ (tras fix) | quality cazó I-1: scope debía ir ANTES de bypass (hook no-op fuera del mail) + M-1 empty-cwd deny. Fix + test regresión. 4 tests verdes |
-| T3 | Metachar deny + allowlist + aws/cdk refine | pending | — | — | — |
+| T3 | Metachar deny + allowlist + aws/cdk refine | ✅ done | fead53d→06142d2 | spec ✅ / calidad ✅ | TDD; implementador cazó bug del plan (grep $'\n' rompe en BSD/macOS) → fix portable [[==*\n*]]. Quality OK (column-shift solo over-deny). Hardening SEC2: deny sts get-session/federation-token. 7 tests verdes |
 | T4 | Wire settings.json + audit log | pending | — | — | — |
 | T5 | Plugin manifest + .mcp.json | pending | — | — | — |
 | T6 | cdk-verifier agent + cdk-go-recipe skill | pending | — | — | — |
@@ -47,3 +47,8 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   defecto REAL de diseño (I-1): el gate de bypass disparaba antes del scope → denegaba trabajo en OTROS
   proyectos (sample-ios-app) en modo bypass, violando "hook = no-op fuera del mail". Fix: scope ANTES de bypass
   + guard empty-cwd (M-1) + test de regresión. La review valió. 4 tests verdes. Comentario stdin-EOF añadido. Siguiente: T3.
+- 2026-06-08 — T3 ✅ (fead53d + hardening 06142d2). Lógica core del hook: metachar-deny + VAR=strip +
+  allowlist de comandos + refinamiento aws-read/cdk-Go. TDD destapó un BUG DEL PLAN: grep -q newline da
+  falso-positivo en BSD grep (macOS) → habría denegado TODO; fix portable bash-native. Quality ✅ (divergencias
+  solo sesgan a deny; get-session-token over-allow aceptable porque IAM es el límite, pero añadí deny targeted
+  SEC2 igual). El hook Bash tiene su lógica completa. 7 tests verdes. Siguiente: T4 (wiring + audit log).
