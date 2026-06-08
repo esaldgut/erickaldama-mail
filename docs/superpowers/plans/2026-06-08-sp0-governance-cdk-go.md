@@ -668,7 +668,7 @@ git commit -m "feat(sp-0): cdk-verifier agent (Knowledge-MCP-only) + cdk-go-reci
 **Files:**
 - Create: `cdk-go-aws-plugin/skills/ses-domain-recipe/SKILL.md`
 
-- [ ] **Step 1: Write the SES recipe skill**
+- [x] **Step 1: Write the SES recipe skill**
 
 `cdk-go-aws-plugin/skills/ses-domain-recipe/SKILL.md`:
 ```markdown
@@ -723,12 +723,12 @@ increase (only if bounce is throttling, not quality); 5) resume gradually (1% â†
 Run verify/read/GENERATE the constructs + commands, but do NOT ask the human to execute. Used by the eval harness.
 ```
 
-- [ ] **Step 2: Validate the complete plugin**
+- [x] **Step 2: Validate the complete plugin**
 
 Run: `claude plugin validate ./cdk-go-aws-plugin --strict`
 Expected: PASS â€” manifest, two skills, one agent, .mcp.json all structurally valid.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/skills/ses-domain-recipe/SKILL.md
