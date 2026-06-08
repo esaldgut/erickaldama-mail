@@ -35,7 +35,8 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | T10 | Canonical IAM allowlist policy | ✅ done | 3438ad5 | spec ✅ (boundary fidelity) | EL LÍMITE. Allow 15 acciones exactas (region-pinned us-east-1), Deny 5 (ses:Send*/AssumeRole/GetObject/GetTemplate/iam:*). Ausencias SEC2 confirmadas (sin s3:GetObject/iam:*/sts:Get*/GetTemplate). Lógica deny+allow = reads-only sin recon/mint/mail-content |
 | T11 | Bootstrap doc + acceptance-gate script | ✅ done | 0187a65 | spec ✅ | BOOTSTRAP.md (excepción t=0, ownership SP-0/SP-1/SP-3) + bootstrap-gate.sh (pre-flight account + 5 probes espejo de policy T10: 4 deny + 1 allow). bash -n ok, NO corrido (principal no existe hasta T13) |
 | T12 | simulate-principal-policy matrix | ✅ done | 076c567 | spec ✅ | simulate-matrix.sh: 3 intended-allow + 6 intended-deny vía iam:simulate-principal-policy (corre con admin profile separado, NO el read-only). Alinea con policy T10. bash -n ok, NO corrido (necesita principal T13) |
-| T13 | Live bootstrap acceptance (GATE HUMANO) | pending | — | — | humano crea principal admin; agente solo verifica read-only |
+| T13 | Live bootstrap acceptance (GATE HUMANO) | ⏸ esperando humano | — | — | LISTO para correr. El humano crea mail-readonly con iam/readonly-policy.json (4 statements verificada vs SAR). Luego: bootstrap-gate.sh + simulate-matrix.sh + test negativo out-of-band |
+| — IAM policy verificada vs SAR | (mejora de T10/T11/T12) | ✅ done | 6781ce4 | spec ✅ (5 artefactos coinciden) | propuesta del usuario → 2 agentes verificaron vs SAR oficial → policy de 4 statements (global-unconditioned + 2 regional-pinned + hard-deny). CAZÓ BUG: GetCallerIdentity bajo region-cond rompía pre-flight. +S3 ARN-scoping del usuario. +deny GetSessionToken/GetFederationToken (Read pero minters). Cero weakening (comm vacío) |
 
 ## Bitácora cronológica (append-only)
 
@@ -69,3 +70,12 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   (falsabilidad vía simulate-principal-policy, admin separado). 12/13. >>> Solo queda T13 = GATE HUMANO:
   el HUMANO crea el principal mail-readonly con su cred admin (el agente NO); luego el agente corre las
   verificaciones read-only (gate + simulate-matrix + test negativo out-of-band). Pausa para el humano.
+- 2026-06-08 — MEJORA DE POLICY (antes de T13): el usuario propuso una policy alternativa. 2 agentes la
+  verificaron contra el AWS Service Authorization Reference oficial (doc 09). Resultado: la policy mejoró Y
+  se cazó un BUG LATENTE en la T10 original (sts:GetCallerIdentity bajo aws:RequestedRegion=us-east-1 rompía
+  el pre-flight bajo CLI v2 endpoint regional → AccessDenied). Policy reescrita a 4 statements (commit 6781ce4):
+  global-unconditioned (STS GetCallerIdentity + Route53, ambos GLOBALES) + 2 regional-pinned (SES/CFN/CW + S3
+  con ARN-scoping *erickaldama* del usuario) + hard-deny por nombre (añadidos GetSessionToken/GetFederationToken,
+  que son Read pero mintean credenciales). Eliminado cloudformation:Deploy* (acción inexistente). Confirmado: NO
+  existe prefijo sesv2: (v1+v2 = ses:). gate+simulate+spec+plan reconciliados. Spec-review: 5 artefactos coinciden,
+  cero weakening (comm old-vs-new vacío). PUNTO DE RETOMA: T13 = gate humano, el humano crea mail-readonly.
