@@ -744,7 +744,7 @@ git commit -m "feat(sp-0): ses-domain-recipe skill (8 steps + runbook + 6 traps)
 - Create: `cdk-go-aws-plugin/eval/baseline.json`
 - Create: `cdk-go-aws-plugin/eval/assertions_test.go`
 
-- [ ] **Step 1: Write the failing test for the assertion engine (deterministic, on a captured-output string)**
+- [x] **Step 1: Write the failing test for the assertion engine (deterministic, on a captured-output string)**
 
 `cdk-go-aws-plugin/eval/assertions_test.go`:
 ```go
@@ -775,12 +775,12 @@ func TestAssertSESIdentityOutput(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd cdk-go-aws-plugin/eval && go test -run TestAssertSESIdentityOutput -v`
 Expected: FAIL — `AssertSESIdentity` undefined.
 
-- [ ] **Step 3: Implement the assertion engine (whitespace-resilient, positive/negative/6-trap)**
+- [x] **Step 3: Implement the assertion engine (whitespace-resilient, positive/negative/6-trap)**
 
 `cdk-go-aws-plugin/eval/assertions.go`:
 ```go
@@ -849,12 +849,12 @@ func AssertS3Bucket(out string) Result {
 }
 ```
 
-- [ ] **Step 4: Run, verify PASS**
+- [x] **Step 4: Run, verify PASS**
 
 Run: `cd cdk-go-aws-plugin/eval && go test -run TestAssertSESIdentityOutput -v`
 Expected: PASS.
 
-- [ ] **Step 5: Write the golden prompts, the runner, and the baseline**
+- [x] **Step 5: Write the golden prompts, the runner, and the baseline**
 
 `cdk-go-aws-plugin/eval/golden/ses-identity.txt`:
 ```
@@ -950,12 +950,12 @@ func main() {
 []
 ```
 
-- [ ] **Step 6: Run the assertion suite (the deterministic part)**
+- [x] **Step 6: Run the assertion suite (the deterministic part)**
 
 Run: `cd cdk-go-aws-plugin/eval && go test ./... -v`
 Expected: PASS (assertion engine tested; the LLM-driven `RunEval` is build-tagged out and run separately).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/eval/
