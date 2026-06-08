@@ -28,7 +28,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | T3 | Metachar deny + allowlist + aws/cdk refine | ✅ done | fead53d→06142d2 | spec ✅ / calidad ✅ | TDD; implementador cazó bug del plan (grep $'\n' rompe en BSD/macOS) → fix portable [[==*\n*]]. Quality OK (column-shift solo over-deny). Hardening SEC2: deny sts get-session/federation-token. 7 tests verdes |
 | T4 | Wire settings.json + audit log | ✅ done | 0dff928→5da5f60 | spec ✅ / calidad ✅ (tras fix) | wiring 2 matchers + MCP branch + audit. Quality cazó IMP-1: secreto plaintext (aws configure set / --secret-access-key) se filtraba al log → fix sanitize. + mkdir-p (MIN-2) + paridad MCP-Bash credential-minting (MIN-3, revertía T3 en MCP). 12 tests verdes. **FASE 1 (hook) COMPLETA** |
 | T5 | Plugin manifest + .mcp.json | ✅ done | 5b0fcf8 | spec ✅ | `claude plugin validate --strict` PASS (v2.1.169). author objeto, mcpServers pointer, server-key aws-api. config simple → solo spec-review |
-| T6 | cdk-verifier agent + cdk-go-recipe skill | pending | — | — | — |
+| T6 | cdk-verifier agent + cdk-go-recipe skill | ✅ done | 4a44bb4 | spec ✅ (fidelidad) | agent tools = solo Knowledge MCP (no Bash/Write/aws-api); skill encode decisiones auditadas sin softening (best-effort dispatch, anti-poison, go-denied-by-hook, out-of-band F3). validate --strict PASS |
 | T7 | ses-domain-recipe skill | pending | — | — | — |
 | T8 | Eval harness (golden + assertions + Pass@k) | pending | — | — | — |
 | T9 | Verify call_aws tool_input shape (spike) | pending | — | — | — |

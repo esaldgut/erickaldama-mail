@@ -574,7 +574,7 @@ git commit -m "feat(sp-0): plugin manifest + .mcp.json (aws-knowledge + aws-api 
 - Create: `cdk-go-aws-plugin/agents/cdk-verifier.md`
 - Create: `cdk-go-aws-plugin/skills/cdk-go-recipe/SKILL.md`
 
-- [ ] **Step 1: Write the verifier agent (tools allowlist = ONLY Knowledge MCP; no Bash/Write/aws-api)**
+- [x] **Step 1: Write the verifier agent (tools allowlist = ONLY Knowledge MCP; no Bash/Write/aws-api)**
 
 `cdk-go-aws-plugin/agents/cdk-verifier.md`:
 ```markdown
@@ -605,7 +605,7 @@ This is the exact input schema of the recipe's cache (docs/cdk-verified.json). C
 SHA-256 of the normalized documented signature string (sorted prop names + types).
 ```
 
-- [ ] **Step 2: Write the cdk-go-recipe skill (4 phases + cache mechanism + best-effort dispatch)**
+- [x] **Step 2: Write the cdk-go-recipe skill (4 phases + cache mechanism + best-effort dispatch)**
 
 `cdk-go-aws-plugin/skills/cdk-go-recipe/SKILL.md`:
 ```markdown
@@ -651,12 +651,12 @@ When invoked with `--dry-run`, run F1–F3 (verify, read, GENERATE the code/comm
 execute — just show what you WOULD do. Used by the eval harness.
 ```
 
-- [ ] **Step 3: Re-validate the plugin**
+- [x] **Step 3: Re-validate the plugin**
 
 Run: `claude plugin validate ./cdk-go-aws-plugin --strict`
 Expected: PASS (manifest + at least one skill + agent present). If it flags the second skill missing, that's added in Task 7 — re-validate after Task 7.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/agents/cdk-verifier.md cdk-go-aws-plugin/skills/cdk-go-recipe/SKILL.md
