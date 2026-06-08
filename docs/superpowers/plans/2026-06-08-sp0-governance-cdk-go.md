@@ -1055,7 +1055,7 @@ git commit -m "feat(sp-0): canonical IAM allowlist-pure scoped policy (the bound
 - Create: `docs/BOOTSTRAP.md`
 - Create: `iam/bootstrap-gate.sh`
 
-- [ ] **Step 1: Write the bootstrap procedure + ownership boundaries**
+- [x] **Step 1: Write the bootstrap procedure + ownership boundaries**
 
 `docs/BOOTSTRAP.md`:
 ```markdown
@@ -1082,7 +1082,7 @@ Mutations (`cdk deploy`) run with a SEPARATE named profile `mail-deploy` that th
 on another machine / CloudShell. The agent's session is pinned to `mail-readonly`. Negative test below.
 ```
 
-- [ ] **Step 2: Write the acceptance-gate script (the test for this task — read-only probes)**
+- [x] **Step 2: Write the acceptance-gate script (the test for this task — read-only probes)**
 
 `iam/bootstrap-gate.sh`:
 ```bash
@@ -1125,12 +1125,12 @@ expect_allowed "ses get-account read"  sesv2 get-account --region us-east-1
 [[ "$fail" -eq 0 ]] && echo "GATE PASS" || { echo "GATE FAIL"; exit 1; }
 ```
 
-- [ ] **Step 3: Lint the script (offline — it won't run without the principal yet)**
+- [x] **Step 3: Lint the script (offline — it won't run without the principal yet)**
 
 Run: `bash -n iam/bootstrap-gate.sh && echo "syntax ok"`
 Expected: `syntax ok`. (Full execution happens in Task 13 after the human creates the principal.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 chmod +x iam/bootstrap-gate.sh
