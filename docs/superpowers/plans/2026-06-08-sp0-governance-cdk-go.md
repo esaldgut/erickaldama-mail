@@ -974,19 +974,19 @@ This phase authors the canonical policy JSON and two verification scripts, then 
 - Modify: `.claude/hooks/cdk-go-guard.sh` (only if the key differs from the assumed `cli_command`)
 - Create: `docs/MCP_NOTES.md`
 
-- [ ] **Step 1: Fetch the aws-api MCP README and confirm the call_aws argument key**
+- [x] **Step 1: Fetch the aws-api MCP README and confirm the call_aws argument key**
 
 Run: WebFetch `https://github.com/awslabs/mcp/blob/main/src/aws-api-mcp-server/README.md` — find the `call_aws` tool's input schema (the exact parameter name carrying the AWS CLI command string).
 
-- [ ] **Step 2: Record the finding**
+- [x] **Step 2: Record the finding**
 
 `docs/MCP_NOTES.md`: document the exact `call_aws` input key (e.g. `cli_command`), and whether the MCP nests it. State: "the hook's MCP branch reads `.tool_input.<key>`; if un-inspectable, it denies all non-read `mcp__aws-api__*` — Capa 1 (IAM) enforces regardless."
 
-- [ ] **Step 3: Reconcile the hook if needed**
+- [x] **Step 3: Reconcile the hook if needed**
 
 If the key differs from `cli_command`/`command`, update the `jq` extraction in `cdk-go-guard.sh`'s MCP branch and re-run `cd test/hook && go test ./...` (expected: PASS).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/MCP_NOTES.md .claude/hooks/cdk-go-guard.sh
