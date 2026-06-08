@@ -26,7 +26,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | T1 | Hook test harness + fail-safe skeleton | ✅ done | 87e3646 | spec ✅ / calidad ✅ | TDD red→green ok; fail-safe-deny verificado por construcción. Minor: añadir comentario "stdin=pipe-EOF" en T2 |
 | T2 | permission_mode gate + scope check | ✅ done | c22922e→6219898 | spec ✅ / calidad ✅ (tras fix) | quality cazó I-1: scope debía ir ANTES de bypass (hook no-op fuera del mail) + M-1 empty-cwd deny. Fix + test regresión. 4 tests verdes |
 | T3 | Metachar deny + allowlist + aws/cdk refine | ✅ done | fead53d→06142d2 | spec ✅ / calidad ✅ | TDD; implementador cazó bug del plan (grep $'\n' rompe en BSD/macOS) → fix portable [[==*\n*]]. Quality OK (column-shift solo over-deny). Hardening SEC2: deny sts get-session/federation-token. 7 tests verdes |
-| T4 | Wire settings.json + audit log | pending | — | — | — |
+| T4 | Wire settings.json + audit log | ✅ done | 0dff928→5da5f60 | spec ✅ / calidad ✅ (tras fix) | wiring 2 matchers + MCP branch + audit. Quality cazó IMP-1: secreto plaintext (aws configure set / --secret-access-key) se filtraba al log → fix sanitize. + mkdir-p (MIN-2) + paridad MCP-Bash credential-minting (MIN-3, revertía T3 en MCP). 12 tests verdes. **FASE 1 (hook) COMPLETA** |
 | T5 | Plugin manifest + .mcp.json | pending | — | — | — |
 | T6 | cdk-verifier agent + cdk-go-recipe skill | pending | — | — | — |
 | T7 | ses-domain-recipe skill | pending | — | — | — |
@@ -52,3 +52,8 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   falso-positivo en BSD grep (macOS) → habría denegado TODO; fix portable bash-native. Quality ✅ (divergencias
   solo sesgan a deny; get-session-token over-allow aceptable porque IAM es el límite, pero añadí deny targeted
   SEC2 igual). El hook Bash tiene su lógica completa. 7 tests verdes. Siguiente: T4 (wiring + audit log).
+- 2026-06-08 — T4 ✅ (0dff928 + fix 5da5f60). Wiring settings.json (matchers Bash + mcp__aws-api__.*) +
+  audit log sanitizado + rama MCP del hook. Quality cazó IMP-1 (secreto plaintext de `aws configure set
+  aws_secret_access_key` se filtraba al audit log — el punto mismo de la tarea) → sanitize ampliado + test
+  anti-leak. + mkdir-p log dir + paridad MCP/Bash en credential-minting (MIN-3 revertía T3 en la superficie MCP).
+  12 tests verdes. >>> FASE 1 (el hook completo, testeado offline) COMPLETA. Siguiente: FASE 2 — T5 (plugin manifest).

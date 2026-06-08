@@ -392,7 +392,7 @@ git commit -m "feat(sp-0): hook metachar-deny + allowlist + aws-read/cdk-Go refi
 - Test: `test/hook/guard_test.go` (audit-log assertion)
 - Create: `test/hook/fixtures/deny_mcp_write.json`
 
-- [ ] **Step 1: Write the failing test (audit log written on every decision, sanitized)**
+- [x] **Step 1: Write the failing test (audit log written on every decision, sanitized)**
 
 Append to `test/hook/guard_test.go`:
 ```go
@@ -423,12 +423,12 @@ func TestWritesAuditLog(t *testing.T) {
 {"tool_name":"mcp__aws-api__call_aws","tool_input":{"cli_command":"aws s3 rb s3://x --force"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"default"}
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd test/hook && go test -run TestWritesAuditLog -v`
 Expected: FAIL — audit log not written (no logging yet).
 
-- [ ] **Step 3: Add the audit-log helper + call it in emit_deny/emit_allow; handle the MCP tool path**
+- [x] **Step 3: Add the audit-log helper + call it in emit_deny/emit_allow; handle the MCP tool path**
 
 In `cdk-go-guard.sh`, replace the two `emit_*` functions with logging versions, and add MCP command extraction. Put this near the top, after the shebang/comment block:
 ```bash
@@ -468,14 +468,14 @@ fi
 ```
 > Note: the exact `tool_input` key for `call_aws` is verified against the aws-api MCP README during Phase 3 Task 9 (the spec flags this); the `// .tool_input.command` fallback covers both shapes, and the `*) deny` default is the safe fallback the spec requires.
 
-- [ ] **Step 4: Run, verify PASS (audit + MCP deny)**
+- [x] **Step 4: Run, verify PASS (audit + MCP deny)**
 
 Run: `cd test/hook && go test ./... -v`
 Expected: all PASS including `TestWritesAuditLog`. Add a quick MCP check:
 Run: `echo '{"tool_name":"mcp__aws-api__call_aws","tool_input":{"cli_command":"aws s3 rb s3://x"},"cwd":"'"$HOME"'/dev/src/go/src/erickaldama-mail","permission_mode":"default"}' | MAIL_ROOT="$HOME/dev/src/go/src/erickaldama-mail" bash .claude/hooks/cdk-go-guard.sh`
 Expected: `"permissionDecision":"deny"`.
 
-- [ ] **Step 5: Create settings.json wiring the hook for both matchers**
+- [x] **Step 5: Create settings.json wiring the hook for both matchers**
 
 `.claude/settings.json`:
 ```json
@@ -499,7 +499,7 @@ Expected: `"permissionDecision":"deny"`.
 }
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 chmod +x .claude/hooks/cdk-go-guard.sh
