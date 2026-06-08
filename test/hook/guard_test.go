@@ -115,3 +115,14 @@ func TestCdkGoVsNonGo(t *testing.T) {
 		t.Fatalf("cdk deploy should deny, got: %s", got)
 	}
 }
+
+func TestDeniesStsCredentialMinting(t *testing.T) {
+	root := "/Users/esaldgut/dev/src/go/src/erickaldama-mail"
+	for _, sub := range []string{"get-session-token", "get-federation-token"} {
+		fixture := `{"tool_name":"Bash","tool_input":{"command":"aws sts ` + sub + `"},"cwd":"` + root + `","permission_mode":"default"}`
+		got := runHook(t, fixture, root)
+		if !strings.Contains(got, `"permissionDecision":"deny"`) {
+			t.Fatalf("sts %s must deny (credential-minting), got: %s", sub, got)
+		}
+	}
+}
