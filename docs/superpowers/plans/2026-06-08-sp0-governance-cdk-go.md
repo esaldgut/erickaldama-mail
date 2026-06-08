@@ -178,7 +178,7 @@ git commit -m "feat(sp-0): hook test harness + fail-safe-deny skeleton"
 - Test: `test/hook/guard_test.go`
 - Create: `test/hook/fixtures/allow_out_of_scope.json`, `test/hook/fixtures/deny_bypass_mode.json`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `test/hook/guard_test.go`:
 ```go
@@ -211,12 +211,12 @@ func TestDeniesBypassPermissionMode(t *testing.T) {
 {"tool_name":"Bash","tool_input":{"command":"aws s3 ls"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"bypassPermissions"}
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd test/hook && go test -run 'TestAllowsOutOfScopeProject|TestDeniesBypassPermissionMode' -v`
 Expected: both FAIL — the stub still denies everything (out-of-scope wrongly denied; bypass coincidentally "passes" by denying but for the wrong reason — keep both to lock behavior).
 
-- [ ] **Step 3: Implement the permission_mode gate + scope check**
+- [x] **Step 3: Implement the permission_mode gate + scope check**
 
 In `cdk-go-guard.sh`, replace the final `emit_deny '"unimplemented..."'` line with:
 ```bash
@@ -238,12 +238,12 @@ fi
 emit_deny '"unimplemented, fail-safe deny"'
 ```
 
-- [ ] **Step 4: Run, verify PASS**
+- [x] **Step 4: Run, verify PASS**
 
 Run: `cd test/hook && go test -run 'TestAllowsOutOfScopeProject|TestDeniesBypassPermissionMode|TestDeniesAwsWrite' -v`
 Expected: all PASS. (Out-of-scope allows; bypass denies; the original aws-write still denies via the unimplemented fall-through — correct for now.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .claude/hooks/cdk-go-guard.sh test/hook/guard_test.go test/hook/fixtures/allow_out_of_scope.json test/hook/fixtures/deny_bypass_mode.json
