@@ -30,7 +30,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | T5 | Plugin manifest + .mcp.json | ✅ done | 5b0fcf8 | spec ✅ | `claude plugin validate --strict` PASS (v2.1.169). author objeto, mcpServers pointer, server-key aws-api. config simple → solo spec-review |
 | T6 | cdk-verifier agent + cdk-go-recipe skill | ✅ done | 4a44bb4 | spec ✅ (fidelidad) | agent tools = solo Knowledge MCP (no Bash/Write/aws-api); skill encode decisiones auditadas sin softening (best-effort dispatch, anti-poison, go-denied-by-hook, out-of-band F3). validate --strict PASS |
 | T7 | ses-domain-recipe skill | ✅ done | 6acadce | spec ✅ (fidelidad) | 8 pasos + 6 trampas VERBATIM (SigningHostedZone, RFC 7208, v1-ses-NOT-sesv2) + thresholds + alarmas CDK-Go + ownership SP-0-emite/SP-3-deploya. validate --strict PASS |
-| T8 | Eval harness (golden + assertions + Pass@k) | pending | — | — | — |
+| T8 | Eval harness (golden + assertions + Pass@k) | ✅ done | 7a2d397→aa4169b | spec ✅ / calidad ✅ (tras fix) | TDD assertion engine. Quality cazó 2 Important: (1) runner sin ignición (main en package eval → go run falla) → cmd/runeval package main real; (2) Pass@1==Pass@3 (métrica falsa) → cómputo correcto por triples. + regexes ws-resilientes + tests negativos pinneados. Suite verde. **FASE 2 (plugin) COMPLETA** |
 | T9 | Verify call_aws tool_input shape (spike) | pending | — | — | — |
 | T10 | Canonical IAM allowlist policy | pending | — | — | — |
 | T11 | Bootstrap doc + acceptance-gate script | pending | — | — | — |
@@ -57,3 +57,9 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   aws_secret_access_key` se filtraba al audit log — el punto mismo de la tarea) → sanitize ampliado + test
   anti-leak. + mkdir-p log dir + paridad MCP/Bash en credential-minting (MIN-3 revertía T3 en la superficie MCP).
   12 tests verdes. >>> FASE 1 (el hook completo, testeado offline) COMPLETA. Siguiente: FASE 2 — T5 (plugin manifest).
+- 2026-06-08 — T5 ✅ (5b0fcf8): manifest + .mcp.json, validate --strict PASS. T6 ✅ (4a44bb4): cdk-verifier
+  agent (Knowledge-MCP-only) + cdk-go-recipe skill, decisiones auditadas fieles. T7 ✅ (6acadce):
+  ses-domain-recipe (8 pasos + 6 trampas verbatim + alarmas). T8 ✅ (7a2d397+aa4169b): eval harness;
+  quality cazó 2 Important (runner sin ignición → cmd/runeval package main; Pass@1==Pass@3 → métrica real).
+  >>> FASE 2 (el plugin completo, validate --strict + eval) COMPLETA. 8/13. Siguiente: FASE 3 — T9..T13 (IAM,
+  read-only; T13 = GATE HUMANO, el humano crea el principal IAM admin).
