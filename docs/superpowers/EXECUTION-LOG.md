@@ -23,7 +23,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 
 | # | Tarea | Estado | Commit | Review (spec/calidad) | Notas/hallazgos |
 |---|---|---|---|---|---|
-| T1 | Hook test harness + fail-safe skeleton | pending | — | — | — |
+| T1 | Hook test harness + fail-safe skeleton | ✅ done | 87e3646 | spec ✅ / calidad ✅ | TDD red→green ok; fail-safe-deny verificado por construcción. Minor: añadir comentario "stdin=pipe-EOF" en T2 |
 | T2 | permission_mode gate + scope check | pending | — | — | — |
 | T3 | Metachar deny + allowlist + aws/cdk refine | pending | — | — | — |
 | T4 | Wire settings.json + audit log | pending | — | — | — |
@@ -40,3 +40,6 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 ## Bitácora cronológica (append-only)
 
 - 2026-06-08 — Worktree `sp-0-governance` creado desde 725fb88. Journal inicializado. Arrancando T1.
+- 2026-06-08 — T1 ✅ (commit 87e3646). go.mod (erickaldama-mail, go 1.26.4) + test/hook harness + fail-safe-deny
+  skeleton. Spec-review ✅ (cero over-build), quality-review ✅ (invariante fail-safe verificado en todo path).
+  Pendiente menor para T2: comentario "stdin es pipe que alcanza EOF". Siguiente: T2.
