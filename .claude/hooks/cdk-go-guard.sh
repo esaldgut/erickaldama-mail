@@ -52,6 +52,7 @@ case "$FIRST" in
     SVCSUB="$(printf '%s' "$STRIPPED" | awk '{print $2" "$3}')"
     case "$SVCSUB" in
       "sts get-caller-identity") emit_allow ;;
+      "sts get-session-token"|"sts get-federation-token") emit_deny '"sts credential-minting denied (IAM is the boundary; run out-of-band)"' ;;
     esac
     case "$SUB" in
       describe*|list*|get*|ls|help) emit_allow ;;
