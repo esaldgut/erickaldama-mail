@@ -30,10 +30,18 @@ expect_allowed() {
   fi
 }
 
+# --- DENY: mutation / credential-minting / recon (HardDeny + implicit-deny) ---
 expect_denied  "ses send-email"        sesv2 send-email --region us-east-1 --from-email-address a@b.com --destination ToAddresses=c@d.com --content '{"Simple":{"Subject":{"Data":"x"},"Body":{"Text":{"Data":"y"}}}}'
 expect_denied  "sts assume-role"       sts assume-role --role-arn arn:aws:iam::367707589526:role/none --role-session-name s
+expect_denied  "sts get-session-token" sts get-session-token   # Read-classified but credential-minting → explicit Deny by name
 expect_denied  "s3 get-object (mail)"  s3api get-object --bucket erickaldama-mail-raw --key any /dev/null
 expect_denied  "iam list-access-keys"  iam list-access-keys
+
+# --- ALLOW: regional read (region-pinned) + global read (unconditioned) ---
 expect_allowed "ses get-account read"  sesv2 get-account --region us-east-1
+expect_allowed "route53 list-zones (global, unconditioned)"  route53 list-hosted-zones
+
+# --- region-pin enforcement: the SAME regional read in a different region must be DENIED ---
+expect_denied  "ses get-account in eu-west-1 (region-pin)"  sesv2 get-account --region eu-west-1
 
 [[ "$fail" -eq 0 ]] && echo "GATE PASS" || { echo "GATE FAIL"; exit 1; }

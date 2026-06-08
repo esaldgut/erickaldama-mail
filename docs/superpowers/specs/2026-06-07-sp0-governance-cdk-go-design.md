@@ -101,29 +101,38 @@ mutación OUT-OF-BAND. La cuenta AWS nunca recibe un write que el humano no haya
 
 **Capa 1 — IAM allowlist-PURO Y SCOPEADO = EL LÍMITE (única garantía dura).** (SEC-C4 + SEC2-C1/C2)
 El MCP aws-api (y la credencial base de la sesión) usan una IAM policy **Allow-only**, scopeada a recursos
-del proyecto en us-east-1, e implicit-deny todo lo demás. El allowlist NO es "lee toda la cuenta":
+del proyecto en us-east-1, e implicit-deny todo lo demás. El allowlist NO es "lee toda la cuenta".
+**La policy (`iam/readonly-policy.json`) tiene 4 statements, verificada acción-por-acción contra el AWS
+Service Authorization Reference (SAR, 2026-06-08).** Estructura = **global-unconditioned + 2 regional-pinned +
+hard-deny** — el split global-vs-regional es la corrección clave (un region-pin sobre acciones GLOBALES las
+DENIEGA por error: era un bug latente de la versión de 2 statements):
 ```
-Allow (acciones que SP-0 realmente necesita — gobernanza + recetas, NO inspeccionar correo):
-  ses:Get*/List*/Describe*        (v1 y v2 — MISMO prefijo IAM `ses:` per SAR; cubre ambos)
-  cloudformation:Describe*/List*  (estado de stacks)   route53:List*/Get*
-  cloudwatch:Describe*/List*      sts:GetCallerIdentity (NO sts:Get* — evita GetSessionToken/GetFederationToken)
-  s3: SOLO bucket-level → ListBucket, GetBucketLocation, GetBucketPolicy, GetBucketPublicAccessBlock,
-      GetEncryptionConfiguration   (NO s3:GetObject — el agente NO lee cuerpos MIME del correo, SEC2-C1)
-Resource: scopeado donde la acción lo soporte:
-  arn:aws:cloudformation:us-east-1:367707589526:stack/erickaldama-*/*
-  el hosted zone del proyecto, los buckets del proyecto, las identities/config-sets SES del proyecto.
-Condition (acciones sin resource-level, p.ej. varias ses/cloudwatch List): aws:RequestedRegion = us-east-1.
-NO incluido a propósito: iam:Get*/List* (recon de privilegios de la cuenta — SP-0 no lo necesita, SEC2-C2),
-  s3:GetObject (contenido de correo), cloudformation:GetTemplate (templates de otros proyectos con secretos).
+1. AllowGlobalReadsUnconditioned (SIN condición — STS GetCallerIdentity y Route53 son GLOBALES):
+     sts:GetCallerIdentity   route53:ListHostedZones/GetHostedZone/ListResourceRecordSets
+     [aws:RequestedRegion sobre el endpoint STS global = us-east-1 sin importar la región real → un
+      region-pin rompería el pre-flight bajo CLI v2; Route53 usa ARN sin región = señal de servicio global.]
+2. AllowRegionalReadsUsEast1  (Condition aws:RequestedRegion = us-east-1):
+     ses:Get*/List*/Describe*  (v1 y v2 — MISMO prefijo IAM `ses:` per SAR; cubre ambos)
+     cloudformation:Describe*/List*   cloudwatch DescribeAlarms/ListMetrics/GetMetricData/GetMetricStatistics
+3. AllowS3BucketLevelScopedUsEast1  (Resource arn:aws:s3:::*erickaldama*, Condition us-east-1):
+     s3 SOLO bucket-level → ListBucket, GetBucketLocation, GetBucketPolicy, GetBucketPublicAccessBlock,
+     GetEncryptionConfiguration   (NO s3:GetObject — el agente NO lee cuerpos MIME del correo, SEC2-C1)
+4. HardDenyMutationReconAndCredentialMinting (Deny explícito — gana sobre cualquier Allow):
+     ses:Send*  sts:AssumeRole/AssumeRoleWithWebIdentity/AssumeRoleWithSAML
+     sts:GetSessionToken + sts:GetFederationToken (Read-classified per SAR pero MINTEAN credenciales →
+       se deniegan POR NOMBRE; por eso el Allow usa sts:GetCallerIdentity y NO sts:Get*)
+     s3:GetObject  cloudformation:GetTemplate/GetTemplateSummary  ses:GetIdentityPolicies/GetEmailIdentityPolicies
+     iam:*  (recon de privilegios de la cuenta — SP-0 no lo necesita, SEC2-C2)
 ```
 Por qué allowlist y NO denylist de verbos (SEC-C4): "Deny Create/Put/Delete/Update" deja pasar **ses:SendEmail
 (corazón del proyecto), sts:AssumeRole, lambda:Invoke, ec2:Terminate, cfn:ExecuteChangeSet** — ninguno lleva
 esos verbos. Allowlist scopeado cierra mutación Y recon/exfil: la 1ª reescritura cambió hueco-de-mutación por
 hueco-de-lectura-total; este scoping cierra ambos.
-**`sesv2` NO es un prefijo IAM** (verificado contra Service Authorization Reference): SES v1 y v2 son ambos
-`ses:`. Por eso el Allow `ses:Get*` cubre v2 y el Deny `ses:Send*` cubre SendEmail/SendRawEmail/SendBulk*/etc.
-de AMBAS versiones. NUNCA escribir `sesv2:` en el JSON (IAM lo trata como servicio desconocido → no concede nada).
-Defensa en profundidad (2ª capa): Deny explícito de **ses:Send*, sts:AssumeRole**, *:Invoke*, *:Run*, *:Execute*.
+**`sesv2` NO es un prefijo IAM** (verificado contra SAR): SES v1 y v2 son ambos `ses:`. Por eso el Allow
+`ses:Get*` cubre v2 y el Deny `ses:Send*` cubre SendEmail/SendRawEmail/SendBulk*/etc. de AMBAS versiones.
+NUNCA escribir `sesv2:` en el JSON (IAM lo trata como servicio desconocido → no concede nada). **`cloudformation:Deploy*`
+NO es una acción real** (`aws cloudformation deploy` = CreateChangeSet+ExecuteChangeSet) → un Deny sobre ella
+sería statement muerto; por eso NO aparece. Defensa en profundidad nativa del MCP abajo.
 Env nativa del MCP: `READ_OPERATIONS_ONLY=true` + `REQUIRE_MUTATION_CONSENT=true` (complementan, no reemplazan IAM).
 **Verificación REAL del límite (SEC2-I2):** `aws iam simulate-principal-policy` (corrido con un principal SEPARADO,
 NO el read-only) para assert: intended-deny → implicitDeny/explicitDeny; intended-allow → allowed. Convierte
