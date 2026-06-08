@@ -998,7 +998,7 @@ git commit -m "docs(sp-0): verify aws-api MCP call_aws input shape; reconcile ho
 **Files:**
 - Create: `iam/readonly-policy.json`
 
-- [ ] **Step 1: Write the pure, scoped allowlist policy**
+- [x] **Step 1: Write the pure, scoped allowlist policy**
 
 `iam/readonly-policy.json` (allowlist-pure; scoped to us-east-1 / project resources; explicit Deny on AssumeRole + Send):
 ```json
@@ -1037,12 +1037,12 @@ git commit -m "docs(sp-0): verify aws-api MCP call_aws input shape; reconcile ho
 ```
 > Notes baked into the policy per audit: `sts:GetCallerIdentity` (not `sts:Get*`, avoids GetSessionToken); NO `s3:GetObject` (no mail-body reads, SEC2-C1); NO `iam:*` (no account recon, SEC2-C2); NO `cloudformation:GetTemplate`; explicit `Deny ses:Send*` covers v1+v2 (same `ses:` prefix); region condition pins reads to us-east-1. `Resource:"*"` is acceptable only because the Allow set is read-only-and-region-pinned and the Deny set closes the dangerous reads — Resource-level ARN scoping is SP-1's CDK-Go formalization (ownership boundary).
 
-- [ ] **Step 2: Validate the JSON is well-formed**
+- [x] **Step 2: Validate the JSON is well-formed**
 
 Run: `jq empty iam/readonly-policy.json && echo OK`
 Expected: `OK`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add iam/readonly-policy.json
