@@ -35,5 +35,42 @@ if [[ "$PMODE" != "default" && "$PMODE" != "plan" ]]; then
   emit_deny '"permission_mode not default/plan; governed command denied"'
 fi
 
-# (command-inspection logic added in Task 3)
-emit_deny '"unimplemented, fail-safe deny"'
+# SEC-C3/I2: deny compound/substitution commands rather than parsing shell grammar.
+# Word-bounded on the raw command. (eval is handled by the allowlist below, not here, to avoid
+# false-positives on substrings like --query 'retrieval'.)
+if printf '%s' "$CMD" | grep -Eq '(\&\&|\|\||;|\||\$\(|`|>|<|&[^&])' || [[ "$CMD" == *$'\n'* ]]; then
+  emit_deny '"compound command (metacharacters); hand it to the human"'
+fi
+
+# Strip leading VAR=val assignments, then take the first token.
+STRIPPED="$(printf '%s' "$CMD" | sed -E 's/^([[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)+//')"
+FIRST="$(printf '%s' "$STRIPPED" | awk '{print $1}')"
+
+case "$FIRST" in
+  aws)
+    SUB="$(printf '%s' "$STRIPPED" | awk '{print $3}')"
+    SVCSUB="$(printf '%s' "$STRIPPED" | awk '{print $2" "$3}')"
+    case "$SVCSUB" in
+      "sts get-caller-identity") emit_allow ;;
+    esac
+    case "$SUB" in
+      describe*|list*|get*|ls|help) emit_allow ;;
+      *) emit_deny '"AWS mutation runs out-of-band (human); not via the agent"' ;;
+    esac
+    ;;
+  cdk)
+    CJSON="$CWD/cdk.json"
+    [[ -f "$CJSON" ]] || emit_deny '"cdk.json missing; cannot confirm CDK-Go"'
+    APP="$(jq -r '.app // empty' "$CJSON" 2>/dev/null)" || emit_deny '"cdk.json malformed; deny"'
+    if ! printf '%s' "$APP" | grep -Eq 'go (run|mod)'; then
+      emit_deny '"CDK must be Go (cdk.json app is not go run/go mod)"'
+    fi
+    SUB="$(printf '%s' "$STRIPPED" | awk '{print $2}')"
+    case "$SUB" in
+      diff|synth|ls) emit_allow ;;
+      *) emit_deny '"cdk mutation (deploy/destroy) runs out-of-band (human)"' ;;
+    esac
+    ;;
+  ls|cat|echo|grep|head|tail|jq|pwd|which|mkdir) emit_allow ;;
+  *) emit_deny '"command not in narrow allowlist (go/git/find/env/scripts are execution engines); hand it to the human"' ;;
+esac
