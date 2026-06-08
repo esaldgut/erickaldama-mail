@@ -10,6 +10,7 @@ sanitize() {
   printf '%s' "$1" | sed -E \
     -e 's/(AKIA|ASIA)[A-Z0-9]{16}/<AWS_KEY>/g' \
     -e 's/AWS_SECRET_ACCESS_KEY=[^[:space:]]+/AWS_SECRET_ACCESS_KEY=<redacted>/g' \
+    -e 's/(aws_secret_access_key|--secret-access-key)([[:space:]=]+)[^[:space:]]+/\1\2<redacted>/gi' \
     -e 's/--token-code[[:space:]]+[0-9]+/--token-code <redacted>/g'
 }
 
@@ -17,6 +18,7 @@ audit() { # $1=decision $2=tool
   local line
   line="$(jq -nc --arg d "$1" --arg t "$2" --arg c "$(sanitize "${CMD:-}")" \
     '{ts:(now|todate),decision:$d,tool:$t,command:$c}')" || return 0
+  mkdir -p "$(dirname "$DECISION_LOG")" 2>/dev/null || true
   printf '%s\n' "$line" >> "$DECISION_LOG" 2>/dev/null || true
 }
 
@@ -41,6 +43,7 @@ if [[ "$TOOL" == mcp__aws-api__* ]]; then
   MCMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.cli_command // .tool_input.command // empty')"
   MSUB="$(printf '%s' "$MCMD" | awk '{print $3}')"
   case "$MSUB" in
+    get-session-token|get-federation-token) emit_deny '"sts credential-minting via MCP denied; IAM enforces, runs out-of-band"' ;;
     describe*|list*|get*|ls) emit_allow ;;
     *) emit_deny '"AWS mutation via MCP denied; IAM enforces, runs out-of-band"' ;;
   esac
