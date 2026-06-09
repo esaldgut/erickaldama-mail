@@ -29,5 +29,29 @@ which IS denied and IS observably blocked. The explicit `Deny sts:GetSessionToke
 in iam/readonly-policy.json stays as harmless defense-in-depth. The acceptance gate therefore verifies
 NON-ESCALATION of the minted token rather than an (unenforceable) outright deny.
 
-## Acceptance record
-(Filled in at Task 13 after the live gate + simulate matrix + out-of-band negative test pass. Sanitized.)
+## Acceptance record (T13, 2026-06-08 — sanitized)
+
+Principal created by the human with admin creds (out of the agent): IAM user `mail-readonly`,
+ARN `arn:aws:iam::367707589526:user/mail-readonly`, inline policy `mail-readonly-boundary` =
+`iam/readonly-policy.json` (4-statement, verified vs SAR). Named profile `mail-readonly` configured
+(region us-east-1; never `[default]`).
+
+**Live verification — PASSED:**
+- `bootstrap-gate.sh` (profile mail-readonly) → **GATE PASS** (exit 0):
+  - DENY: ses send-email, sts assume-role, s3 get-object, iam list-access-keys.
+  - GetSessionToken NON-ESCALATION: minted token cannot do iam list-access-keys (read-only inherited).
+  - ALLOW: ses get-account (us-east-1, regional), route53 list-hosted-zones (global, unconditioned).
+  - REGION-PIN: ses get-account in eu-west-1 → denied.
+- `simulate-matrix.sh` (admin profile, RO_PRINCIPAL_ARN) → **SIMULATE MATRIX PASS** (exit 0):
+  - allowed: ses:GetAccount, cloudformation:DescribeStacks (regional, with region context); sts:GetCallerIdentity, route53:ListHostedZones (global).
+  - explicitDeny: ses:SendEmail, sts:AssumeRole, sts:GetSessionToken, sts:GetFederationToken, s3:GetObject, cloudformation:GetTemplate, ses:GetIdentityPolicies, iam:ListAccessKeys.
+  - implicitDeny: lambda:InvokeFunction (allowlist-pure confirmed).
+- Pre-flight confirmed: account 367707589526, ARN .../user/mail-readonly (not admin).
+
+**Latent-bug fix confirmed live:** `sts:GetCallerIdentity` succeeded under the mail-readonly profile (CLI v2
+regional STS endpoint) — proving the move to the UNCONDITIONED statement fixed the region-pin bug that would
+have broken the pre-flight in the old 2-statement policy.
+
+**Deferred to SP-1:** the out-of-band negative test (after a real `cdk deploy` with a separate `mail-deploy`
+profile, confirm the agent's next command still resolves to mail-readonly). SP-0 deploys no infra, so there is
+no mutation to run out-of-band yet. SP-1 must create `mail-deploy` and run this test on its first deploy.
