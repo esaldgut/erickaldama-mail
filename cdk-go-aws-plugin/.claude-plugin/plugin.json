@@ -1,0 +1,8 @@
+{
+  "name": "cdk-go-aws-plugin",
+  "version": "0.1.0",
+  "description": "Recipes that provision AWS via CDK Go, verifying each construct against live docs before acting. SES domain + send/receive recipe with operational runbook.",
+  "author": { "name": "Erick Aldama", "email": "esaldgut@gmail.com", "url": "https://erickaldama.com" },
+  "mcpServers": "./.mcp.json",
+  "defaultEnabled": false
+}

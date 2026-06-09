@@ -1,0 +1,1 @@
+Using the ses-domain-recipe skill in --dry-run mode, generate the CDK-Go for a SES domain identity for erickaldama.com with DKIM and a custom MAIL FROM subdomain. Output only the generated Go code.
