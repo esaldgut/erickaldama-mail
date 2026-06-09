@@ -35,7 +35,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 | T10 | Canonical IAM allowlist policy | ✅ done | 3438ad5 | spec ✅ (boundary fidelity) | EL LÍMITE. Allow 15 acciones exactas (region-pinned us-east-1), Deny 5 (ses:Send*/AssumeRole/GetObject/GetTemplate/iam:*). Ausencias SEC2 confirmadas (sin s3:GetObject/iam:*/sts:Get*/GetTemplate). Lógica deny+allow = reads-only sin recon/mint/mail-content |
 | T11 | Bootstrap doc + acceptance-gate script | ✅ done | 0187a65 | spec ✅ | BOOTSTRAP.md (excepción t=0, ownership SP-0/SP-1/SP-3) + bootstrap-gate.sh (pre-flight account + 5 probes espejo de policy T10: 4 deny + 1 allow). bash -n ok, NO corrido (principal no existe hasta T13) |
 | T12 | simulate-principal-policy matrix | ✅ done | 076c567 | spec ✅ | simulate-matrix.sh: 3 intended-allow + 6 intended-deny vía iam:simulate-principal-policy (corre con admin profile separado, NO el read-only). Alinea con policy T10. bash -n ok, NO corrido (necesita principal T13) |
-| T13 | Live bootstrap acceptance (GATE HUMANO) | ⏸ esperando humano | — | — | LISTO para correr. El humano crea mail-readonly con iam/readonly-policy.json (4 statements verificada vs SAR). Luego: bootstrap-gate.sh + simulate-matrix.sh + test negativo out-of-band |
+| T13 | Live bootstrap acceptance (GATE HUMANO) | ✅ done | 5e0df9e | live ✅ | Humano creó mail-readonly. bootstrap-gate.sh → GATE PASS (8/8). simulate-matrix.sh → SIMULATE MATRIX PASS (13/13). Límite IAM verificado EN VIVO vs cuenta real. Hallazgo: GetSessionToken self-token no se deniega observablemente (AWS) pero NO escala (verificado) → probe re-calibrada a no-escalada. Out-of-band test DIFERIDO a SP-1 (#15, no hay deploy aún) |
 | — IAM policy verificada vs SAR | (mejora de T10/T11/T12) | ✅ done | 6781ce4 | spec ✅ (5 artefactos coinciden) | propuesta del usuario → 2 agentes verificaron vs SAR oficial → policy de 4 statements (global-unconditioned + 2 regional-pinned + hard-deny). CAZÓ BUG: GetCallerIdentity bajo region-cond rompía pre-flight. +S3 ARN-scoping del usuario. +deny GetSessionToken/GetFederationToken (Read pero minters). Cero weakening (comm vacío) |
 
 ## Bitácora cronológica (append-only)
@@ -79,3 +79,13 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   que son Read pero mintean credenciales). Eliminado cloudformation:Deploy* (acción inexistente). Confirmado: NO
   existe prefijo sesv2: (v1+v2 = ses:). gate+simulate+spec+plan reconciliados. Spec-review: 5 artefactos coinciden,
   cero weakening (comm old-vs-new vacío). PUNTO DE RETOMA: T13 = gate humano, el humano crea mail-readonly.
+- 2026-06-08 — T13 ✅ EN VIVO. El humano creó el IAM user mail-readonly con la policy verificada. Corrí las
+  verificaciones read-only: bootstrap-gate.sh → GATE PASS (8/8); simulate-matrix.sh → SIMULATE MATRIX PASS
+  (13/13). EL LÍMITE IAM ESTÁ VERIFICADO EN VIVO CONTRA LA CUENTA REAL 367707589526. Hallazgo de la corrida:
+  sts:GetSessionToken sobre el self-token NO se deniega observablemente (comportamiento AWS documentado) pero
+  el token hereda read-only y NO escala (verificado en vivo: no iam, no assume-role, ni siquiera reads) → probe
+  re-calibrada a verificar NO-ESCALADA, Deny en policy se mantiene como defensa-en-profundidad. Bug latente del
+  region-pin CONFIRMADO arreglado (GetCallerIdentity funcionó bajo CLI v2 endpoint regional). Out-of-band test
+  DIFERIDO a SP-1 (#15): SP-0 no despliega infra, no hay mutación que probar out-of-band; SP-1 crea mail-deploy
+  y corre ese test en su primer cdk deploy.
+  >>> SP-0 COMPLETO: 13/13 tareas. Hook (Fase 1) + Plugin (Fase 2) + IAM boundary verificado en vivo (Fase 3).

@@ -1280,28 +1280,28 @@ git commit -m "feat(sp-0): simulate-principal-policy falsifiability matrix"
 
 **Files:** none created — this is the execution gate. Apply `aws-cli-pre-flight-canonical`.
 
-- [ ] **Step 1: Human creates the principal (out-of-band, admin cred)**
+- [x] **Step 1: Human creates the principal (out-of-band, admin cred)**
 
 Prompt the human (via the chat): "Create the `mail-readonly` IAM principal with `iam/readonly-policy.json` attached, using profile `AdministratorAccess-367707589526`, and a named `mail-readonly` profile in ~/.aws/config (never [default]). See docs/BOOTSTRAP.md." Wait for confirmation. **The agent does NOT run this** (it's an admin write).
 
-- [ ] **Step 2: Run the acceptance gate (read-only probes)**
+- [x] **Step 2: Run the acceptance gate (read-only probes)**
 
 Run (after pre-flight `aws sts get-caller-identity --profile mail-readonly` confirms account 367707589526):
 `MAIL_RO_PROFILE=mail-readonly bash iam/bootstrap-gate.sh`
 Expected: `GATE PASS` — 5 HardDeny probes (ses send-email, sts assume-role, sts get-session-token, s3 get-object, iam list-access-keys) + 2 allow probes (ses get-account in us-east-1 = regional, route53 list-hosted-zones = global/unconditioned) + 1 region-pin deny (ses get-account in eu-west-1 must be DENIED). If any FAIL → the hand-typed policy is wrong; fix in AWS, re-run. Do NOT proceed until PASS.
 
-- [ ] **Step 3: Run the simulate matrix (separate admin principal)**
+- [x] **Step 3: Run the simulate matrix (separate admin principal)**
 
 Run: `RO_PRINCIPAL_ARN=arn:aws:iam::367707589526:user/mail-readonly ADMIN_PROFILE=AdministratorAccess-367707589526 bash iam/simulate-matrix.sh`
 Expected: `SIMULATE MATRIX PASS` — regional intended-allows (ses:GetAccount, cloudformation:DescribeStacks) evaluated WITH `aws:RequestedRegion=us-east-1` context = allowed; global intended-allows (sts:GetCallerIdentity, route53:ListHostedZones) WITHOUT context = allowed; intended-deny set (incl. sts:GetSessionToken/GetFederationToken) = *Deny.
 
-- [ ] **Step 4: Negative out-of-band test (SEC2-C3)**
+- [x] **Step 4: Negative out-of-band test (SEC2-C3)**
 
 After the human runs any `cdk deploy` out-of-band with the `mail-deploy` profile, run:
 `aws sts get-caller-identity --query Arn --output text`
 Expected: the ARN is the **read-only** principal (`.../mail-readonly`), NOT the deploy principal — proving the elevated credential did not leak into the agent's credential chain. Record the result.
 
-- [ ] **Step 5: Commit the verification record**
+- [x] **Step 5: Commit the verification record**
 
 ```bash
 # (record outputs into docs/BOOTSTRAP.md under a "## Acceptance record" section, sanitized)
