@@ -65,7 +65,7 @@ The hook is the most deterministic, self-contained artifact. We TDD it with a Go
 - Create: `test/hook/fixtures/deny_aws_write.json`
 - Create: `.claude/hooks/cdk-go-guard.sh` (empty stub, non-executable logic yet)
 
-- [ ] **Step 1: Write the failing test (Go harness that runs the hook script with a fixture and asserts deny)**
+- [x] **Step 1: Write the failing test (Go harness that runs the hook script with a fixture and asserts deny)**
 
 `test/hook/guard_test.go`:
 ```go
@@ -127,12 +127,12 @@ func TestDeniesAwsWrite(t *testing.T) {
 echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
 ```
 
-- [ ] **Step 2: Run the test, verify it FAILS**
+- [x] **Step 2: Run the test, verify it FAILS**
 
 Run: `cd test/hook && go test -run TestDeniesAwsWrite -v`
 Expected: FAIL — got `"permissionDecision":"allow"`, expected deny. (Confirms the harness wires stdin→script→stdout and the assertion is real.)
 
-- [ ] **Step 3: Make the script executable + add the shebang/trap skeleton (self-deny on error, SEC-C1)**
+- [x] **Step 3: Make the script executable + add the shebang/trap skeleton (self-deny on error, SEC-C1)**
 
 Replace `.claude/hooks/cdk-go-guard.sh` with the fail-safe skeleton:
 ```bash
@@ -159,12 +159,12 @@ PMODE="$(printf '%s' "$INPUT" | jq -r '.permission_mode // "default"')"
 emit_deny '"unimplemented, fail-safe deny"'
 ```
 
-- [ ] **Step 4: Run the test, verify it PASSES**
+- [x] **Step 4: Run the test, verify it PASSES**
 
 Run: `cd test/hook && go test -run TestDeniesAwsWrite -v`
 Expected: PASS (the stub now denies by default).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add test/hook/guard_test.go test/hook/fixtures/deny_aws_write.json .claude/hooks/cdk-go-guard.sh
@@ -178,7 +178,7 @@ git commit -m "feat(sp-0): hook test harness + fail-safe-deny skeleton"
 - Test: `test/hook/guard_test.go`
 - Create: `test/hook/fixtures/allow_out_of_scope.json`, `test/hook/fixtures/deny_bypass_mode.json`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `test/hook/guard_test.go`:
 ```go
@@ -211,12 +211,12 @@ func TestDeniesBypassPermissionMode(t *testing.T) {
 {"tool_name":"Bash","tool_input":{"command":"aws s3 ls"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"bypassPermissions"}
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd test/hook && go test -run 'TestAllowsOutOfScopeProject|TestDeniesBypassPermissionMode' -v`
 Expected: both FAIL — the stub still denies everything (out-of-scope wrongly denied; bypass coincidentally "passes" by denying but for the wrong reason — keep both to lock behavior).
 
-- [ ] **Step 3: Implement the permission_mode gate + scope check**
+- [x] **Step 3: Implement the permission_mode gate + scope check**
 
 In `cdk-go-guard.sh`, replace the final `emit_deny '"unimplemented..."'` line with:
 ```bash
@@ -238,12 +238,12 @@ fi
 emit_deny '"unimplemented, fail-safe deny"'
 ```
 
-- [ ] **Step 4: Run, verify PASS**
+- [x] **Step 4: Run, verify PASS**
 
 Run: `cd test/hook && go test -run 'TestAllowsOutOfScopeProject|TestDeniesBypassPermissionMode|TestDeniesAwsWrite' -v`
 Expected: all PASS. (Out-of-scope allows; bypass denies; the original aws-write still denies via the unimplemented fall-through — correct for now.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .claude/hooks/cdk-go-guard.sh test/hook/guard_test.go test/hook/fixtures/allow_out_of_scope.json test/hook/fixtures/deny_bypass_mode.json
@@ -258,7 +258,7 @@ git commit -m "feat(sp-0): hook permission_mode gate + project scope check"
 - Create fixtures: `deny_metachar.json`, `deny_go_test.json`, `allow_aws_read.json`, `allow_cdk_go_synth.json`, `deny_cdk_non_go.json`, `deny_aws_assume_role.json`
 - Create: `test/hook/fixtures/cdkjson_go/cdk.json`, `test/hook/fixtures/cdkjson_ts/cdk.json`
 
-- [ ] **Step 1: Write the failing tests (table-driven, covers the adversarial cases the audit found)**
+- [x] **Step 1: Write the failing tests (table-driven, covers the adversarial cases the audit found)**
 
 Append to `test/hook/guard_test.go`:
 ```go
@@ -322,12 +322,12 @@ Fixtures (each one line):
 `test/hook/fixtures/cdkjson_go/cdk.json`: `{"app":"go mod download && go run ."}`
 `test/hook/fixtures/cdkjson_ts/cdk.json`: `{"app":"npx ts-node bin/app.ts"}`
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd test/hook && go test -run 'TestDecisionTable|TestCdkGoVsNonGo' -v`
 Expected: FAIL (the unimplemented fall-through denies everything → the allow cases fail).
 
-- [ ] **Step 3: Implement the command-inspection logic**
+- [x] **Step 3: Implement the command-inspection logic**
 
 In `cdk-go-guard.sh`, replace the final `emit_deny '"unimplemented..."'` with:
 ```bash
@@ -372,12 +372,12 @@ case "$FIRST" in
 esac
 ```
 
-- [ ] **Step 4: Run the full hook suite, verify PASS**
+- [x] **Step 4: Run the full hook suite, verify PASS**
 
 Run: `cd test/hook && go test ./... -v`
 Expected: all PASS — metachar deny, go-test deny, aws-read allow, assume-role deny, cdk-Go synth allow, cdk-TS deny, cdk deploy deny, plus Task 1/2 cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .claude/hooks/cdk-go-guard.sh test/hook/
@@ -392,7 +392,7 @@ git commit -m "feat(sp-0): hook metachar-deny + allowlist + aws-read/cdk-Go refi
 - Test: `test/hook/guard_test.go` (audit-log assertion)
 - Create: `test/hook/fixtures/deny_mcp_write.json`
 
-- [ ] **Step 1: Write the failing test (audit log written on every decision, sanitized)**
+- [x] **Step 1: Write the failing test (audit log written on every decision, sanitized)**
 
 Append to `test/hook/guard_test.go`:
 ```go
@@ -423,12 +423,12 @@ func TestWritesAuditLog(t *testing.T) {
 {"tool_name":"mcp__aws-api__call_aws","tool_input":{"cli_command":"aws s3 rb s3://x --force"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"default"}
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd test/hook && go test -run TestWritesAuditLog -v`
 Expected: FAIL — audit log not written (no logging yet).
 
-- [ ] **Step 3: Add the audit-log helper + call it in emit_deny/emit_allow; handle the MCP tool path**
+- [x] **Step 3: Add the audit-log helper + call it in emit_deny/emit_allow; handle the MCP tool path**
 
 In `cdk-go-guard.sh`, replace the two `emit_*` functions with logging versions, and add MCP command extraction. Put this near the top, after the shebang/comment block:
 ```bash
@@ -468,14 +468,14 @@ fi
 ```
 > Note: the exact `tool_input` key for `call_aws` is verified against the aws-api MCP README during Phase 3 Task 9 (the spec flags this); the `// .tool_input.command` fallback covers both shapes, and the `*) deny` default is the safe fallback the spec requires.
 
-- [ ] **Step 4: Run, verify PASS (audit + MCP deny)**
+- [x] **Step 4: Run, verify PASS (audit + MCP deny)**
 
 Run: `cd test/hook && go test ./... -v`
 Expected: all PASS including `TestWritesAuditLog`. Add a quick MCP check:
 Run: `echo '{"tool_name":"mcp__aws-api__call_aws","tool_input":{"cli_command":"aws s3 rb s3://x"},"cwd":"'"$HOME"'/dev/src/go/src/erickaldama-mail","permission_mode":"default"}' | MAIL_ROOT="$HOME/dev/src/go/src/erickaldama-mail" bash .claude/hooks/cdk-go-guard.sh`
 Expected: `"permissionDecision":"deny"`.
 
-- [ ] **Step 5: Create settings.json wiring the hook for both matchers**
+- [x] **Step 5: Create settings.json wiring the hook for both matchers**
 
 `.claude/settings.json`:
 ```json
@@ -499,7 +499,7 @@ Expected: `"permissionDecision":"deny"`.
 }
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 chmod +x .claude/hooks/cdk-go-guard.sh
@@ -519,7 +519,7 @@ The plugin is self-contained and validated offline with `claude plugin validate 
 - Create: `cdk-go-aws-plugin/.claude-plugin/plugin.json`
 - Create: `cdk-go-aws-plugin/.mcp.json`
 
-- [ ] **Step 1: Write the manifest (author as OBJECT, defaultEnabled:false, mcpServers pointer)**
+- [x] **Step 1: Write the manifest (author as OBJECT, defaultEnabled:false, mcpServers pointer)**
 
 `cdk-go-aws-plugin/.claude-plugin/plugin.json`:
 ```json
@@ -556,12 +556,12 @@ The plugin is self-contained and validated offline with `claude plugin validate 
 }
 ```
 
-- [ ] **Step 2: Validate (this is the test for this task)**
+- [x] **Step 2: Validate (this is the test for this task)**
 
 Run: `claude plugin validate ./cdk-go-aws-plugin --strict`
 Expected: validation errors about missing skills (skills dir not created yet) OR a clean structural pass for the manifest. If it complains the plugin has no components, that's expected until Task 6 — note it and proceed; re-validate at end of Task 6.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/.claude-plugin/plugin.json cdk-go-aws-plugin/.mcp.json
@@ -574,7 +574,7 @@ git commit -m "feat(sp-0): plugin manifest + .mcp.json (aws-knowledge + aws-api 
 - Create: `cdk-go-aws-plugin/agents/cdk-verifier.md`
 - Create: `cdk-go-aws-plugin/skills/cdk-go-recipe/SKILL.md`
 
-- [ ] **Step 1: Write the verifier agent (tools allowlist = ONLY Knowledge MCP; no Bash/Write/aws-api)**
+- [x] **Step 1: Write the verifier agent (tools allowlist = ONLY Knowledge MCP; no Bash/Write/aws-api)**
 
 `cdk-go-aws-plugin/agents/cdk-verifier.md`:
 ```markdown
@@ -605,7 +605,7 @@ This is the exact input schema of the recipe's cache (docs/cdk-verified.json). C
 SHA-256 of the normalized documented signature string (sorted prop names + types).
 ```
 
-- [ ] **Step 2: Write the cdk-go-recipe skill (4 phases + cache mechanism + best-effort dispatch)**
+- [x] **Step 2: Write the cdk-go-recipe skill (4 phases + cache mechanism + best-effort dispatch)**
 
 `cdk-go-aws-plugin/skills/cdk-go-recipe/SKILL.md`:
 ```markdown
@@ -651,12 +651,12 @@ When invoked with `--dry-run`, run F1–F3 (verify, read, GENERATE the code/comm
 execute — just show what you WOULD do. Used by the eval harness.
 ```
 
-- [ ] **Step 3: Re-validate the plugin**
+- [x] **Step 3: Re-validate the plugin**
 
 Run: `claude plugin validate ./cdk-go-aws-plugin --strict`
 Expected: PASS (manifest + at least one skill + agent present). If it flags the second skill missing, that's added in Task 7 — re-validate after Task 7.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/agents/cdk-verifier.md cdk-go-aws-plugin/skills/cdk-go-recipe/SKILL.md
@@ -668,7 +668,7 @@ git commit -m "feat(sp-0): cdk-verifier agent (Knowledge-MCP-only) + cdk-go-reci
 **Files:**
 - Create: `cdk-go-aws-plugin/skills/ses-domain-recipe/SKILL.md`
 
-- [ ] **Step 1: Write the SES recipe skill**
+- [x] **Step 1: Write the SES recipe skill**
 
 `cdk-go-aws-plugin/skills/ses-domain-recipe/SKILL.md`:
 ```markdown
@@ -723,12 +723,12 @@ increase (only if bounce is throttling, not quality); 5) resume gradually (1% �
 Run verify/read/GENERATE the constructs + commands, but do NOT ask the human to execute. Used by the eval harness.
 ```
 
-- [ ] **Step 2: Validate the complete plugin**
+- [x] **Step 2: Validate the complete plugin**
 
 Run: `claude plugin validate ./cdk-go-aws-plugin --strict`
 Expected: PASS — manifest, two skills, one agent, .mcp.json all structurally valid.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/skills/ses-domain-recipe/SKILL.md
@@ -744,7 +744,7 @@ git commit -m "feat(sp-0): ses-domain-recipe skill (8 steps + runbook + 6 traps)
 - Create: `cdk-go-aws-plugin/eval/baseline.json`
 - Create: `cdk-go-aws-plugin/eval/assertions_test.go`
 
-- [ ] **Step 1: Write the failing test for the assertion engine (deterministic, on a captured-output string)**
+- [x] **Step 1: Write the failing test for the assertion engine (deterministic, on a captured-output string)**
 
 `cdk-go-aws-plugin/eval/assertions_test.go`:
 ```go
@@ -775,12 +775,12 @@ func TestAssertSESIdentityOutput(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL**
 
 Run: `cd cdk-go-aws-plugin/eval && go test -run TestAssertSESIdentityOutput -v`
 Expected: FAIL — `AssertSESIdentity` undefined.
 
-- [ ] **Step 3: Implement the assertion engine (whitespace-resilient, positive/negative/6-trap)**
+- [x] **Step 3: Implement the assertion engine (whitespace-resilient, positive/negative/6-trap)**
 
 `cdk-go-aws-plugin/eval/assertions.go`:
 ```go
@@ -849,12 +849,12 @@ func AssertS3Bucket(out string) Result {
 }
 ```
 
-- [ ] **Step 4: Run, verify PASS**
+- [x] **Step 4: Run, verify PASS**
 
 Run: `cd cdk-go-aws-plugin/eval && go test -run TestAssertSESIdentityOutput -v`
 Expected: PASS.
 
-- [ ] **Step 5: Write the golden prompts, the runner, and the baseline**
+- [x] **Step 5: Write the golden prompts, the runner, and the baseline**
 
 `cdk-go-aws-plugin/eval/golden/ses-identity.txt`:
 ```
@@ -950,12 +950,12 @@ func main() {
 []
 ```
 
-- [ ] **Step 6: Run the assertion suite (the deterministic part)**
+- [x] **Step 6: Run the assertion suite (the deterministic part)**
 
 Run: `cd cdk-go-aws-plugin/eval && go test ./... -v`
 Expected: PASS (assertion engine tested; the LLM-driven `RunEval` is build-tagged out and run separately).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cdk-go-aws-plugin/eval/
@@ -974,19 +974,19 @@ This phase authors the canonical policy JSON and two verification scripts, then 
 - Modify: `.claude/hooks/cdk-go-guard.sh` (only if the key differs from the assumed `cli_command`)
 - Create: `docs/MCP_NOTES.md`
 
-- [ ] **Step 1: Fetch the aws-api MCP README and confirm the call_aws argument key**
+- [x] **Step 1: Fetch the aws-api MCP README and confirm the call_aws argument key**
 
 Run: WebFetch `https://github.com/awslabs/mcp/blob/main/src/aws-api-mcp-server/README.md` — find the `call_aws` tool's input schema (the exact parameter name carrying the AWS CLI command string).
 
-- [ ] **Step 2: Record the finding**
+- [x] **Step 2: Record the finding**
 
 `docs/MCP_NOTES.md`: document the exact `call_aws` input key (e.g. `cli_command`), and whether the MCP nests it. State: "the hook's MCP branch reads `.tool_input.<key>`; if un-inspectable, it denies all non-read `mcp__aws-api__*` — Capa 1 (IAM) enforces regardless."
 
-- [ ] **Step 3: Reconcile the hook if needed**
+- [x] **Step 3: Reconcile the hook if needed**
 
 If the key differs from `cli_command`/`command`, update the `jq` extraction in `cdk-go-guard.sh`'s MCP branch and re-run `cd test/hook && go test ./...` (expected: PASS).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/MCP_NOTES.md .claude/hooks/cdk-go-guard.sh
@@ -998,36 +998,72 @@ git commit -m "docs(sp-0): verify aws-api MCP call_aws input shape; reconcile ho
 **Files:**
 - Create: `iam/readonly-policy.json`
 
-- [ ] **Step 1: Write the pure, scoped allowlist policy**
+- [x] **Step 1: Write the pure, scoped allowlist policy**
 
-`iam/readonly-policy.json` (allowlist-pure; scoped to us-east-1 / project resources; explicit Deny on AssumeRole + Send):
+`iam/readonly-policy.json` (allowlist-pure; **4 statements verified action-by-action vs the AWS Service
+Authorization Reference, SAR 2026-06-08**; structure = global-unconditioned + 2 regional-pinned + hard-deny).
+The global/regional split is the key correction: STS `GetCallerIdentity` and Route53 are GLOBAL, so pinning
+them to a region would WRONGLY DENY them (latent bug in the prior 2-statement shape). Copy verbatim:
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadOnlyScopedReads",
+      "Sid": "AllowGlobalReadsUnconditioned",
       "Effect": "Allow",
       "Action": [
-        "ses:Get*", "ses:List*", "ses:Describe*",
-        "cloudformation:Describe*", "cloudformation:List*",
-        "route53:List*", "route53:Get*",
-        "cloudwatch:Describe*", "cloudwatch:List*",
         "sts:GetCallerIdentity",
-        "s3:ListBucket", "s3:GetBucketLocation", "s3:GetBucketPolicy",
-        "s3:GetBucketPublicAccessBlock", "s3:GetEncryptionConfiguration"
+        "route53:ListHostedZones",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowRegionalReadsUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "ses:Get*",
+        "ses:List*",
+        "ses:Describe*",
+        "cloudformation:Describe*",
+        "cloudformation:List*",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics"
       ],
       "Resource": "*",
       "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
     },
     {
-      "Sid": "HardDenyMutationAndRecon",
+      "Sid": "AllowS3BucketLevelScopedUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::*erickaldama*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+    },
+    {
+      "Sid": "HardDenyMutationReconAndCredentialMinting",
       "Effect": "Deny",
       "Action": [
         "ses:Send*",
         "sts:AssumeRole",
+        "sts:AssumeRoleWithWebIdentity",
+        "sts:AssumeRoleWithSAML",
+        "sts:GetSessionToken",
+        "sts:GetFederationToken",
         "s3:GetObject",
         "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
+        "ses:GetIdentityPolicies",
+        "ses:GetEmailIdentityPolicies",
         "iam:*"
       ],
       "Resource": "*"
@@ -1035,14 +1071,25 @@ git commit -m "docs(sp-0): verify aws-api MCP call_aws input shape; reconcile ho
   ]
 }
 ```
-> Notes baked into the policy per audit: `sts:GetCallerIdentity` (not `sts:Get*`, avoids GetSessionToken); NO `s3:GetObject` (no mail-body reads, SEC2-C1); NO `iam:*` (no account recon, SEC2-C2); NO `cloudformation:GetTemplate`; explicit `Deny ses:Send*` covers v1+v2 (same `ses:` prefix); region condition pins reads to us-east-1. `Resource:"*"` is acceptable only because the Allow set is read-only-and-region-pinned and the Deny set closes the dangerous reads — Resource-level ARN scoping is SP-1's CDK-Go formalization (ownership boundary).
+> Notes baked into the policy per SAR audit (full findings: `09-iam-policy-verified-vs-sar.md`):
+> **(1) Global vs regional split** — `sts:GetCallerIdentity` + Route53 reads are GLOBAL and go in the
+> UNCONDITIONED Statement 1 (a region-pin breaks GetCallerIdentity: the STS global endpoint reports
+> `aws:RequestedRegion=us-east-1` regardless of the real region under CLI v2 → false AccessDenied). Statements 2 & 3
+> carry the `us-east-1` region condition. **(2) No `sesv2:` IAM prefix** — SES v1+v2 are both `ses:`, so `ses:Get*`
+> covers v2 reads and the Deny `ses:Send*` covers SendEmail/SendRaw/SendBulk* of both. **(3) No `cloudformation:Deploy*`**
+> — it is NOT a real action (`aws cloudformation deploy` = CreateChangeSet+ExecuteChangeSet) → a Deny on it would be a
+> dead statement; omitted. **(4) `sts:GetSessionToken`/`GetFederationToken` are Read-classified by the SAR but mint
+> credentials**, so they are denied BY NAME (which is why the Allow uses `sts:GetCallerIdentity`, not `sts:Get*`).
+> NO `s3:GetObject` (no mail-body reads, SEC2-C1); NO `iam:*` (no account recon, SEC2-C2); `GetIdentityPolicies`/`GetTemplate`
+> denied (expose authz JSON / template bodies). `Resource:"*"` is acceptable because the Allow set is read-only-and-region-pinned
+> and the Deny set closes the dangerous reads — Resource-level ARN scoping is SP-1's CDK-Go formalization (ownership boundary).
 
-- [ ] **Step 2: Validate the JSON is well-formed**
+- [x] **Step 2: Validate the JSON is well-formed**
 
 Run: `jq empty iam/readonly-policy.json && echo OK`
 Expected: `OK`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add iam/readonly-policy.json
@@ -1055,7 +1102,7 @@ git commit -m "feat(sp-0): canonical IAM allowlist-pure scoped policy (the bound
 - Create: `docs/BOOTSTRAP.md`
 - Create: `iam/bootstrap-gate.sh`
 
-- [ ] **Step 1: Write the bootstrap procedure + ownership boundaries**
+- [x] **Step 1: Write the bootstrap procedure + ownership boundaries**
 
 `docs/BOOTSTRAP.md`:
 ```markdown
@@ -1082,20 +1129,24 @@ Mutations (`cdk deploy`) run with a SEPARATE named profile `mail-deploy` that th
 on another machine / CloudShell. The agent's session is pinned to `mail-readonly`. Negative test below.
 ```
 
-- [ ] **Step 2: Write the acceptance-gate script (the test for this task — read-only probes)**
+- [x] **Step 2: Write the acceptance-gate script (the test for this task — read-only probes)**
 
-`iam/bootstrap-gate.sh`:
+`iam/bootstrap-gate.sh` (probes cover the 4-statement policy: 5 HardDeny + 2 allow [1 regional, 1 global] +
+1 region-pin deny; `sesv2`/`s3api` here are CLI command namespaces — they map to the `ses:`/`s3:` IAM actions,
+NOT a `sesv2:` IAM prefix):
 ```bash
 #!/usr/bin/env bash
 # Bootstrap acceptance gate (SEC2-I1). Run BEFORE pointing the agent at the read-only principal.
 # All probes are read-only or expected-to-be-denied; nothing here mutates.
+# Applies aws-cli-pre-flight-canonical: verify identity + account before any service call.
 set -uo pipefail
 PROFILE="${MAIL_RO_PROFILE:-mail-readonly}"
 fail=0
 
 echo "== aws-cli-pre-flight-canonical =="
 acct="$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text 2>/dev/null)"
-[[ "$acct" == "367707589526" ]] || { echo "FAIL: wrong account: $acct"; exit 1; }
+[[ "$acct" == "367707589526" ]] || { echo "FAIL: wrong/empty account: '$acct' (expected 367707589526)"; exit 1; }
+echo "ok: account 367707589526"
 
 # expect_denied <description> <aws args...>
 expect_denied() {
@@ -1116,21 +1167,29 @@ expect_allowed() {
   fi
 }
 
+# --- DENY: mutation / credential-minting / recon (HardDeny + implicit-deny) ---
 expect_denied  "ses send-email"        sesv2 send-email --region us-east-1 --from-email-address a@b.com --destination ToAddresses=c@d.com --content '{"Simple":{"Subject":{"Data":"x"},"Body":{"Text":{"Data":"y"}}}}'
 expect_denied  "sts assume-role"       sts assume-role --role-arn arn:aws:iam::367707589526:role/none --role-session-name s
+expect_denied  "sts get-session-token" sts get-session-token   # Read-classified but credential-minting → explicit Deny by name
 expect_denied  "s3 get-object (mail)"  s3api get-object --bucket erickaldama-mail-raw --key any /dev/null
 expect_denied  "iam list-access-keys"  iam list-access-keys
+
+# --- ALLOW: regional read (region-pinned) + global read (unconditioned) ---
 expect_allowed "ses get-account read"  sesv2 get-account --region us-east-1
+expect_allowed "route53 list-zones (global, unconditioned)"  route53 list-hosted-zones
+
+# --- region-pin enforcement: the SAME regional read in a different region must be DENIED ---
+expect_denied  "ses get-account in eu-west-1 (region-pin)"  sesv2 get-account --region eu-west-1
 
 [[ "$fail" -eq 0 ]] && echo "GATE PASS" || { echo "GATE FAIL"; exit 1; }
 ```
 
-- [ ] **Step 3: Lint the script (offline — it won't run without the principal yet)**
+- [x] **Step 3: Lint the script (offline — it won't run without the principal yet)**
 
 Run: `bash -n iam/bootstrap-gate.sh && echo "syntax ok"`
 Expected: `syntax ok`. (Full execution happens in Task 13 after the human creates the principal.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 chmod +x iam/bootstrap-gate.sh
@@ -1143,9 +1202,12 @@ git commit -m "feat(sp-0): bootstrap doc + acceptance-gate script (deny/allow pr
 **Files:**
 - Create: `iam/simulate-matrix.sh`
 
-- [ ] **Step 1: Write the simulate-matrix script (run with a SEPARATE principal, not the read-only one)**
+- [x] **Step 1: Write the simulate-matrix script (run with a SEPARATE principal, not the read-only one)**
 
-`iam/simulate-matrix.sh`:
+`iam/simulate-matrix.sh` (region-context-aware: the REGIONAL intended-allows of Statements 2 & 3 pass
+`aws:RequestedRegion=us-east-1` via `--context-entries` so the StringEquals condition is satisfied — without
+it `simulate-principal-policy` evaluates WITHOUT a region context and the region-pinned Allow returns a
+false implicitDeny; the GLOBAL allows of Statement 1 and the explicit denies use no context):
 ```bash
 #!/usr/bin/env bash
 # Falsifiability of the allowlist (SEC2-I2): simulate the read-only principal's policy and assert the matrix.
@@ -1155,12 +1217,12 @@ ADMIN="${ADMIN_PROFILE:-AdministratorAccess-367707589526}"
 PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:?set RO_PRINCIPAL_ARN to the mail-readonly user/role arn}"
 fail=0
 
-sim() { # $1=expected(allowed|*Deny) $2..=action
-  local expect="$1"; shift
-  local action="$1"
+# _sim <expected> <action> [extra args...] — core evaluator; pass-through extra args to the CLI.
+_sim() {
+  local expect="$1"; local action="$2"; shift 2
   local dec
   dec="$(aws iam simulate-principal-policy --profile "$ADMIN" \
-    --policy-source-arn "$PRINCIPAL_ARN" --action-names "$action" \
+    --policy-source-arn "$PRINCIPAL_ARN" --action-names "$action" "$@" \
     --query 'EvaluationResults[0].EvalDecision' --output text 2>/dev/null)"
   if [[ "$dec" == "$expect" || ( "$expect" == "*Deny" && "$dec" == *Deny ) ]]; then
     echo "ok $action -> $dec"
@@ -1169,27 +1231,44 @@ sim() { # $1=expected(allowed|*Deny) $2..=action
   fi
 }
 
-# intended-allow
-sim allowed  ses:GetAccount
-sim allowed  cloudformation:DescribeStacks
+# sim <expected> <action> — global / unconditioned actions and all denies (no region context).
+sim() { _sim "$1" "$2"; }
+
+# sim_regional <expected> <action> — region-pinned Allows (Statements 2 & 3). Pass aws:RequestedRegion=us-east-1
+# so the StringEquals condition is satisfied; without it simulate evaluates WITHOUT region context and the
+# region-pinned Allow would WRONGLY return implicitDeny (latent false-FAIL).
+sim_regional() {
+  _sim "$1" "$2" \
+    --context-entries ContextKeyName=aws:RequestedRegion,ContextKeyValues=us-east-1,ContextKeyType=string
+}
+
+# intended-allow — REGIONAL (Statements 2 & 3): pass region context so the us-east-1 condition is met.
+sim_regional allowed  ses:GetAccount
+sim_regional allowed  cloudformation:DescribeStacks
+# intended-allow — GLOBAL (Statement 1, unconditioned): NO region context; allows regardless of region.
 sim allowed  sts:GetCallerIdentity
-# intended-deny (explicit or implicit)
+sim allowed  route53:ListHostedZones
+# intended-deny — explicit HardDeny set (verified vs SAR 2026-06-08). Explicit Deny wins regardless of region.
 sim "*Deny"  ses:SendEmail
 sim "*Deny"  sts:AssumeRole
+sim "*Deny"  sts:GetSessionToken
+sim "*Deny"  sts:GetFederationToken
 sim "*Deny"  s3:GetObject
-sim "*Deny"  iam:ListAccessKeys
 sim "*Deny"  cloudformation:GetTemplate
+sim "*Deny"  ses:GetIdentityPolicies
+sim "*Deny"  iam:ListAccessKeys
+# intended-deny — implicit (not in any Allow)
 sim "*Deny"  lambda:InvokeFunction
 
 [[ "$fail" -eq 0 ]] && echo "SIMULATE MATRIX PASS" || { echo "SIMULATE MATRIX FAIL"; exit 1; }
 ```
 
-- [ ] **Step 2: Lint (offline)**
+- [x] **Step 2: Lint (offline)**
 
 Run: `bash -n iam/simulate-matrix.sh && echo "syntax ok"`
 Expected: `syntax ok`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 chmod +x iam/simulate-matrix.sh
@@ -1201,28 +1280,28 @@ git commit -m "feat(sp-0): simulate-principal-policy falsifiability matrix"
 
 **Files:** none created — this is the execution gate. Apply `aws-cli-pre-flight-canonical`.
 
-- [ ] **Step 1: Human creates the principal (out-of-band, admin cred)**
+- [x] **Step 1: Human creates the principal (out-of-band, admin cred)**
 
 Prompt the human (via the chat): "Create the `mail-readonly` IAM principal with `iam/readonly-policy.json` attached, using profile `AdministratorAccess-367707589526`, and a named `mail-readonly` profile in ~/.aws/config (never [default]). See docs/BOOTSTRAP.md." Wait for confirmation. **The agent does NOT run this** (it's an admin write).
 
-- [ ] **Step 2: Run the acceptance gate (read-only probes)**
+- [x] **Step 2: Run the acceptance gate (read-only probes)**
 
 Run (after pre-flight `aws sts get-caller-identity --profile mail-readonly` confirms account 367707589526):
 `MAIL_RO_PROFILE=mail-readonly bash iam/bootstrap-gate.sh`
-Expected: `GATE PASS` (4 denies + 1 allow). If any FAIL → the hand-typed policy is wrong; fix in AWS, re-run. Do NOT proceed until PASS.
+Expected: `GATE PASS` — 5 HardDeny probes (ses send-email, sts assume-role, sts get-session-token, s3 get-object, iam list-access-keys) + 2 allow probes (ses get-account in us-east-1 = regional, route53 list-hosted-zones = global/unconditioned) + 1 region-pin deny (ses get-account in eu-west-1 must be DENIED). If any FAIL → the hand-typed policy is wrong; fix in AWS, re-run. Do NOT proceed until PASS.
 
-- [ ] **Step 3: Run the simulate matrix (separate admin principal)**
+- [x] **Step 3: Run the simulate matrix (separate admin principal)**
 
 Run: `RO_PRINCIPAL_ARN=arn:aws:iam::367707589526:user/mail-readonly ADMIN_PROFILE=AdministratorAccess-367707589526 bash iam/simulate-matrix.sh`
-Expected: `SIMULATE MATRIX PASS` (intended-allow=allowed, intended-deny=*Deny).
+Expected: `SIMULATE MATRIX PASS` — regional intended-allows (ses:GetAccount, cloudformation:DescribeStacks) evaluated WITH `aws:RequestedRegion=us-east-1` context = allowed; global intended-allows (sts:GetCallerIdentity, route53:ListHostedZones) WITHOUT context = allowed; intended-deny set (incl. sts:GetSessionToken/GetFederationToken) = *Deny.
 
-- [ ] **Step 4: Negative out-of-band test (SEC2-C3)**
+- [x] **Step 4: Negative out-of-band test (SEC2-C3)**
 
 After the human runs any `cdk deploy` out-of-band with the `mail-deploy` profile, run:
 `aws sts get-caller-identity --query Arn --output text`
 Expected: the ARN is the **read-only** principal (`.../mail-readonly`), NOT the deploy principal — proving the elevated credential did not leak into the agent's credential chain. Record the result.
 
-- [ ] **Step 5: Commit the verification record**
+- [x] **Step 5: Commit the verification record**
 
 ```bash
 # (record outputs into docs/BOOTSTRAP.md under a "## Acceptance record" section, sanitized)

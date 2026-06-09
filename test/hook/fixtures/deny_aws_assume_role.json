@@ -1,0 +1,1 @@
+{"tool_name":"Bash","tool_input":{"command":"aws sts assume-role --role-arn arn:aws:iam::1:role/x --role-session-name s"},"cwd":"/Users/esaldgut/dev/src/go/src/erickaldama-mail","permission_mode":"default"}

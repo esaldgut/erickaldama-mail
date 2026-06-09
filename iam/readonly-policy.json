@@ -1,0 +1,65 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowGlobalReadsUnconditioned",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity",
+        "route53:ListHostedZones",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowRegionalReadsUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "ses:Get*",
+        "ses:List*",
+        "ses:Describe*",
+        "cloudformation:Describe*",
+        "cloudformation:List*",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics"
+      ],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+    },
+    {
+      "Sid": "AllowS3BucketLevelScopedUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::*erickaldama*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+    },
+    {
+      "Sid": "HardDenyMutationReconAndCredentialMinting",
+      "Effect": "Deny",
+      "Action": [
+        "ses:Send*",
+        "sts:AssumeRole",
+        "sts:AssumeRoleWithWebIdentity",
+        "sts:AssumeRoleWithSAML",
+        "sts:GetSessionToken",
+        "sts:GetFederationToken",
+        "s3:GetObject",
+        "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
+        "ses:GetIdentityPolicies",
+        "ses:GetEmailIdentityPolicies",
+        "iam:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
