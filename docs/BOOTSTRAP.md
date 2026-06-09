@@ -20,5 +20,14 @@ does not exist yet at t=0 (chicken-and-egg). This is the one-time manual excepti
 Mutations (`cdk deploy`) run with a SEPARATE named profile `mail-deploy` that the agent NEVER selects, ideally
 on another machine / CloudShell. The agent's session is pinned to `mail-readonly`. Negative test below.
 
+## Note: sts:GetSessionToken / GetFederationToken behavior (verified 2026-06-08)
+AWS lets an IAM user call `sts:GetSessionToken` on its OWN credentials regardless of an identity-policy
+`Deny` — the returned temporary credentials INHERIT the user's permissions (read-only here) and cannot
+escalate. Verified live: a mail-readonly session token cannot do `iam list-access-keys`, `sts assume-role`,
+or any mutation. The real credential-minting risk is `sts:AssumeRole` (escalates to a DIFFERENT role),
+which IS denied and IS observably blocked. The explicit `Deny sts:GetSessionToken`/`GetFederationToken`
+in iam/readonly-policy.json stays as harmless defense-in-depth. The acceptance gate therefore verifies
+NON-ESCALATION of the minted token rather than an (unenforceable) outright deny.
+
 ## Acceptance record
 (Filled in at Task 13 after the live gate + simulate matrix + out-of-band negative test pass. Sanitized.)
