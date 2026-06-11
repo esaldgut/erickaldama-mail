@@ -58,6 +58,15 @@ no mutation to run out-of-band yet. SP-1 must create `mail-deploy` and run this 
 
 ## SP-1 bootstrap (t=0, human, SSO Admin) — 2026-06-10
 
+### PREREQUISITO (hallazgo SP-1 deploy 2026-06-10): el `cdk` CLI debe ser ≥ el schema de la librería
+La regla del proyecto es usar la versión VIVA de `aws-cdk-go/awscdk/v2` (no hardcodear). Esa librería
+(v2.258.1) sintetiza con **cloud-assembly schema 54.0.0**, que un `cdk` CLI viejo NO puede leer:
+`Maximum schema version supported is 49.x.x, but found 54.0.0. You need at least CLI version 2.1126.0`.
+Síntoma engañoso: el bootstrap imprime banners pero no completa, y el deploy luego falla con
+"not bootstrapped". **Fix:** `npm install -g aws-cdk@latest` (CLI ≥ 2.1126.0); confirmar `cdk --version`.
+Regla: el CLI debe ser ≥ que la librería CDK-Go — verificar AMBOS antes de bootstrap.
+
+
 The agent NEVER runs these. The human runs them out-of-band with SSO
 `AdministratorAccess-367707589526`. The agent prepares the exact commands and verifies after.
 (Note: the SP-0 "Deferred to SP-1" note above mentioned a `mail-deploy` principal — that was
