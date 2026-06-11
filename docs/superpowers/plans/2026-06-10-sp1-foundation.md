@@ -312,7 +312,7 @@ git commit -m "feat(sp-1): public hosted zone erickaldama.com + CAA Amazon-only 
 
 This mirrors `iam/readonly-policy.json` (the 4 SAR-verified statements) as a CDK ManagedPolicy and attaches it to the **existing** `mail-readonly` user via the `Users` prop — NOT `AddManagedPolicy` (which throws `ValidationError` on an imported user). The template must emit NO `AWS::IAM::User`.
 
-- [ ] **Step 1: Write the failing test** — append to `foundation_stack_test.go`
+- [x] **Step 1: Write the failing test** — append to `foundation_stack_test.go`
 
 This task asserts the readonly policy's **properties** (not a global ManagedPolicy count — that count assertion lives in Task 4, after the boundary is added, to keep each task's test passing in isolation).
 
@@ -326,26 +326,28 @@ func TestReadonlyManagedPolicy(t *testing.T) {
 	})
 	// Importing a user must NOT emit an AWS::IAM::User.
 	template.ResourceCountIs(jsii.String("AWS::IAM::User"), jsii.Number(0))
-	// Hard-deny statement present.
+	// Hard-deny statement present. NOTE: a bare map inside Match_ArrayWith is an EXACT
+	// object match in CDK assertions v2.258.1 — wrap it in Match_ObjectLike for partial match
+	// (the real statement has extra Action/Resource keys we don't want to enumerate here).
 	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]interface{}{
 		"PolicyDocument": map[string]interface{}{
 			"Statement": assertions.Match_ArrayWith(&[]interface{}{
-				map[string]interface{}{
+				assertions.Match_ObjectLike(&map[string]interface{}{
 					"Sid":    "HardDenyMutationReconAndCredentialMinting",
 					"Effect": "Deny",
-				},
+				}),
 			}),
 		},
 	})
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./internal/infra/ -run TestReadonlyManagedPolicy -v`
 Expected: FAIL — no `AWS::IAM::ManagedPolicy` named `mail-readonly-managed` exists yet.
 
-- [ ] **Step 3: Add the managed policy** to `foundation_stack.go` (add `awsiam` import; insert before `return stack`)
+- [x] **Step 3: Add the managed policy** to `foundation_stack.go` (add `awsiam` import; insert before `return stack`)
 
 ```go
 	// Import the existing mail-readonly user by name (reference, NOT a CFN resource).
@@ -401,12 +403,12 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `go test ./internal/infra/ -run TestReadonlyManagedPolicy -v`
 Expected: PASS — managed policy `mail-readonly-managed` attached to user `mail-readonly`, zero `AWS::IAM::User`, hard-deny present.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/infra/foundation_stack.go internal/infra/foundation_stack_test.go
