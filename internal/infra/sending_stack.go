@@ -22,7 +22,7 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 	// Import the SP-1 hosted zone by attributes (pure reference — no AWS call, no lookup-role).
 	zone := awsroute53.HostedZone_FromHostedZoneAttributes(stack, jsii.String("ImportedZone"),
 		&awsroute53.HostedZoneAttributes{
-			HostedZoneId: jsii.String("Z023932911KA6S98A6ZRW"),
+			HostedZoneId: jsii.String(HostedZoneID),
 			ZoneName:     jsii.String(DomainName),
 		})
 
