@@ -571,7 +571,7 @@ These JSON files are what the human passes to `cdk bootstrap`. They are declarat
 - Create: `iam/erickaldama-boundary.json`
 - Modify: `docs/BOOTSTRAP.md`
 
-- [ ] **Step 1: Create `iam/deploy-exec-policy.json`** (allowlist-of-services; the `--cloudformation-execution-policies` grant)
+- [x] **Step 1: Create `iam/deploy-exec-policy.json`** (allowlist-of-services; the `--cloudformation-execution-policies` grant)
 
 ```json
 {
@@ -612,7 +612,7 @@ These JSON files are what the human passes to `cdk bootstrap`. They are declarat
 
 > Note: NO `cloudformation:*` (the CFN exec-role does not self-invoke; the bootstrap deploy-role orchestrates). NO `sesv2:*` (`ses:` covers v1+v2). `logs:*` is included now (Lambda LogGroups land in SP-3; harmless earlier). The boundary (next file) is what prevents the exec-role from creating an escalating IAM role.
 
-- [ ] **Step 2: Create `iam/erickaldama-boundary.json`** (mirror of the CDK ManagedPolicy — used for the FIRST bootstrap before the stack exists)
+- [x] **Step 2: Create `iam/erickaldama-boundary.json`** (mirror of the CDK ManagedPolicy — used for the FIRST bootstrap before the stack exists)
 
 ```json
 {
@@ -642,7 +642,7 @@ These JSON files are what the human passes to `cdk bootstrap`. They are declarat
 }
 ```
 
-- [ ] **Step 3: Verify both JSONs are valid** (offline, no AWS)
+- [x] **Step 3: Verify both JSONs are valid** (offline, no AWS)
 
 Run:
 
@@ -653,7 +653,7 @@ jq -e . iam/erickaldama-boundary.json > /dev/null && echo "boundary OK"
 
 Expected: both print `OK`.
 
-- [ ] **Step 4: Append the SP-1 bootstrap procedure to `docs/BOOTSTRAP.md`**
+- [x] **Step 4: Append the SP-1 bootstrap procedure to `docs/BOOTSTRAP.md`**
 
 Append this section (verbatim):
 
@@ -697,7 +697,7 @@ The deploy uses SSO Admin (≠ the agent's mail-readonly profile). After deploy,
 iam/post-deploy-identity-check.sh and confirms its own identity is still mail-readonly.
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add iam/deploy-exec-policy.json iam/erickaldama-boundary.json docs/BOOTSTRAP.md
