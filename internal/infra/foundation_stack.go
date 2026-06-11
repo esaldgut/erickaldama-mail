@@ -14,6 +14,11 @@ import (
 func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.StackProps) awscdk.Stack {
 	stack := awscdk.NewStack(scope, jsii.String(id), props)
 
+	// Tag every resource in the stack for attribution.
+	for k, v := range projectTags() {
+		awscdk.Tags_Of(stack).Add(jsii.String(k), v, nil)
+	}
+
 	// Public hosted zone for erickaldama.com. Route53 auto-creates NS+SOA.
 	// CaaAmazon adds a CAA record restricting cert issuance to Amazon (ACM) —
 	// safe because the stack is 100% AWS (ACM + SES).
