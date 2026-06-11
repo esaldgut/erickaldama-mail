@@ -10,6 +10,9 @@ const (
 	// IAM resource names (stable; referenced by the bootstrap and post-deploy gate).
 	ReadonlyManagedPolicyName = "mail-readonly-managed"
 	ReadonlyUserName          = "mail-readonly"
+	// BoundaryManagedPolicyName names the permissions boundary. It is NOT a stack resource —
+	// it is a bootstrap artifact (iam/erickaldama-boundary.json) that must pre-exist for
+	// `cdk bootstrap --custom-permissions-boundary`. Kept here as the canonical name.
 	BoundaryManagedPolicyName = "erickaldama-boundary"
 )
 

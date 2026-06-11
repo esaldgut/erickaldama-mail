@@ -9,8 +9,9 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
-// NewFoundationStack creates the SP-1 foundation: hosted zone + IAM boundary.
-// Fleshed out construct-by-construct in tasks 2–5.
+// NewFoundationStack creates the SP-1 foundation: public hosted zone (+CAA) and the
+// read-only IAM managed policy attached to the imported mail-readonly user. The permissions
+// boundary is a bootstrap artifact (out-of-band), not a stack resource — see note below.
 func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.StackProps) awscdk.Stack {
 	stack := awscdk.NewStack(scope, jsii.String(id), props)
 
@@ -52,13 +53,10 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 			Statements:        readonlyStatements(),
 		})
 
-	// Permissions boundary: the ceiling for every role CFN creates in SP-1..SP-3.
-	// Applied via `cdk bootstrap --custom-permissions-boundary erickaldama-boundary`.
-	awsiam.NewManagedPolicy(stack, jsii.String("ErickaldamaBoundary"),
-		&awsiam.ManagedPolicyProps{
-			ManagedPolicyName: jsii.String(BoundaryManagedPolicyName),
-			Statements:        boundaryStatements(),
-		})
+	// NOTE: the permissions boundary `erickaldama-boundary` is intentionally NOT a stack
+	// resource. It must pre-exist before `cdk bootstrap --custom-permissions-boundary`, so it
+	// is a BOOTSTRAP artifact managed out-of-band (iam/erickaldama-boundary.json), not owned by
+	// CFN. Having the stack create it caused a 409 AlreadyExists on the first deploy.
 
 	return stack
 }
@@ -93,28 +91,6 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 			Sid:       jsii.String("HardDenyMutationReconAndCredentialMinting"),
 			Effect:    awsiam.Effect_DENY,
 			Actions:   jsii.Strings("ses:Send*", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML", "sts:GetSessionToken", "sts:GetFederationToken", "s3:GetObject", "cloudformation:GetTemplate", "cloudformation:GetTemplateSummary", "ses:GetIdentityPolicies", "ses:GetEmailIdentityPolicies", "iam:*"),
-			Resources: jsii.Strings("*"),
-		}),
-	}
-}
-
-// boundaryStatements is the ceiling: allow project services, deny escalation + out-of-scope.
-func boundaryStatements() *[]awsiam.PolicyStatement {
-	return &[]awsiam.PolicyStatement{
-		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-			Sid:    jsii.String("AllowProjectServices"),
-			Effect: awsiam.Effect_ALLOW,
-			// ssm:* is in the ceiling so the boundary (stamped onto the cfn-exec-role by
-			// --custom-permissions-boundary) does not block the CDK bootstrap version check
-			// (ssm:GetParameters on /cdk-bootstrap/*). The actual grant stays scoped in the
-			// exec-policy; the boundary is a ceiling, so listing the service is correct.
-			Actions:   jsii.Strings("route53:*", "ses:*", "s3:*", "dynamodb:*", "lambda:*", "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "ssm:*", "iam:*", "cloudformation:*"),
-			Resources: jsii.Strings("*"),
-		}),
-		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-			Sid:       jsii.String("DenyEscalationAndOutOfScope"),
-			Effect:    awsiam.Effect_DENY,
-			Actions:   jsii.Strings("route53domains:*", "ec2:*", "rds:*", "organizations:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary", "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"),
 			Resources: jsii.Strings("*"),
 		}),
 	}

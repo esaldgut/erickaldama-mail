@@ -54,33 +54,17 @@ func TestReadonlyManagedPolicy(t *testing.T) {
 	})
 }
 
-func TestPermissionsBoundary(t *testing.T) {
+func TestPermissionsBoundaryNotInStack(t *testing.T) {
 	template := synth(t)
 
-	// Now there are exactly 2 managed policies: readonly + boundary.
-	template.ResourceCountIs(jsii.String("AWS::IAM::ManagedPolicy"), jsii.Number(2))
+	// The stack owns exactly ONE managed policy: the readonly one.
+	// The permissions boundary (erickaldama-boundary) is a BOOTSTRAP artifact — it must
+	// pre-exist for `cdk bootstrap --custom-permissions-boundary`, so CFN does NOT own it
+	// (owning it caused a 409 AlreadyExists on first deploy). It lives only in
+	// iam/erickaldama-boundary.json, managed out-of-band like the exec-policy.
+	template.ResourceCountIs(jsii.String("AWS::IAM::ManagedPolicy"), jsii.Number(1))
 	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]interface{}{
-		"ManagedPolicyName": "erickaldama-boundary",
-		"PolicyDocument": map[string]interface{}{
-			"Statement": assertions.Match_ArrayWith(&[]interface{}{
-				// Allows the project services. ssm:* is required so the boundary (which CFN
-				// stamps onto the cfn-exec-role) does not block the CDK bootstrap version check
-				// (ssm:GetParameters on /cdk-bootstrap/*) — found during the first real deploy.
-				assertions.Match_ObjectLike(&map[string]interface{}{
-					"Effect": "Allow",
-					"Action": assertions.Match_ArrayWith(&[]interface{}{"ssm:*"}),
-				}),
-				// Denies the escalation/out-of-scope services.
-				assertions.Match_ObjectLike(&map[string]interface{}{
-					"Effect": "Deny",
-					"Action": assertions.Match_ArrayWith(&[]interface{}{
-						"route53domains:*", "ec2:*", "rds:*", "organizations:*",
-						"iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary",
-						"iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
-					}),
-				}),
-			}),
-		},
+		"ManagedPolicyName": "mail-readonly-managed",
 	})
 }
 
