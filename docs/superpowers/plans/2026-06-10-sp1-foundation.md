@@ -507,7 +507,7 @@ git commit -m "feat(sp-1): erickaldama-boundary permissions boundary (caps SP-1.
 - Modify: `internal/infra/foundation_stack.go`
 - Modify: `internal/infra/foundation_stack_test.go`
 
-- [ ] **Step 1: Write the failing test** — append to `foundation_stack_test.go`
+- [x] **Step 1: Write the failing test** — append to `foundation_stack_test.go`
 
 ```go
 func TestStackTags(t *testing.T) {
@@ -521,12 +521,12 @@ func TestStackTags(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./internal/infra/ -run TestStackTags -v`
 Expected: FAIL — no `Project` tag on the hosted zone.
 
-- [ ] **Step 3: Apply stack-wide tags** in `foundation_stack.go` (insert right after `stack := awscdk.NewStack(...)`)
+- [x] **Step 3: Apply stack-wide tags** in `foundation_stack.go` (insert right after `stack := awscdk.NewStack(...)`)
 
 ```go
 	// Tag every resource in the stack for attribution.
@@ -535,12 +535,12 @@ Expected: FAIL — no `Project` tag on the hosted zone.
 	}
 ```
 
-- [ ] **Step 4: Run the FULL suite to verify all pass**
+- [x] **Step 4: Run the FULL suite to verify all pass**
 
 Run: `go test ./internal/infra/ -v`
 Expected: PASS — `TestHostedZone`, `TestReadonlyManagedPolicy`, `TestPermissionsBoundary`, `TestStackTags` all green.
 
-- [ ] **Step 5: Verify the whole repo still builds and SP-0 tests stay green**
+- [x] **Step 5: Verify the whole repo still builds and SP-0 tests stay green**
 
 Run:
 
@@ -551,7 +551,7 @@ go test ./test/hook/ ./cdk-go-aws-plugin/eval/ ./internal/infra/
 
 Expected: all three packages report `ok` (SP-0 hook + eval untouched; SP-1 infra green).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/infra/foundation_stack.go internal/infra/foundation_stack_test.go
