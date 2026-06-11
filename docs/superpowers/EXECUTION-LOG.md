@@ -154,3 +154,14 @@ Ningún diseño de papel los anticipó. Cada uno verificado contra docs oficiale
 2. Memorias personales feedback_* (transversales a cualquier CDK). HECHO (ver MEMORY.md).
 3. Hardening del skill CDK-Go de SP-0 (checks pre-deploy idempotentes). PENDIENTE (#22).
 4. Lecciones generalizables → lessongate → workspace público (#11).
+
+## Re-delegación del registrar — SUCCESSFUL (2026-06-10 22:47)
+UpdateDomainNameservers OperationId 16cb8c5d-7f36-4a50-a21b-b06b1340bc1f → Status SUCCESSFUL.
+El registrar (Amazon Registrar) ahora apunta a los 4 NS nuevos de la zona (ns-1845.awsdns-38.co.uk,
+ns-1423.awsdns-49.org, ns-949.awsdns-54.net, ns-26.awsdns-03.com), reemplazando el delegation set muerto.
+Propagación DNS pública en curso (dig NS aún vacío al cierre — TTL normal, no bloquea).
+
+>>> SP-1 COMPLETO: 9/9 tareas. FoundationStack desplegado en vivo, boundary read-only verificado intacto
+post-deploy, registrar re-delegado. El examen de gobernanza PASÓ: el límite de SP-0 sobrevivió un deploy
+real out-of-band. 5 hallazgos productivizados (EXECUTION-LOG + 3 memorias feedback_cdk_* + skill hardening #22
++ lessongate #11).
