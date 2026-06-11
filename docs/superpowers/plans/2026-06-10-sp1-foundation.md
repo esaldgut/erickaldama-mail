@@ -59,7 +59,7 @@ erickaldama-mail/
 - Create: `internal/infra/foundation_stack.go` (minimal stub — empty stack, fleshed out in T2–T5)
 - Modify: `.gitignore` (add `cdk.out/`)
 
-- [ ] **Step 1: Add the CDK-Go dependency at its live version (not hardcoded)**
+- [x] **Step 1: Add the CDK-Go dependency at its live version (not hardcoded)**
 
 Apply `aws-cli-pre-flight-canonical` is NOT needed here (no AWS calls). Run:
 
@@ -72,7 +72,7 @@ go get github.com/aws/constructs-go/constructs/v10@latest
 
 Expected: `go.mod` now requires `github.com/aws/aws-cdk-go/awscdk/v2 v2.258.1` (or newer if released), with `jsii-runtime-go` and `constructs/v10` pulled transitively. Record the resolved version — do NOT edit it by hand.
 
-- [ ] **Step 2: Create the minimal stack stub** `internal/infra/foundation_stack.go`
+- [x] **Step 2: Create the minimal stack stub** `internal/infra/foundation_stack.go`
 
 ```go
 // Package infra defines the AWS CDK Go stacks for the erickaldama.com email project.
@@ -92,7 +92,7 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 }
 ```
 
-- [ ] **Step 3: Create the app entrypoint** `cmd/cdk/main.go`
+- [x] **Step 3: Create the app entrypoint** `cmd/cdk/main.go`
 
 ```go
 package main
@@ -125,7 +125,7 @@ func env() *awscdk.Environment {
 }
 ```
 
-- [ ] **Step 4: Create `cdk.json`** (package-path form — robust as the package grows)
+- [x] **Step 4: Create `cdk.json`** (package-path form — robust as the package grows)
 
 ```json
 {
@@ -140,7 +140,7 @@ func env() *awscdk.Environment {
 }
 ```
 
-- [ ] **Step 5: Add `cdk.out/` to `.gitignore`**
+- [x] **Step 5: Add `cdk.out/` to `.gitignore`**
 
 Append to `.gitignore`:
 
@@ -149,18 +149,18 @@ Append to `.gitignore`:
 cdk.out/
 ```
 
-- [ ] **Step 6: Verify it builds and synthesizes**
+- [x] **Step 6: Verify it builds and synthesizes**
 
 Run:
 
 ```bash
 go build ./...
-go run ./cmd/cdk 2>&1 | head -5    # raw synth (no cdk CLI needed) — should print nothing / no error
+CDK_OUTDIR=cdk.out go run ./cmd/cdk 2>&1 | head -5    # raw synth — CDK_OUTDIR makes it write to disk
 ```
 
-Expected: `go build` succeeds. `go run ./cmd/cdk` exits 0 and writes `cdk.out/` with a `FoundationStack.template.json` (an empty stack template — just `Resources: {}` plus CDK metadata). No panics.
+Expected: `go build` succeeds. The synth exits 0 and writes `cdk.out/FoundationStack.template.json` (an empty stack — only the `BootstrapVersion` parameter + `CheckBootstrapVersion` rule, NO `Resources` block). No panics. NOTE (verified v2.258.1): standalone `go run ./cmd/cdk` WITHOUT `CDK_OUTDIR` exits 0 but writes nothing — the `cdk` CLI sets `CDK_OUTDIR` automatically; for a manual synth check, set it yourself. Downstream tasks use `go test` (in-memory synth, unaffected).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add go.mod go.sum cdk.json cmd/cdk/main.go internal/infra/foundation_stack.go .gitignore
