@@ -1,0 +1,10 @@
+{
+  "app": "go mod download && go run ./cmd/cdk",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "go.mod", "go.sum", "**/*test.go"]
+  },
+  "context": {
+    "@aws-cdk/core:newStyleStackSynthesis": true
+  }
+}
