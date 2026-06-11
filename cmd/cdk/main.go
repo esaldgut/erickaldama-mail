@@ -16,6 +16,10 @@ func main() {
 		Env: env(),
 	})
 
+	infra.NewSendingStack(app, "SendingStack", &awscdk.StackProps{
+		Env: env(),
+	})
+
 	app.Synth(nil)
 }
 
