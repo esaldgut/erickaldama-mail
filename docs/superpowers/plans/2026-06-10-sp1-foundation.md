@@ -715,7 +715,7 @@ git commit -m "feat(sp-1): bootstrap inputs — exec-policy + boundary JSON + BO
 **Files:**
 - Create: `iam/post-deploy-identity-check.sh`
 
-- [ ] **Step 1: Create the script** `iam/post-deploy-identity-check.sh`
+- [x] **Step 1: Create the script** `iam/post-deploy-identity-check.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -757,7 +757,7 @@ dig +short NS "$DOMAIN" || true
 echo "=== POST-DEPLOY CHECK COMPLETE ==="
 ```
 
-- [ ] **Step 2: Make it executable + shellcheck-clean**
+- [x] **Step 2: Make it executable + shellcheck-clean**
 
 Run:
 
@@ -768,7 +768,7 @@ bash -n iam/post-deploy-identity-check.sh && echo "syntax OK"
 
 Expected: `syntax OK`. (No AWS calls in a syntax check.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add iam/post-deploy-identity-check.sh
