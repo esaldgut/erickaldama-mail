@@ -180,7 +180,7 @@ Each construct is added test-first: write the failing `assertions` test, watch i
 - Modify: `internal/infra/foundation_stack.go`
 - Create: `internal/infra/foundation_stack_test.go`
 
-- [ ] **Step 1: Create canonical naming constants** `internal/infra/naming.go`
+- [x] **Step 1: Create canonical naming constants** `internal/infra/naming.go`
 
 ```go
 package infra
@@ -210,7 +210,7 @@ func projectTags() map[string]*string {
 func strptr(s string) *string { return &s }
 ```
 
-- [ ] **Step 2: Write the failing test for the hosted zone** `internal/infra/foundation_stack_test.go`
+- [x] **Step 2: Write the failing test for the hosted zone** `internal/infra/foundation_stack_test.go`
 
 ```go
 package infra
@@ -248,12 +248,12 @@ func TestHostedZone(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `go test ./internal/infra/ -run TestHostedZone -v`
 Expected: FAIL — `ResourceCountIs` reports 0 `AWS::Route53::HostedZone` (none exist yet).
 
-- [ ] **Step 4: Add the hosted zone construct** to `internal/infra/foundation_stack.go`
+- [x] **Step 4: Add the hosted zone construct** to `internal/infra/foundation_stack.go`
 
 Replace the body of `NewFoundationStack` (keep the package + imports; add `awsroute53`):
 
@@ -292,12 +292,12 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `go test ./internal/infra/ -run TestHostedZone -v`
 Expected: PASS — 1 HostedZone with `Name: "erickaldama.com."` and 1 CAA RecordSet.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/infra/naming.go internal/infra/foundation_stack.go internal/infra/foundation_stack_test.go
