@@ -15,7 +15,8 @@
         "kms:*",
         "cloudwatch:*",
         "logs:*",
-        "iam:*"
+        "iam:*",
+        "events:*"
       ],
       "Resource": "*"
     },
