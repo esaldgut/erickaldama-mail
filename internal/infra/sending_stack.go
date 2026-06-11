@@ -67,7 +67,7 @@ func addSendingIdentity(stack awscdk.Stack) (awsroute53.IHostedZone, awsses.Conf
 	// DMARC (monitor-only) — the construct does NOT publish DMARC; SPF is already auto-published, do NOT add it.
 	awsroute53.NewTxtRecord(stack, jsii.String("Dmarc"), &awsroute53.TxtRecordProps{
 		Zone:       zone,
-		RecordName: jsii.String("_dmarc.erickaldama.com"),
+		RecordName: jsii.String("_dmarc." + DomainName),
 		Values:     jsii.Strings(DmarcValue),
 	})
 
@@ -166,7 +166,7 @@ func addSendIam(stack awscdk.Stack) {
 
 	awsiam.NewRole(stack, jsii.String("MailSenderRole"), &awsiam.RoleProps{
 		RoleName:        jsii.String(SenderRoleName),
-		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String("367707589526")),
+		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String(Account)),
 		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
 	})
 }
