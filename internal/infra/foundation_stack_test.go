@@ -31,3 +31,25 @@ func TestHostedZone(t *testing.T) {
 		"Type": "CAA",
 	})
 }
+
+func TestReadonlyManagedPolicy(t *testing.T) {
+	template := synth(t)
+
+	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]interface{}{
+		"ManagedPolicyName": "mail-readonly-managed",
+		"Users":             []interface{}{"mail-readonly"},
+	})
+	// Importing a user must NOT emit an AWS::IAM::User.
+	template.ResourceCountIs(jsii.String("AWS::IAM::User"), jsii.Number(0))
+	// Hard-deny statement present.
+	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]interface{}{
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith(&[]interface{}{
+				assertions.Match_ObjectLike(&map[string]interface{}{
+					"Sid":    "HardDenyMutationReconAndCredentialMinting",
+					"Effect": "Deny",
+				}),
+			}),
+		},
+	})
+}
