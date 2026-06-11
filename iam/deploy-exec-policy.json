@@ -20,6 +20,12 @@
       "Resource": "*"
     },
     {
+      "Sid": "AllowCdkBootstrapVersionCheck",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": "arn:aws:ssm:*:367707589526:parameter/cdk-bootstrap/*"
+    },
+    {
       "Sid": "DenyOutOfScopeServices",
       "Effect": "Deny",
       "Action": [
