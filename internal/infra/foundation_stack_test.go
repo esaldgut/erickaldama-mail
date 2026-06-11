@@ -76,3 +76,13 @@ func TestPermissionsBoundary(t *testing.T) {
 		},
 	})
 }
+
+func TestStackTags(t *testing.T) {
+	template := synth(t)
+	// The hosted zone carries the project tags (Tags are applied stack-wide).
+	template.HasResourceProperties(jsii.String("AWS::Route53::HostedZone"), map[string]interface{}{
+		"HostedZoneTags": assertions.Match_ArrayWith(&[]interface{}{
+			assertions.Match_ObjectLike(&map[string]interface{}{"Key": "Project", "Value": "erickaldama-mail"}),
+		}),
+	})
+}
