@@ -68,6 +68,8 @@ func TestPermissionsBoundary(t *testing.T) {
 					"Effect": "Deny",
 					"Action": assertions.Match_ArrayWith(&[]interface{}{
 						"route53domains:*", "ec2:*", "rds:*", "organizations:*",
+						"iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary",
+						"iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
 					}),
 				}),
 			}),

@@ -105,7 +105,7 @@ func boundaryStatements() *[]awsiam.PolicyStatement {
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 			Sid:       jsii.String("DenyEscalationAndOutOfScope"),
 			Effect:    awsiam.Effect_DENY,
-			Actions:   jsii.Strings("route53domains:*", "ec2:*", "rds:*", "organizations:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"),
+			Actions:   jsii.Strings("route53domains:*", "ec2:*", "rds:*", "organizations:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary", "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"),
 			Resources: jsii.Strings("*"),
 		}),
 	}
