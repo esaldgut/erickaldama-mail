@@ -14,6 +14,19 @@ const (
 	// it is a bootstrap artifact (iam/erickaldama-boundary.json) that must pre-exist for
 	// `cdk bootstrap --custom-permissions-boundary`. Kept here as the canonical name.
 	BoundaryManagedPolicyName = "erickaldama-boundary"
+
+	// SP-2 — sending identity.
+	MailFromDomain  = "mail.erickaldama.com"
+	FromAddress     = "erick@erickaldama.com"
+	ConfigSetName   = "mail-config"
+	SendPolicyName  = "mail-send"
+	SenderRoleName  = "mail-sender-role"
+	BounceTopicName = "mail-bounce-complaint"
+	// IdentityArn is the SES identity ARN used to scope the send policy.
+	IdentityArn = "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com"
+	// DmarcValue is the monitor-only DMARC record. rua points to a Gmail +label so reports
+	// are collected from day 1 (mailbox at erickaldama.com does not exist until SP-3).
+	DmarcValue = "v=DMARC1; p=none; rua=mailto:esaldgut+dmarc@gmail.com"
 )
 
 // projectTags are applied to the stack so every resource is attributable.
