@@ -3,6 +3,7 @@ package infra
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
@@ -33,5 +34,53 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 		Value: zone.HostedZoneId(),
 	})
 
+	// Import the existing mail-readonly user by name (reference, NOT a CFN resource).
+	readonlyUser := awsiam.User_FromUserName(stack, jsii.String("MailReadonlyUser"),
+		jsii.String(ReadonlyUserName))
+
+	// The 4-statement boundary (mirror of iam/readonly-policy.json), attached via the
+	// Users prop (NOT AddManagedPolicy — that throws on imported users).
+	awsiam.NewManagedPolicy(stack, jsii.String("MailReadonlyManagedPolicy"),
+		&awsiam.ManagedPolicyProps{
+			ManagedPolicyName: jsii.String(ReadonlyManagedPolicyName),
+			Users:             &[]awsiam.IUser{readonlyUser},
+			Statements:        readonlyStatements(),
+		})
+
 	return stack
+}
+
+// readonlyStatements mirrors iam/readonly-policy.json (verified vs Service Authorization Reference).
+func readonlyStatements() *[]awsiam.PolicyStatement {
+	usEast1 := &map[string]interface{}{
+		"StringEquals": map[string]interface{}{"aws:RequestedRegion": "us-east-1"},
+	}
+	return &[]awsiam.PolicyStatement{
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Sid:       jsii.String("AllowGlobalReadsUnconditioned"),
+			Effect:    awsiam.Effect_ALLOW,
+			Actions:   jsii.Strings("sts:GetCallerIdentity", "route53:ListHostedZones", "route53:GetHostedZone", "route53:ListResourceRecordSets"),
+			Resources: jsii.Strings("*"),
+		}),
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Sid:        jsii.String("AllowRegionalReadsUsEast1"),
+			Effect:     awsiam.Effect_ALLOW,
+			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics"),
+			Resources:  jsii.Strings("*"),
+			Conditions: usEast1,
+		}),
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Sid:        jsii.String("AllowS3BucketLevelScopedUsEast1"),
+			Effect:     awsiam.Effect_ALLOW,
+			Actions:    jsii.Strings("s3:ListBucket", "s3:GetBucketLocation", "s3:GetBucketPolicy", "s3:GetBucketPublicAccessBlock", "s3:GetEncryptionConfiguration"),
+			Resources:  jsii.Strings("arn:aws:s3:::*erickaldama*"),
+			Conditions: usEast1,
+		}),
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Sid:       jsii.String("HardDenyMutationReconAndCredentialMinting"),
+			Effect:    awsiam.Effect_DENY,
+			Actions:   jsii.Strings("ses:Send*", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML", "sts:GetSessionToken", "sts:GetFederationToken", "s3:GetObject", "cloudformation:GetTemplate", "cloudformation:GetTemplateSummary", "ses:GetIdentityPolicies", "ses:GetEmailIdentityPolicies", "iam:*"),
+			Resources: jsii.Strings("*"),
+		}),
+	}
 }
