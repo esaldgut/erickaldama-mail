@@ -423,7 +423,7 @@ git commit -m "feat(sp-1): mail-readonly managed policy on imported user (prop U
 
 The `erickaldama-boundary` managed policy is the ceiling: it caps every IAM role CFN creates in SP-1..SP-3 (applied via `cdk bootstrap --custom-permissions-boundary`). It allows the project's services and denies escalation/out-of-scope services.
 
-- [ ] **Step 1: Write the failing test** — append to `foundation_stack_test.go`
+- [x] **Step 1: Write the failing test** — append to `foundation_stack_test.go`
 
 ```go
 func TestPermissionsBoundary(t *testing.T) {
@@ -448,12 +448,12 @@ func TestPermissionsBoundary(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./internal/infra/ -run TestPermissionsBoundary -v`
 Expected: FAIL — only 1 managed policy exists (the readonly one); no `erickaldama-boundary`.
 
-- [ ] **Step 3: Add the boundary** to `foundation_stack.go` (insert before `return stack`)
+- [x] **Step 3: Add the boundary** to `foundation_stack.go` (insert before `return stack`)
 
 ```go
 	// Permissions boundary: the ceiling for every role CFN creates in SP-1..SP-3.
@@ -480,21 +480,21 @@ func boundaryStatements() *[]awsiam.PolicyStatement {
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 			Sid:       jsii.String("DenyEscalationAndOutOfScope"),
 			Effect:    awsiam.Effect_DENY,
-			Actions:   jsii.Strings("route53domains:*", "ec2:*", "rds:*", "organizations:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"),
+			Actions:   jsii.Strings("route53domains:*", "ec2:*", "rds:*", "organizations:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary", "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"),
 			Resources: jsii.Strings("*"),
 		}),
 	}
 }
 ```
 
-> Boundary rationale: it ALLOWS broadly (incl. `iam:*`, `cloudformation:*`, `logs:*` — a boundary is a ceiling, not the grant; the exec-policy is the grant) but DENIES the escalation primitives (`iam:CreateUser`/`CreateAccessKey`, removing a boundary) and the out-of-scope services. A role created by CFN can never exceed this ceiling.
+> Boundary rationale: it ALLOWS broadly (incl. `iam:*`, `cloudformation:*`, `logs:*` — a boundary is a ceiling, not the grant; the exec-policy is the grant) but DENIES the escalation primitives (`iam:CreateUser`/`CreateAccessKey`, AND both `Put*`+`Delete*PermissionsBoundary` so a bounded role can't swap or strip its own ceiling to escape) and the out-of-scope services. A role created by CFN can never exceed this ceiling. (10 deny actions — the Put* pair was added per review to seal the escalation cage.)
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `go test ./internal/infra/ -run TestPermissionsBoundary -v`
 Expected: PASS — 2 managed policies; `erickaldama-boundary` denies route53domains/ec2/rds/organizations.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/infra/foundation_stack.go internal/infra/foundation_stack_test.go
@@ -633,6 +633,7 @@ These JSON files are what the human passes to `cdk bootstrap`. They are declarat
       "Action": [
         "route53domains:*", "ec2:*", "rds:*", "organizations:*",
         "iam:CreateUser", "iam:CreateAccessKey",
+        "iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary",
         "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"
       ],
       "Resource": "*"
