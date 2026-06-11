@@ -86,3 +86,28 @@ func TestReputationAlarms(t *testing.T) {
 			"TreatMissingData": "ignore",
 		}))
 }
+
+func TestSendIam(t *testing.T) {
+	template := synthSending(t)
+
+	template.ResourceCountIs(jsii.String("AWS::IAM::ManagedPolicy"), jsii.Number(1))
+	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"),
+		assertions.Match_ObjectLike(&map[string]interface{}{
+			"ManagedPolicyName": "mail-send",
+			"PolicyDocument": assertions.Match_ObjectLike(&map[string]interface{}{
+				"Statement": []interface{}{
+					assertions.Match_ObjectLike(&map[string]interface{}{
+						"Effect": "Allow",
+						"Action": []interface{}{"ses:SendEmail", "ses:SendRawEmail"},
+						"Condition": map[string]interface{}{
+							"StringEquals": map[string]interface{}{"ses:FromAddress": "erick@erickaldama.com"},
+						},
+					}),
+				},
+			}),
+		}))
+
+	template.ResourceCountIs(jsii.String("AWS::IAM::Role"), jsii.Number(1))
+	template.HasResourceProperties(jsii.String("AWS::IAM::Role"),
+		assertions.Match_ObjectLike(&map[string]interface{}{"RoleName": "mail-sender-role"}))
+}
