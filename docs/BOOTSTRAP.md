@@ -55,3 +55,43 @@ have broken the pre-flight in the old 2-statement policy.
 **Deferred to SP-1:** the out-of-band negative test (after a real `cdk deploy` with a separate `mail-deploy`
 profile, confirm the agent's next command still resolves to mail-readonly). SP-0 deploys no infra, so there is
 no mutation to run out-of-band yet. SP-1 must create `mail-deploy` and run this test on its first deploy.
+
+## SP-1 bootstrap (t=0, human, SSO Admin) — 2026-06-10
+
+The agent NEVER runs these. The human runs them out-of-band with SSO
+`AdministratorAccess-367707589526`. The agent prepares the exact commands and verifies after.
+(Note: the SP-0 "Deferred to SP-1" note above mentioned a `mail-deploy` principal — that was
+removed in the SP-1 design. The human deploys with SSO Admin; no long-lived deploy keys exist.)
+
+### 1. Create the boundary + exec-policy managed policies (first time only)
+The first `cdk bootstrap` references `erickaldama-boundary` by name, so it must exist first.
+The FoundationStack also emits these as CDK-managed; after the first deploy, CFN owns them.
+For the FIRST bootstrap, create them from the JSON mirrors:
+
+    aws iam create-policy --policy-name erickaldama-boundary \
+      --policy-document file://iam/erickaldama-boundary.json \
+      --profile AdministratorAccess-367707589526
+    aws iam create-policy --policy-name erickaldama-deploy-exec \
+      --policy-document file://iam/deploy-exec-policy.json \
+      --profile AdministratorAccess-367707589526
+
+### 2. Bootstrap the environment (one-time)
+    cdk bootstrap aws://367707589526/us-east-1 \
+      --custom-permissions-boundary erickaldama-boundary \
+      --cloudformation-execution-policies arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
+      --profile AdministratorAccess-367707589526
+
+### 3. Deploy the FoundationStack
+    cdk deploy FoundationStack --profile AdministratorAccess-367707589526
+    # Note the CfnOutput "NameServers" (4 NS) and "HostedZoneId".
+
+### 4. Update the registrar with the new name servers
+    aws route53domains update-domain-nameservers --region us-east-1 \
+      --domain-name erickaldama.com \
+      --nameservers Name=<ns1> Name=<ns2> Name=<ns3> Name=<ns4> \
+      --profile AdministratorAccess-367707589526
+    # Async — poll: aws route53domains get-operation-detail --operation-id <id> --region us-east-1
+
+### Deferred SP-0/T13 test satisfied here
+The deploy uses SSO Admin (≠ the agent's mail-readonly profile). After deploy, the agent runs
+iam/post-deploy-identity-check.sh and confirms its own identity is still mail-readonly.
