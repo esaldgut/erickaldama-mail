@@ -63,7 +63,9 @@ func TestEventRouting(t *testing.T) {
 	template.HasResourceProperties(jsii.String("AWS::Events::Rule"),
 		assertions.Match_ObjectLike(&map[string]interface{}{
 			"EventPattern": assertions.Match_ObjectLike(&map[string]interface{}{
-				"source": []interface{}{"aws.ses"},
+				"source":      []interface{}{"aws.ses"},
+				"detail-type": []interface{}{"Email Bounce", "Email Complaint"},
 			}),
+			"Targets": assertions.Match_AnyValue(),
 		}))
 }

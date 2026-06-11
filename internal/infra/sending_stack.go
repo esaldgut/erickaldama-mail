@@ -22,6 +22,17 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 		awscdk.Tags_Of(stack).Add(jsii.String(k), v, nil)
 	}
 
+	_, configSet := addSendingIdentity(stack)
+	addEventRouting(stack, configSet)
+
+	return stack
+}
+
+// addSendingIdentity imports the SP-1 hosted zone, creates the configuration set, the SES
+// domain identity (DKIM + custom MAIL FROM + feedback OFF), and the monitor-only DMARC record.
+// Returns the imported zone and the config set (the config set is consumed by addEventRouting and
+// by later send-IAM/alarm tasks; the zone is returned for completeness and future use).
+func addSendingIdentity(stack awscdk.Stack) (awsroute53.IHostedZone, awsses.ConfigurationSet) {
 	// Import the SP-1 hosted zone by attributes (pure reference — no AWS call, no lookup-role).
 	zone := awsroute53.HostedZone_FromHostedZoneAttributes(stack, jsii.String("ImportedZone"),
 		&awsroute53.HostedZoneAttributes{
@@ -56,12 +67,18 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 		Values:     jsii.Strings(DmarcValue),
 	})
 
+	return zone, configSet
+}
+
+// addEventRouting wires the config set's bounce/complaint events to EventBridge (default bus),
+// then routes those events to an SNS topic via an EventBridge Rule.
+func addEventRouting(stack awscdk.Stack, configSet awsses.ConfigurationSet) {
 	// Send bounce/complaint events to EventBridge (default bus).
 	defaultBus := awsevents.EventBus_FromEventBusName(stack, jsii.String("DefaultBus"),
 		jsii.String("default"))
 	configSet.AddEventDestination(jsii.String("ToEventBridge"),
 		&awsses.ConfigurationSetEventDestinationOptions{
-			ConfigurationSetEventDestinationName: jsii.String("mail-config-eventbridge"),
+			ConfigurationSetEventDestinationName: jsii.String(EventDestinationName),
 			Destination:                          awsses.EventDestination_EventBus(defaultBus),
 			Enabled:                              jsii.Bool(true),
 			Events: &[]awsses.EmailSendingEvent{
@@ -77,7 +94,7 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 			DisplayName: jsii.String("SES bounce and complaint notifications"),
 		})
 	awsevents.NewRule(stack, jsii.String("SesEventRule"), &awsevents.RuleProps{
-		RuleName: jsii.String("mail-ses-bounce-complaint"),
+		RuleName: jsii.String(BounceRuleName),
 		EventBus: defaultBus,
 		EventPattern: &awsevents.EventPattern{
 			Source:     jsii.Strings("aws.ses"),
@@ -87,8 +104,6 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 			awseventstargets.NewSnsTopic(topic, nil),
 		},
 	})
-
-	return stack
 }
 
 // sp2Tags mirrors projectTags but marks Subproject=SP-2.

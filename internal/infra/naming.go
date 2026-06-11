@@ -22,6 +22,9 @@ const (
 	SendPolicyName  = "mail-send"
 	SenderRoleName  = "mail-sender-role"
 	BounceTopicName = "mail-bounce-complaint"
+	// Event-routing resource names (SES config-set EventBridge destination + the bounce/complaint Rule).
+	EventDestinationName = "mail-config-eventbridge"
+	BounceRuleName       = "mail-ses-bounce-complaint"
 	// IdentityArn is the SES identity ARN used to scope the send policy.
 	IdentityArn = "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com"
 	// HostedZoneID is the SP-1 hosted zone for erickaldama.com (CfnOutput of FoundationStack).
