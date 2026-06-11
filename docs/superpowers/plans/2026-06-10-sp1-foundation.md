@@ -783,7 +783,7 @@ git commit -m "feat(sp-1): post-deploy identity check (deferred SP-0/T13 test)"
 
 **This task is executed by the HUMAN, not the agent.** The agent's role: (a) verify the code is synth/diff-clean under mail-readonly, (b) hand the human the exact commands, (c) wait, (d) run verification.
 
-- [ ] **Step 1: Agent — pre-flight reads under mail-readonly (hook-allowed)**
+- [x] **Step 1: Agent — pre-flight reads under mail-readonly (hook-allowed)**
 
 Apply `aws-cli-pre-flight-canonical`. Run (agent, read-only):
 
@@ -795,13 +795,13 @@ go test ./internal/infra/ -v          # template asserts green
 
 If a `cdk` CLI is available, also run `cdk synth` and `cdk diff` (both read-only, hook-allowed). If not, `go run ./cmd/cdk` produces the same template in `cdk.out/`.
 
-- [ ] **Step 2: Agent — present the exact human commands**
+- [x] **Step 2: Agent — present the exact human commands**
 
 Output the four command blocks from `docs/BOOTSTRAP.md` §SP-1 (create policies → bootstrap → deploy → update-domain-nameservers), filled with no placeholders except the 4 NS values (known only after deploy). Tell the human: "Run these with SSO Admin; paste back the `NameServers` and `HostedZoneId` outputs."
 
-- [ ] **Step 3: HUMAN runs the commands** (bootstrap + deploy + NS update). Human pastes back the stack outputs.
+- [x] **Step 3: HUMAN runs the commands** (bootstrap + deploy + NS update). Human pastes back the stack outputs.
 
-- [ ] **Step 4: Agent — run the post-deploy verification**
+- [x] **Step 4: Agent — run the post-deploy verification**
 
 Run:
 
@@ -811,7 +811,7 @@ Run:
 
 Expected: `(1) PASS: identity == mail-readonly`; gate 8/8; simulate 13/13; HostedZoneId non-empty; `dig` shows the new NS (or notes propagation lag).
 
-- [ ] **Step 5: Commit the acceptance record** (handled in Task 9's EXECUTION-LOG update)
+- [x] **Step 5: Commit the acceptance record** (handled in Task 9's EXECUTION-LOG update)
 
 ### Task 9: Persist state + EXECUTION-LOG + RETOMAR-AQUI
 
@@ -819,22 +819,22 @@ Expected: `(1) PASS: identity == mail-readonly`; gate 8/8; simulate 13/13; Hoste
 - Modify: `docs/superpowers/EXECUTION-LOG.md`
 - Modify: `~/.claude/plans/email-project-research/RETOMAR-AQUI.md` (at finish)
 
-- [ ] **Step 1: Append the SP-1 record to `docs/superpowers/EXECUTION-LOG.md`**
+- [x] **Step 1: Append the SP-1 record to `docs/superpowers/EXECUTION-LOG.md`**
 
 Append a section logging each task: subagent dispatched, review verdicts, commit hashes, the post-deploy gate result (identity PASS, gate 8/8, simulate 13/13, zone live, NS propagated), and any findings.
 
-- [ ] **Step 2: Mark all plan checkboxes `[x]`** in this file as tasks complete.
+- [x] **Step 2: Mark all plan checkboxes `[x]`** in this file as tasks complete.
 
-- [ ] **Step 3: Update task #15 → completed** via TaskUpdate.
+- [x] **Step 3: Update task #15 → completed** via TaskUpdate.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/EXECUTION-LOG.md docs/superpowers/plans/2026-06-10-sp1-foundation.md
 git commit -m "chore(sp-1): SP-1 COMPLETE — foundation deployed, boundary verified live"
 ```
 
-- [ ] **Step 5: Update `RETOMAR-AQUI.md`** (SP-1 done → SP-2 next) and finish the branch via `superpowers:finishing-a-development-branch` (merge `--no-ff` to main).
+- [x] **Step 5: Update `RETOMAR-AQUI.md`** (SP-1 done → SP-2 next) and finish the branch via `superpowers:finishing-a-development-branch` (merge `--no-ff` to main).
 
 ---
 
