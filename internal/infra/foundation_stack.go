@@ -47,6 +47,14 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 			Statements:        readonlyStatements(),
 		})
 
+	// Permissions boundary: the ceiling for every role CFN creates in SP-1..SP-3.
+	// Applied via `cdk bootstrap --custom-permissions-boundary erickaldama-boundary`.
+	awsiam.NewManagedPolicy(stack, jsii.String("ErickaldamaBoundary"),
+		&awsiam.ManagedPolicyProps{
+			ManagedPolicyName: jsii.String(BoundaryManagedPolicyName),
+			Statements:        boundaryStatements(),
+		})
+
 	return stack
 }
 
@@ -80,6 +88,24 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 			Sid:       jsii.String("HardDenyMutationReconAndCredentialMinting"),
 			Effect:    awsiam.Effect_DENY,
 			Actions:   jsii.Strings("ses:Send*", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML", "sts:GetSessionToken", "sts:GetFederationToken", "s3:GetObject", "cloudformation:GetTemplate", "cloudformation:GetTemplateSummary", "ses:GetIdentityPolicies", "ses:GetEmailIdentityPolicies", "iam:*"),
+			Resources: jsii.Strings("*"),
+		}),
+	}
+}
+
+// boundaryStatements is the ceiling: allow project services, deny escalation + out-of-scope.
+func boundaryStatements() *[]awsiam.PolicyStatement {
+	return &[]awsiam.PolicyStatement{
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Sid:       jsii.String("AllowProjectServices"),
+			Effect:    awsiam.Effect_ALLOW,
+			Actions:   jsii.Strings("route53:*", "ses:*", "s3:*", "dynamodb:*", "lambda:*", "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "iam:*", "cloudformation:*"),
+			Resources: jsii.Strings("*"),
+		}),
+		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+			Sid:       jsii.String("DenyEscalationAndOutOfScope"),
+			Effect:    awsiam.Effect_DENY,
+			Actions:   jsii.Strings("route53domains:*", "ec2:*", "rds:*", "organizations:*", "iam:CreateUser", "iam:CreateAccessKey", "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"),
 			Resources: jsii.Strings("*"),
 		}),
 	}
