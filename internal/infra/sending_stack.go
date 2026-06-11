@@ -2,8 +2,11 @@ package infra
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsses"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awssns"
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
 )
@@ -51,6 +54,38 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 		Zone:       zone,
 		RecordName: jsii.String("_dmarc.erickaldama.com"),
 		Values:     jsii.Strings(DmarcValue),
+	})
+
+	// Send bounce/complaint events to EventBridge (default bus).
+	defaultBus := awsevents.EventBus_FromEventBusName(stack, jsii.String("DefaultBus"),
+		jsii.String("default"))
+	configSet.AddEventDestination(jsii.String("ToEventBridge"),
+		&awsses.ConfigurationSetEventDestinationOptions{
+			ConfigurationSetEventDestinationName: jsii.String("mail-config-eventbridge"),
+			Destination:                          awsses.EventDestination_EventBus(defaultBus),
+			Enabled:                              jsii.Bool(true),
+			Events: &[]awsses.EmailSendingEvent{
+				awsses.EmailSendingEvent_BOUNCE,
+				awsses.EmailSendingEvent_COMPLAINT,
+			},
+		})
+
+	// SNS topic + Rule routing SES bounce/complaint events to the operator.
+	topic := awssns.NewTopic(stack, jsii.String("BounceComplaintTopic"),
+		&awssns.TopicProps{
+			TopicName:   jsii.String(BounceTopicName),
+			DisplayName: jsii.String("SES bounce and complaint notifications"),
+		})
+	awsevents.NewRule(stack, jsii.String("SesEventRule"), &awsevents.RuleProps{
+		RuleName: jsii.String("mail-ses-bounce-complaint"),
+		EventBus: defaultBus,
+		EventPattern: &awsevents.EventPattern{
+			Source:     jsii.Strings("aws.ses"),
+			DetailType: jsii.Strings("Email Bounce", "Email Complaint"),
+		},
+		Targets: &[]awsevents.IRuleTarget{
+			awseventstargets.NewSnsTopic(topic, nil),
+		},
 	})
 
 	return stack
