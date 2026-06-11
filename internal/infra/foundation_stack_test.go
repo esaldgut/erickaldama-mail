@@ -53,3 +53,24 @@ func TestReadonlyManagedPolicy(t *testing.T) {
 		},
 	})
 }
+
+func TestPermissionsBoundary(t *testing.T) {
+	template := synth(t)
+
+	// Now there are exactly 2 managed policies: readonly + boundary.
+	template.ResourceCountIs(jsii.String("AWS::IAM::ManagedPolicy"), jsii.Number(2))
+	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]interface{}{
+		"ManagedPolicyName": "erickaldama-boundary",
+		"PolicyDocument": map[string]interface{}{
+			"Statement": assertions.Match_ArrayWith(&[]interface{}{
+				// Denies the escalation/out-of-scope services.
+				assertions.Match_ObjectLike(&map[string]interface{}{
+					"Effect": "Deny",
+					"Action": assertions.Match_ArrayWith(&[]interface{}{
+						"route53domains:*", "ec2:*", "rds:*", "organizations:*",
+					}),
+				}),
+			}),
+		},
+	})
+}
