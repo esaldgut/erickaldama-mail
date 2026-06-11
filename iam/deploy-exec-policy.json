@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowProjectServiceMutations",
+      "Effect": "Allow",
+      "Action": [
+        "route53:*",
+        "ses:*",
+        "s3:*",
+        "dynamodb:*",
+        "lambda:*",
+        "sns:*",
+        "sqs:*",
+        "kms:*",
+        "cloudwatch:*",
+        "logs:*",
+        "iam:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCdkBootstrapVersionCheck",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": "arn:aws:ssm:*:367707589526:parameter/cdk-bootstrap/*"
+    },
+    {
+      "Sid": "DenyOutOfScopeServices",
+      "Effect": "Deny",
+      "Action": [
+        "route53domains:*",
+        "ec2:*",
+        "rds:*",
+        "organizations:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

@@ -89,3 +89,79 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   DIFERIDO a SP-1 (#15): SP-0 no despliega infra, no hay mutación que probar out-of-band; SP-1 crea mail-deploy
   y corre ese test en su primer cdk deploy.
   >>> SP-0 COMPLETO: 13/13 tareas. Hook (Fase 1) + Plugin (Fase 2) + IAM boundary verificado en vivo (Fase 3).
+
+---
+
+# SP-1 — Fundación DNS + cuenta (tarea #15) — 2026-06-10
+
+Worktree aislado `sp-1-foundation` (rama worktree-sp-1-foundation, base d4ab603). Flujo: brainstorm → spec
+(auditada por 4 agentes adversariales) → plan → subagent-driven-development (9 tareas) → deploy out-of-band
+humano → verificación. Cuenta 367707589526, us-east-1.
+
+## Tareas (subagent-driven, spec+quality review por tarea)
+- T1 (d2ef0b5): CDK-Go module scaffold (awscdk v2.258.1, jsii v1.134.0, constructs v10.6.0). DONE+reviews.
+- T2 (10f50ac): public hosted zone erickaldama.com + CAA Amazon-only (TDD). DONE+reviews.
+- T3 (c8caa94): mail-readonly managed policy sobre user importado (prop Users, NO AddManagedPolicy →
+  ValidationError; cero AWS::IAM::User). 4 statements mirror exacto de readonly-policy.json. DONE+reviews.
+- T4 (15d05a7 + fb87a35): permissions boundary erickaldama-boundary. Quality-review cazó GAP IMPORTANTE:
+  el boundary denegaba Delete*PermissionsBoundary pero no Put* → escape de la jaula. Fix: 10 deny actions
+  (Put* + Delete* sellan la jaula). DONE+reviews.
+- T5 (1bfde2a): stack tags + suite completa verde. DONE+reviews.
+- T6 (7b48ad5): bootstrap JSON (exec-policy + boundary mirror) + BOOTSTRAP.md. Boundary JSON ≡ CDK (12 allow
+  + 10 deny). DONE+reviews. Quality-review nota diferida: events:* para SP-3 si usa EventBridge.
+- T8 (e0237e2): post-deploy-identity-check.sh (test diferido T13). Review cazó: identity check NO puede
+  false-pass (bare-assignment $() bajo set -e aborta en fallo AWS o identidad incorrecta). DONE+review.
+- T7 (HUMANO, out-of-band SSO Admin): bootstrap + deploy + (registrar pendiente). Ver hallazgos abajo.
+- T9: este registro + plan checkboxes + RETOMAR + merge.
+
+## Deploy LIVE EXITOSO (2026-06-10 22:39)
+FoundationStack desplegado. HostedZoneId=Z023932911KA6S98A6ZRW. NameServers=ns-1845.awsdns-38.co.uk,
+ns-1423.awsdns-49.org, ns-949.awsdns-54.net, ns-26.awsdns-03.com. Recursos: HostedZone + CAA + ManagedPolicy
+readonly (3). Zona viva confirmada (list-resource-record-sets devuelve NS+CAA reales).
+
+## Verificación post-deploy (test diferido SP-0/T13) — PASS
+1. Identidad del agente == mail-readonly tras deploy con SSO Admin → PASS (deploy NO contaminó al agente).
+2. bootstrap-gate.sh → GATE PASS (8/8). simulate-matrix.sh → SIMULATE MATRIX PASS (13/13).
+3. Zona viva + CAA+NS presentes.
+El boundary read-only de SP-0 sobrevivió intacto un deploy real. La tesis de gobernanza se sostiene en vivo.
+
+## LOS 5 HALLAZGOS DEL PRIMER DEPLOY REAL (lecciones — el valor central de SP-1)
+Ningún diseño de papel los anticipó. Cada uno verificado contra docs oficiales, resuelto al mínimo correcto.
+
+1. **CLI-vs-librería version skew.** awscdk v2.258.1 sintetiza cloud-assembly schema 54.0.0; un `cdk` CLI
+   viejo (schema ≤49) NO lee el manifest ("need at least CLI version 2.1126.0"). Síntoma engañoso: bootstrap
+   imprime banners pero no completa → deploy falla "not bootstrapped". CAUSA RAÍZ: la regla "usar versión viva
+   de la librería" acopla una restricción NO documentada al CLI (CLI ≥ schema de la lib). FIX: npm i -g aws-cdk@latest.
+2. **exec-policy necesita ssm:GetParameters.** El cfn-exec-role resuelve el BootstrapVersion SSM parameter
+   (AWS::SSM::Parameter::Value) en CADA deploy. AdministratorAccess (default) lo cubre; una exec-policy SCOPED
+   debe añadir `ssm:GetParameters` sobre arn:...:parameter/cdk-bootstrap/* explícito. FIX verificado vs docs CDK.
+3. **boundary TAMBIÉN necesita ssm.** Tras fix #2 el error cambió de "no identity-based policy allows" a "no
+   permissions boundary allows" ssm:GetParameters. CAUSA RAÍZ (la lección más rica): un permissions boundary
+   INTERSECTA (no une) — perm efectivo = identity policy ∩ boundary. Con --custom-permissions-boundary, CADA
+   permiso que el MECANISMO de CDK necesita debe estar en AMBOS (exec-policy Y boundary). FIX: ssm:* en el techo.
+4. **boundary 409 AlreadyExists.** El stack intentaba crear erickaldama-boundary, que debe PRE-EXISTIR para
+   `cdk bootstrap --custom-permissions-boundary` (el humano la creó en t=0). CAUSA RAÍZ: el huevo-y-gallina del
+   bootstrap — un recurso que debe preexistir para el bootstrap NO puede ser poseído por el stack. FIX: quitar
+   el boundary del stack; es un artefacto de bootstrap (iam/erickaldama-boundary.json), gestionado out-of-band.
+5. **ListHostedZonesByName fuera del allowlist (NO es bug — el boundary funcionando).** El script post-deploy
+   usó list-hosted-zones-by-name → AccessDenied bajo mail-readonly, porque el allowlist de SP-0 tiene
+   route53:ListHostedZones + GetHostedZone pero NO ListHostedZonesByName (acción distinta). Prueba VIVA de que
+   el boundary es allowlist-puro real, no teatro: lo no explícitamente permitido se deniega. (El script T8 se
+   ajustará a usar ListResourceRecordSets, que sí está permitido — ya verificado que devuelve la zona.)
+
+## Cómo se vuelven productivos (4 destinos — decisión del usuario)
+1. EXECUTION-LOG + dossier 10-sp1-audit-findings.md (este registro). HECHO.
+2. Memorias personales feedback_* (transversales a cualquier CDK). HECHO (ver MEMORY.md).
+3. Hardening del skill CDK-Go de SP-0 (checks pre-deploy idempotentes). PENDIENTE (#22).
+4. Lecciones generalizables → lessongate → workspace público (#11).
+
+## Re-delegación del registrar — SUCCESSFUL (2026-06-10 22:47)
+UpdateDomainNameservers OperationId 16cb8c5d-7f36-4a50-a21b-b06b1340bc1f → Status SUCCESSFUL.
+El registrar (Amazon Registrar) ahora apunta a los 4 NS nuevos de la zona (ns-1845.awsdns-38.co.uk,
+ns-1423.awsdns-49.org, ns-949.awsdns-54.net, ns-26.awsdns-03.com), reemplazando el delegation set muerto.
+Propagación DNS pública en curso (dig NS aún vacío al cierre — TTL normal, no bloquea).
+
+>>> SP-1 COMPLETO: 9/9 tareas. FoundationStack desplegado en vivo, boundary read-only verificado intacto
+post-deploy, registrar re-delegado. El examen de gobernanza PASÓ: el límite de SP-0 sobrevivió un deploy
+real out-of-band. 5 hallazgos productivizados (EXECUTION-LOG + 3 memorias feedback_cdk_* + skill hardening #22
++ lessongate #11).

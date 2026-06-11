@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowProjectServices",
+      "Effect": "Allow",
+      "Action": [
+        "route53:*", "ses:*", "s3:*", "dynamodb:*", "lambda:*",
+        "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "ssm:*", "iam:*", "cloudformation:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyEscalationAndOutOfScope",
+      "Effect": "Deny",
+      "Action": [
+        "route53domains:*", "ec2:*", "rds:*", "organizations:*",
+        "iam:CreateUser", "iam:CreateAccessKey",
+        "iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary",
+        "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

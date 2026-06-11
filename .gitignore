@@ -15,9 +15,15 @@ __pycache__/
 # CDK-Go verification cache (SP-0) — derived, machine-local, time-sensitive; never commit (stale-truth trap)
 docs/cdk-verified.json
 
+# CDK synth output (derived, machine-local)
+cdk.out/
+
 # OS / editor
 .DS_Store
 *.swp
 *~
 .idea/
 .vscode/
+
+# CDK CLI local cache (acknowledged notices, context lookups) — machine-local
+cdk.context.json
