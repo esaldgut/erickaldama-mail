@@ -21,16 +21,24 @@ esac
 
 echo "=== (2) SP-0 boundary still holds ==="
 ./iam/bootstrap-gate.sh
-./iam/simulate-matrix.sh
+RO_PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:-arn:aws:iam::367707589526:user/mail-readonly}" \
+  ./iam/simulate-matrix.sh
 
 echo "=== (3) hosted zone exists + NS propagated ==="
-ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$DOMAIN" \
+# NOTE: use route53:ListHostedZones (in the read-only allowlist), then filter by name with
+# JMESPath. Do NOT use list-hosted-zones-by-name — that is a DISTINCT IAM action
+# (route53:ListHostedZonesByName) NOT in the SP-0 allowlist (verified live: it returns AccessDenied).
+ZONE_ID=$(aws route53 list-hosted-zones \
   --profile "$PROFILE_READONLY" \
   --query "HostedZones[?Name=='${DOMAIN}.'].Id | [0]" --output text)
 echo "HostedZoneId: $ZONE_ID"
 if [ "$ZONE_ID" = "None" ] || [ -z "$ZONE_ID" ]; then
   echo "FAIL: no hosted zone for $DOMAIN"; exit 1
 fi
+echo "--- zone records (CAA + NS, read-only via ListResourceRecordSets) ---"
+aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+  --profile "$PROFILE_READONLY" \
+  --query "ResourceRecordSets[?Type=='NS' || Type=='CAA'].Type" --output text
 echo "--- public NS resolution (may lag during propagation) ---"
 dig +short NS "$DOMAIN" || true
 
