@@ -2,6 +2,7 @@ package infra
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudwatch"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
@@ -24,6 +25,7 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 
 	_, configSet := addSendingIdentity(stack)
 	addEventRouting(stack, configSet)
+	addReputationAlarms(stack)
 
 	return stack
 }
@@ -103,6 +105,41 @@ func addEventRouting(stack awscdk.Stack, configSet awsses.ConfigurationSet) {
 		Targets: &[]awsevents.IRuleTarget{
 			awseventstargets.NewSnsTopic(topic, nil),
 		},
+	})
+}
+
+// addReputationAlarms creates CloudWatch alarms below SES's review thresholds. treatMissingData
+// IGNORE because the AWS/SES metric does not exist until the first send (the simulator smoke
+// turns it on) — without IGNORE the alarms would sit in INSUFFICIENT_DATA forever.
+func addReputationAlarms(stack awscdk.Stack) {
+	bounceMetric := awscloudwatch.NewMetric(&awscloudwatch.MetricProps{
+		Namespace:  jsii.String("AWS/SES"),
+		MetricName: jsii.String("Reputation.BounceRate"),
+		Period:     awscdk.Duration_Minutes(jsii.Number(5)),
+		Statistic:  jsii.String("Average"),
+	})
+	awscloudwatch.NewAlarm(stack, jsii.String("BounceRateAlarm"), &awscloudwatch.AlarmProps{
+		AlarmName:          jsii.String("mail-bounce-rate"),
+		Metric:             bounceMetric,
+		Threshold:          jsii.Number(0.02),
+		EvaluationPeriods:  jsii.Number(1),
+		ComparisonOperator: awscloudwatch.ComparisonOperator_GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+		TreatMissingData:   awscloudwatch.TreatMissingData_IGNORE,
+	})
+
+	complaintMetric := awscloudwatch.NewMetric(&awscloudwatch.MetricProps{
+		Namespace:  jsii.String("AWS/SES"),
+		MetricName: jsii.String("Reputation.ComplaintRate"),
+		Period:     awscdk.Duration_Minutes(jsii.Number(5)),
+		Statistic:  jsii.String("Average"),
+	})
+	awscloudwatch.NewAlarm(stack, jsii.String("ComplaintRateAlarm"), &awscloudwatch.AlarmProps{
+		AlarmName:          jsii.String("mail-complaint-rate"),
+		Metric:             complaintMetric,
+		Threshold:          jsii.Number(0.0005),
+		EvaluationPeriods:  jsii.Number(1),
+		ComparisonOperator: awscloudwatch.ComparisonOperator_GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+		TreatMissingData:   awscloudwatch.TreatMissingData_IGNORE,
 	})
 }
 

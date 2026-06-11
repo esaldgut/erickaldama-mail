@@ -69,3 +69,20 @@ func TestEventRouting(t *testing.T) {
 			"Targets": assertions.Match_AnyValue(),
 		}))
 }
+
+func TestReputationAlarms(t *testing.T) {
+	template := synthSending(t)
+
+	template.ResourceCountIs(jsii.String("AWS::CloudWatch::Alarm"), jsii.Number(2))
+	template.HasResourceProperties(jsii.String("AWS::CloudWatch::Alarm"),
+		assertions.Match_ObjectLike(&map[string]interface{}{
+			"MetricName": "Reputation.BounceRate", "Namespace": "AWS/SES",
+			"Threshold": 0.02, "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+			"TreatMissingData": "ignore",
+		}))
+	template.HasResourceProperties(jsii.String("AWS::CloudWatch::Alarm"),
+		assertions.Match_ObjectLike(&map[string]interface{}{
+			"MetricName": "Reputation.ComplaintRate", "Threshold": 0.0005,
+			"TreatMissingData": "ignore",
+		}))
+}
