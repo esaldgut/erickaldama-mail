@@ -102,9 +102,13 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 func boundaryStatements() *[]awsiam.PolicyStatement {
 	return &[]awsiam.PolicyStatement{
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-			Sid:       jsii.String("AllowProjectServices"),
-			Effect:    awsiam.Effect_ALLOW,
-			Actions:   jsii.Strings("route53:*", "ses:*", "s3:*", "dynamodb:*", "lambda:*", "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "iam:*", "cloudformation:*"),
+			Sid:    jsii.String("AllowProjectServices"),
+			Effect: awsiam.Effect_ALLOW,
+			// ssm:* is in the ceiling so the boundary (stamped onto the cfn-exec-role by
+			// --custom-permissions-boundary) does not block the CDK bootstrap version check
+			// (ssm:GetParameters on /cdk-bootstrap/*). The actual grant stays scoped in the
+			// exec-policy; the boundary is a ceiling, so listing the service is correct.
+			Actions:   jsii.Strings("route53:*", "ses:*", "s3:*", "dynamodb:*", "lambda:*", "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "ssm:*", "iam:*", "cloudformation:*"),
 			Resources: jsii.Strings("*"),
 		}),
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{

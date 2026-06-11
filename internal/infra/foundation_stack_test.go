@@ -63,6 +63,13 @@ func TestPermissionsBoundary(t *testing.T) {
 		"ManagedPolicyName": "erickaldama-boundary",
 		"PolicyDocument": map[string]interface{}{
 			"Statement": assertions.Match_ArrayWith(&[]interface{}{
+				// Allows the project services. ssm:* is required so the boundary (which CFN
+				// stamps onto the cfn-exec-role) does not block the CDK bootstrap version check
+				// (ssm:GetParameters on /cdk-bootstrap/*) — found during the first real deploy.
+				assertions.Match_ObjectLike(&map[string]interface{}{
+					"Effect": "Allow",
+					"Action": assertions.Match_ArrayWith(&[]interface{}{"ssm:*"}),
+				}),
 				// Denies the escalation/out-of-scope services.
 				assertions.Match_ObjectLike(&map[string]interface{}{
 					"Effect": "Deny",

@@ -6,7 +6,7 @@
       "Effect": "Allow",
       "Action": [
         "route53:*", "ses:*", "s3:*", "dynamodb:*", "lambda:*",
-        "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "iam:*", "cloudformation:*"
+        "sns:*", "sqs:*", "kms:*", "cloudwatch:*", "logs:*", "ssm:*", "iam:*", "cloudformation:*"
       ],
       "Resource": "*"
     },
