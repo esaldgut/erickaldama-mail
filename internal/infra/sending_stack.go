@@ -5,6 +5,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudwatch"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsevents"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awseventstargets"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsses"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssns"
@@ -26,6 +27,7 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 	_, configSet := addSendingIdentity(stack)
 	addEventRouting(stack, configSet)
 	addReputationAlarms(stack)
+	addSendIam(stack)
 
 	return stack
 }
@@ -140,6 +142,32 @@ func addReputationAlarms(stack awscdk.Stack) {
 		EvaluationPeriods:  jsii.Number(1),
 		ComparisonOperator: awscloudwatch.ComparisonOperator_GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
 		TreatMissingData:   awscloudwatch.TreatMissingData_IGNORE,
+	})
+}
+
+// addSendIam creates the scoped send capability: a mail-send policy (only ses:SendEmail/SendRawEmail,
+// only from the verified identity, only as erick@) on a mail-sender-role assumable by any principal
+// in the account (incl. SSO permission-set roles) — no long-lived keys.
+func addSendIam(stack awscdk.Stack) {
+	mailSendPolicy := awsiam.NewManagedPolicy(stack, jsii.String("MailSendPolicy"),
+		&awsiam.ManagedPolicyProps{
+			ManagedPolicyName: jsii.String(SendPolicyName),
+			Statements: &[]awsiam.PolicyStatement{
+				awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+					Effect:    awsiam.Effect_ALLOW,
+					Actions:   jsii.Strings("ses:SendEmail", "ses:SendRawEmail"),
+					Resources: jsii.Strings(IdentityArn),
+					Conditions: &map[string]interface{}{
+						"StringEquals": map[string]interface{}{"ses:FromAddress": FromAddress},
+					},
+				}),
+			},
+		})
+
+	awsiam.NewRole(stack, jsii.String("MailSenderRole"), &awsiam.RoleProps{
+		RoleName:        jsii.String(SenderRoleName),
+		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String("367707589526")),
+		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
 	})
 }
 
