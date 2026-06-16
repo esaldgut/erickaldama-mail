@@ -165,3 +165,61 @@ Propagación DNS pública en curso (dig NS aún vacío al cierre — TTL normal,
 post-deploy, registrar re-delegado. El examen de gobernanza PASÓ: el límite de SP-0 sobrevivió un deploy
 real out-of-band. 5 hallazgos productivizados (EXECUTION-LOG + 3 memorias feedback_cdk_* + skill hardening #22
 + lessongate #11).
+
+---
+
+# SP-2 — Identidad SES + envío (tarea #16) — EN CURSO, code-complete, falta deploy humano
+
+> Estado al 2026-06-15: TODO el código de agente terminado, revisado (spec+quality por tarea), commiteado.
+> Worktree sp-2-ses-send (rama worktree-sp-2-ses-send, base ed3ddb8 = main con SP-0+SP-1). HEAD 8d0b6ae.
+> 20 commits. Tests verdes (8 SP-2 infra + SP-0 hook + eval). PENDIENTE: solo el GATE HUMANO (Task 10, deploy).
+
+## Flujo seguido (igual que SP-0/SP-1): brainstorm → spec → auditoría adversarial (4 agentes + 1 compilación) → plan → subagent-driven-development
+- spec: docs/superpowers/specs/2026-06-11-sp2-ses-send-design.md (commit c3da31f). 8 decisiones cerradas.
+- plan: docs/superpowers/plans/2026-06-11-sp2-ses-send.md (11 tareas: 1-5, 8-11).
+- hallazgos auditoría: ~/.claude/plans/email-project-research/11-sp2-audit-findings.md (3 CRÍTICOS + endurecimiento + 2 hallazgos de deploy).
+
+## Tareas COMPLETAS (subagent-driven, spec+quality review por tarea):
+- T1 (474cb94): SendingStack scaffold + SP-2 naming constants. DONE+reviews.
+- T2 (43a1cd8 + 668ccfe): EmailIdentity + Easy DKIM + MAIL FROM + config set + DMARC (TDD). El construct
+  auto-publica 5 records (3 DKIM CNAME + MX + SPF TXT); solo DMARC manual = 6 RecordSets. HostedZoneID const.
+- T3 (60d8a55 + ad0d325): EventBridge event destination + Rule→SNS (TDD). Refactor a orchestrator + helpers
+  (addSendingIdentity/addEventRouting) + test reforzado. EventDestination_EventBus, awseventstargets.
+- T4 (240cb5c): reputation alarms (BounceRate>=0.02, ComplaintRate>=0.0005, AWS/SES, treatMissingData IGNORE).
+- T5 (e2aee21 + 1b84820): mail-send policy (ses:SendEmail+SendRawEmail @ identity ARN + ses:FromAddress) +
+  mail-sender-role (asumible vía account principal). Constantes Account/DomainName centralizadas.
+- T8 (a57dec5): exec-policy gana events:* (anticipado, no descubierto-en-deploy como SP-1) + mail-send JSON mirror.
+- T9 (1acdd52): ses-dkim-wait.sh — gate de polling DKIM async (no false-pass verificado en review).
+- DMARC fix (8d0b6ae): rua REMOVIDO — hallazgo del pre-flight (dig en vivo + RFC 7489 §7.1): Gmail NO publica
+  autorización de reportes externos → rua a Gmail era NO-FUNCIONAL. DmarcValue ahora "v=DMARC1; p=none;".
+  El rua propio se añade en SP-3 (mismo dominio, sin requisito cross-domain).
+
+## SendingStack sintetiza 16 recursos (verificado en synth): 1 EmailIdentity, 6 RecordSet, 1 ConfigSet,
+## 1 ConfigSetEventDestination, 1 SNS Topic, 1 SNS TopicPolicy, 1 Events::Rule, 2 Alarm, 1 ManagedPolicy, 1 Role.
+
+## ⏩ PUNTO EXACTO DE RETOMA: Task 10 (GATE HUMANO — deploy out-of-band con SSO Admin)
+El agente ya hizo el pre-flight (identity 367707589526 OK, tests verdes, synth inventory correcto, DMARC fix).
+FALTA que el HUMANO ejecute (todo --profile AdministratorAccess-367707589526, desde el worktree):
+
+  ① aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
+       --policy-document file://iam/deploy-exec-policy.json --set-as-default --profile AdministratorAccess-367707589526
+  ② cdk deploy SendingStack --profile AdministratorAccess-367707589526   (confirmar 'y' IAM; termina con DKIM PENDING)
+  → avisar al agente
+
+LUEGO el AGENTE corre:
+  ③ ./iam/ses-dkim-wait.sh   (polling hasta DKIM=SUCCESS — minutos típico Route53 same-account)
+
+LUEGO el HUMANO corre el smoke (tras DKIM=SUCCESS):
+  ④ aws sesv2 send-email --region us-east-1 --profile AdministratorAccess-367707589526 \
+       --from-email-address erick@erickaldama.com \
+       --destination ToAddresses=success@simulator.amazonses.com \
+       --content '{"Simple":{"Subject":{"Data":"SP-2 smoke success"},"Body":{"Text":{"Data":"hello"}}}}' \
+       --configuration-set-name mail-config
+     (repetir con bounce@ y complaint@simulator.amazonses.com para ejercitar el event destination)
+  → avisar al agente
+
+LUEGO el AGENTE verifica (⑤): ./iam/post-deploy-identity-check.sh + get-email-identity (DKIM/Verified/MailFrom).
+LUEGO Task 11: EXECUTION-LOG final + checkboxes plan + task #16 completed + merge --no-ff a main (finishing-a-development-branch).
+
+DIFERIDO (NO parte de SP-2, paso humano posterior): production access (put-account-details, one-shot, 409 si
+re-intento, SLA 24h). AWS recomienda pedirlo DESPUÉS de verificar el dominio (que SP-2 hace).
