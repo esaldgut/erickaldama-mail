@@ -104,3 +104,43 @@ For the FIRST bootstrap, create them from the JSON mirrors:
 ### Deferred SP-0/T13 test satisfied here
 The deploy uses SSO Admin (≠ the agent's mail-readonly profile). After deploy, the agent runs
 iam/post-deploy-identity-check.sh and confirms its own identity is still mail-readonly.
+
+## SP-2 deploy (t=0, human, SSO Admin) — 2026-06-16/17
+
+The full runbook with real commands AND outputs (including the two deploy failures and their fixes)
+lives in [`docs/SP-2-DEPLOY.md`](SP-2-DEPLOY.md). Summary of the human out-of-band steps:
+
+### 1. Re-apply the exec-policy with `events:*` (the EventBridge rule needs it)
+    aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
+      --policy-document file://iam/deploy-exec-policy.json --set-as-default \
+      --profile AdministratorAccess-367707589526
+
+### 2. Re-apply the boundary with `events:*` (FINDING #6 — boundary INTERSECTS the exec-policy)
+The first deploy failed at `SesEventRule` with "no permissions boundary allows events:DescribeRule".
+The boundary needs the SAME permission the exec-policy gained — widening one is not enough.
+    aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+      --policy-document file://iam/erickaldama-boundary.json --set-as-default \
+      --profile AdministratorAccess-367707589526
+
+### 3. Deploy the SendingStack
+    cdk deploy SendingStack --profile AdministratorAccess-367707589526
+    # Returns CREATE_COMPLETE with DKIM PENDING — verification is asynchronous, decoupled from deploy.
+
+### 4. Agent waits for DKIM, then smoke (human) via the Mailbox Simulator
+    ./iam/ses-dkim-wait.sh        # agent, read-only, polls until DKIM=SUCCESS
+    # human: aws ses send-email --from erick@erickaldama.com \
+    #   --destination ToAddresses=success@simulator.amazonses.com \
+    #   --message 'Subject={Data=smoke},Body={Text={Data=hi}}' \
+    #   --configuration-set-name mail-config --region us-east-1 --profile AdministratorAccess-367707589526
+    #   (repeat with bounce@ and complaint@simulator.amazonses.com)
+
+### 5. FINDING #7 — widen mail-readonly so the agent can verify what it deployed
+The agent could not read SNS/EventBridge to confirm the event path. FoundationStack's read-only policy
+gained sns:Get*/List* + events:Describe*/List* reads (us-east-1 scoped, hard-deny intact). Redeploy:
+    cdk deploy FoundationStack --profile AdministratorAccess-367707589526
+Then the agent verifies the rule → SNS target, the lit-up AWS/SES metrics, and the reputation alarms
+(INSUFFICIENT_DATA + treatMissingData=ignore is the correct idle state with no sustained traffic).
+
+### Deferred (NOT part of SP-2)
+Production access (`put-account-details`) is one-shot (409 on retry, SLA 24h) and is requested AFTER
+the domain is verified. A subscriber to the `mail-bounce-complaint` SNS topic is added in SP-3.

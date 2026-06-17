@@ -63,8 +63,8 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 
 // readonlyStatements mirrors iam/readonly-policy.json (verified vs Service Authorization Reference).
 func readonlyStatements() *[]awsiam.PolicyStatement {
-	usEast1 := &map[string]interface{}{
-		"StringEquals": map[string]interface{}{"aws:RequestedRegion": "us-east-1"},
+	usEast1 := &map[string]any{
+		"StringEquals": map[string]any{"aws:RequestedRegion": "us-east-1"},
 	}
 	return &[]awsiam.PolicyStatement{
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
@@ -76,7 +76,7 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 			Sid:        jsii.String("AllowRegionalReadsUsEast1"),
 			Effect:     awsiam.Effect_ALLOW,
-			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics"),
+			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTopics", "events:DescribeRule", "events:ListRules", "events:ListTargetsByRule"),
 			Resources:  jsii.Strings("*"),
 			Conditions: usEast1,
 		}),
