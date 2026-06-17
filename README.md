@@ -85,3 +85,23 @@ and a `PreToolUse` hook (SP-0) mechanically blocks any non-CDK-Go write. Two of 
 failed first — and the failures are documented as findings, not hidden. The discipline on display:
 adversarial audit before implementing, real-output verification before declaring done (a green deploy
 is not a verified one — DKIM is asynchronous), and productivizing every real-deploy lesson.
+
+## Ecosystem
+
+This repo is one node in a small AI-native engineering ecosystem. The other two are public and
+demonstrate how the work here feeds back into reusable practice:
+
+- **[ai-native-engineering-workspace](https://github.com/esaldgut/ai-native-engineering-workspace)** —
+  the curated library of agent skills, hooks, and engineering practices. The governance artifacts this
+  project produces (the CDK-Go `PreToolUse` hook, the SES recipe, the verify-before-act discipline) are
+  meant to graduate into that workspace as generalized, reusable skills.
+- **[lessongate](https://github.com/esaldgut/lessongate)** — a Go runtime agent that watches engineering
+  repos, uses the Claude API to detect which lessons are *generalizable* (not project-specific), gates
+  them for sensitive content, and opens draft PRs to the workspace for human review. Its multi-repo mode
+  is designed to watch **this** repo too: the real-deploy findings recorded here (e.g. "a permissions
+  boundary intersects the exec-policy", "the agent's read-only must read what it deploys") are exactly
+  the kind of durable lesson lessongate is built to surface and publish upstream.
+
+Together: this project generates lessons from real infrastructure work → lessongate extracts and
+sanitizes the generalizable ones → they land in the workspace → the next project starts with sharper
+tools. The repo is not a static snapshot; it's a feeder in a living loop.
