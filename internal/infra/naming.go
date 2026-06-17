@@ -14,6 +14,29 @@ const (
 	// it is a bootstrap artifact (iam/erickaldama-boundary.json) that must pre-exist for
 	// `cdk bootstrap --custom-permissions-boundary`. Kept here as the canonical name.
 	BoundaryManagedPolicyName = "erickaldama-boundary"
+
+	// SP-2 — sending identity.
+	MailFromDomain  = "mail.erickaldama.com"
+	FromAddress     = "erick@erickaldama.com"
+	ConfigSetName   = "mail-config"
+	SendPolicyName  = "mail-send"
+	SenderRoleName  = "mail-sender-role"
+	BounceTopicName = "mail-bounce-complaint"
+	// Event-routing resource names (SES config-set EventBridge destination + the bounce/complaint Rule).
+	EventDestinationName = "mail-config-eventbridge"
+	BounceRuleName       = "mail-ses-bounce-complaint"
+	// IdentityArn is the SES identity ARN used to scope the send policy.
+	IdentityArn = "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com"
+	// HostedZoneID is the SP-1 hosted zone for erickaldama.com (CfnOutput of FoundationStack).
+	// Imported by SP-2+ stacks via HostedZone_FromHostedZoneAttributes.
+	HostedZoneID = "Z023932911KA6S98A6ZRW"
+	// DmarcValue is the monitor-only DMARC record (no rua yet). A cross-domain rua to Gmail is
+	// NON-FUNCTIONAL: per RFC 7489 §7.1 the report receiver's domain must publish an authorization
+	// record (<policydomain>._report._dmarc.<receiver>), and live DNS confirms gmail.com publishes
+	// none (per-domain or wildcard) — so senders would not deliver reports there. rua is added in
+	// SP-3 pointing at a same-domain mailbox (dmarc-reports@erickaldama.com), which needs no
+	// cross-domain authorization. Verified 2026-06-11 via dig + RFC 7489.
+	DmarcValue = "v=DMARC1; p=none;"
 )
 
 // projectTags are applied to the stack so every resource is attributable.

@@ -24,7 +24,13 @@
         "cloudwatch:DescribeAlarms",
         "cloudwatch:ListMetrics",
         "cloudwatch:GetMetricData",
-        "cloudwatch:GetMetricStatistics"
+        "cloudwatch:GetMetricStatistics",
+        "sns:GetTopicAttributes",
+        "sns:ListSubscriptionsByTopic",
+        "sns:ListTopics",
+        "events:DescribeRule",
+        "events:ListRules",
+        "events:ListTargetsByRule"
       ],
       "Resource": "*",
       "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }

@@ -165,3 +165,107 @@ Propagación DNS pública en curso (dig NS aún vacío al cierre — TTL normal,
 post-deploy, registrar re-delegado. El examen de gobernanza PASÓ: el límite de SP-0 sobrevivió un deploy
 real out-of-band. 5 hallazgos productivizados (EXECUTION-LOG + 3 memorias feedback_cdk_* + skill hardening #22
 + lessongate #11).
+
+---
+
+# SP-2 — Identidad SES + envío (tarea #16) — EN CURSO, code-complete, falta deploy humano
+
+> Estado al 2026-06-15: TODO el código de agente terminado, revisado (spec+quality por tarea), commiteado.
+> Worktree sp-2-ses-send (rama worktree-sp-2-ses-send, base ed3ddb8 = main con SP-0+SP-1). HEAD 8d0b6ae.
+> 20 commits. Tests verdes (8 SP-2 infra + SP-0 hook + eval). PENDIENTE: solo el GATE HUMANO (Task 10, deploy).
+
+## Flujo seguido (igual que SP-0/SP-1): brainstorm → spec → auditoría adversarial (4 agentes + 1 compilación) → plan → subagent-driven-development
+- spec: docs/superpowers/specs/2026-06-11-sp2-ses-send-design.md (commit c3da31f). 8 decisiones cerradas.
+- plan: docs/superpowers/plans/2026-06-11-sp2-ses-send.md (11 tareas: 1-5, 8-11).
+- hallazgos auditoría: ~/.claude/plans/email-project-research/11-sp2-audit-findings.md (3 CRÍTICOS + endurecimiento + 2 hallazgos de deploy).
+
+## Tareas COMPLETAS (subagent-driven, spec+quality review por tarea):
+- T1 (474cb94): SendingStack scaffold + SP-2 naming constants. DONE+reviews.
+- T2 (43a1cd8 + 668ccfe): EmailIdentity + Easy DKIM + MAIL FROM + config set + DMARC (TDD). El construct
+  auto-publica 5 records (3 DKIM CNAME + MX + SPF TXT); solo DMARC manual = 6 RecordSets. HostedZoneID const.
+- T3 (60d8a55 + ad0d325): EventBridge event destination + Rule→SNS (TDD). Refactor a orchestrator + helpers
+  (addSendingIdentity/addEventRouting) + test reforzado. EventDestination_EventBus, awseventstargets.
+- T4 (240cb5c): reputation alarms (BounceRate>=0.02, ComplaintRate>=0.0005, AWS/SES, treatMissingData IGNORE).
+- T5 (e2aee21 + 1b84820): mail-send policy (ses:SendEmail+SendRawEmail @ identity ARN + ses:FromAddress) +
+  mail-sender-role (asumible vía account principal). Constantes Account/DomainName centralizadas.
+- T8 (a57dec5): exec-policy gana events:* (anticipado, no descubierto-en-deploy como SP-1) + mail-send JSON mirror.
+- T9 (1acdd52): ses-dkim-wait.sh — gate de polling DKIM async (no false-pass verificado en review).
+- DMARC fix (8d0b6ae): rua REMOVIDO — hallazgo del pre-flight (dig en vivo + RFC 7489 §7.1): Gmail NO publica
+  autorización de reportes externos → rua a Gmail era NO-FUNCIONAL. DmarcValue ahora "v=DMARC1; p=none;".
+  El rua propio se añade en SP-3 (mismo dominio, sin requisito cross-domain).
+
+## SendingStack sintetiza 16 recursos (verificado en synth): 1 EmailIdentity, 6 RecordSet, 1 ConfigSet,
+## 1 ConfigSetEventDestination, 1 SNS Topic, 1 SNS TopicPolicy, 1 Events::Rule, 2 Alarm, 1 ManagedPolicy, 1 Role.
+
+## ⏩ PUNTO EXACTO DE RETOMA: Task 10 (GATE HUMANO — deploy out-of-band con SSO Admin)
+El agente ya hizo el pre-flight (identity 367707589526 OK, tests verdes, synth inventory correcto, DMARC fix).
+FALTA que el HUMANO ejecute (todo --profile AdministratorAccess-367707589526, desde el worktree):
+
+  ① aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
+       --policy-document file://iam/deploy-exec-policy.json --set-as-default --profile AdministratorAccess-367707589526
+  ② cdk deploy SendingStack --profile AdministratorAccess-367707589526   (confirmar 'y' IAM; termina con DKIM PENDING)
+  → avisar al agente
+
+LUEGO el AGENTE corre:
+  ③ ./iam/ses-dkim-wait.sh   (polling hasta DKIM=SUCCESS — minutos típico Route53 same-account)
+
+LUEGO el HUMANO corre el smoke (tras DKIM=SUCCESS):
+  ④ aws sesv2 send-email --region us-east-1 --profile AdministratorAccess-367707589526 \
+       --from-email-address erick@erickaldama.com \
+       --destination ToAddresses=success@simulator.amazonses.com \
+       --content '{"Simple":{"Subject":{"Data":"SP-2 smoke success"},"Body":{"Text":{"Data":"hello"}}}}' \
+       --configuration-set-name mail-config
+     (repetir con bounce@ y complaint@simulator.amazonses.com para ejercitar el event destination)
+  → avisar al agente
+
+LUEGO el AGENTE verifica (⑤): ./iam/post-deploy-identity-check.sh + get-email-identity (DKIM/Verified/MailFrom).
+LUEGO Task 11: EXECUTION-LOG final + checkboxes plan + task #16 completed + merge --no-ff a main (finishing-a-development-branch).
+
+DIFERIDO (NO parte de SP-2, paso humano posterior): production access (put-account-details, one-shot, 409 si
+re-intento, SLA 24h). AWS recomienda pedirlo DESPUÉS de verificar el dominio (que SP-2 hace).
+
+---
+
+## SP-2 Task 10 + 11 EJECUTADOS — deploy real, verificado en vivo, merge (2026-06-16/17)
+
+### Secuencia ejecutada (gate humano out-of-band + verificación del agente)
+- ① HUMANO: `create-policy-version` exec-policy con `events:*` → `v3` default. OK.
+- ② HUMANO: `cdk deploy SendingStack` → **FALLÓ** en `SesEventRule` (5/18), rollback limpio. Ver Hallazgo #6.
+- (fix) AGENTE: añadió `events:*` al boundary (iam/erickaldama-boundary.json). HUMANO: `create-policy-version`
+  boundary → `v3` default. Rollback esperó a `ROLLBACK_COMPLETE`.
+- ② bis HUMANO: `cdk deploy SendingStack` → **CREATE_COMPLETE** (169.82s). Stack ARN bdc644a0-69e9-11f1-a342-...
+- ③ AGENTE: `./iam/ses-dkim-wait.sh` → PASS al **attempt 1/30**: DKIM=SUCCESS, VerifiedForSending=True.
+- ④ HUMANO: smoke al Mailbox Simulator (3 envíos `aws ses send-email`, from erick@erickaldama.com, config-set
+  mail-config): success / bounce / complaint → 3× MessageId OK.
+- (fix) AGENTE: descubrió que mail-readonly NO podía leer SNS/events para verificar ⑤. Ver Hallazgo #7.
+  Amplió AllowRegionalReadsUsEast1 con sns:*/events:* reads. HUMANO: `cdk deploy FoundationStack` → UPDATE_COMPLETE.
+- ⑤ AGENTE: verificación completa con mail-readonly (ya con los reads):
+  - identidad: DKIM=SUCCESS, VerifiedForSending=true, MailFrom=mail.erickaldama.com/SUCCESS, FeedbackForwarding=false, ConfigSet=mail-config.
+  - EventBridge rule `mail-ses-bounce-complaint`: ENABLED, pattern {source:[aws.ses], detail-type:[Email Bounce,Email Complaint]}, target = SNS topic mail-bounce-complaint.
+  - SNS topic existe; SubsConfirmed=0 (BY DESIGN — fan-out point, el suscriptor lo añade SP-3/operador).
+  - métricas AWS/SES encendidas (Send/Delivery/Bounce/Complaint + Reputation.BounceRate/ComplaintRate con dim ses:configuration-set=mail-config).
+  - alarmas mail-bounce-rate (0.02) / mail-complaint-rate (0.0005): INSUFFICIENT_DATA con treatMissingData=ignore — estado de reposo CORRECTO sin envío sostenido (Reputation.*Rate se agrega en ventanas; por eso IGNORE).
+  - inventario real del stack (list-stack-resources): 6 RecordSet (NO 7 — SPF no duplicado, canario de la auditoría), 1 EmailIdentity, 1 ConfigSet, 1 ConfigSetEventDestination, 1 Events::Rule, 1 SNS Topic, 1 TopicPolicy, 2 Alarm, 1 ManagedPolicy, 1 Role. Coincide con el diseño.
+  - suite completa verde: internal/infra + test/hook (SP-0) + cdk-go-aws-plugin/eval (SP-0).
+
+### LOS 2 HALLAZGOS NUEVOS del deploy real de SP-2 (6º y 7º del proyecto)
+
+**Hallazgo #6 — boundary necesita events:* (intersecta con exec-policy).** El deploy #1 murió en SesEventRule
+con "no permissions boundary allows the events:DescribeRule action". Causa raíz = la lección de SP-1
+(feedback_cdk_permissions_boundary_intersects) aplicada a un servicio NUEVO: el boundary INTERSECTA la
+exec-policy (efectivo = policy ∩ boundary). Ampliar la exec-policy con events:* (anticipado por la auditoría)
+NO basta — el boundary necesita el MISMO permiso. La auditoría de SP-2 anticipó el gap de la exec-policy pero
+no replicó la simetría al boundary. Confirmación operativa de la memoria en un 2º servicio (events vs ssm de SP-1).
+Commit 5979a3b. LECCIÓN: al ampliar la exec-policy con un servicio nuevo, ampliar el boundary en el MISMO cambio.
+
+**Hallazgo #7 — el read-only del agente no puede verificar lo que despliega.** En ⑤, mail-readonly recibió
+AccessDenied en sns:ListTopics y events:DescribeRule (allowlist puro funcionando, tipo #5 de SP-1). El agente
+estaba ciego justo en la observabilidad del camino de eventos que acababa de desplegar. Decisión de gobernanza
+(usuario): ampliar mail-readonly con sns:GetTopicAttributes/ListSubscriptionsByTopic/ListTopics +
+events:DescribeRule/ListRules/ListTargetsByRule (reads scoped us-east-1, hard-deny intacto). Commit e65164b,
+con template-assert que fija las acciones para que un refactor no re-ciegue al verificador. LECCIÓN: el read-only
+del agente debe poder LEER todo lo que el agente despliega — observabilidad es parte del límite, no un extra.
+
+### Estado: SP-2 COMPLETO. Identidad verificada, envío vivo, event path desplegado y verificado.
+Production access (put-account-details) DIFERIDO — paso humano posterior, no parte de SP-2.
+DMARC rua DIFERIDO a SP-3 (Gmail no autoriza rua cross-domain; buzón propio en SP-3).
