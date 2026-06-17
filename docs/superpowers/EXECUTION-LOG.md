@@ -223,3 +223,49 @@ LUEGO Task 11: EXECUTION-LOG final + checkboxes plan + task #16 completed + merg
 
 DIFERIDO (NO parte de SP-2, paso humano posterior): production access (put-account-details, one-shot, 409 si
 re-intento, SLA 24h). AWS recomienda pedirlo DESPUÉS de verificar el dominio (que SP-2 hace).
+
+---
+
+## SP-2 Task 10 + 11 EJECUTADOS — deploy real, verificado en vivo, merge (2026-06-16/17)
+
+### Secuencia ejecutada (gate humano out-of-band + verificación del agente)
+- ① HUMANO: `create-policy-version` exec-policy con `events:*` → `v3` default. OK.
+- ② HUMANO: `cdk deploy SendingStack` → **FALLÓ** en `SesEventRule` (5/18), rollback limpio. Ver Hallazgo #6.
+- (fix) AGENTE: añadió `events:*` al boundary (iam/erickaldama-boundary.json). HUMANO: `create-policy-version`
+  boundary → `v3` default. Rollback esperó a `ROLLBACK_COMPLETE`.
+- ② bis HUMANO: `cdk deploy SendingStack` → **CREATE_COMPLETE** (169.82s). Stack ARN bdc644a0-69e9-11f1-a342-...
+- ③ AGENTE: `./iam/ses-dkim-wait.sh` → PASS al **attempt 1/30**: DKIM=SUCCESS, VerifiedForSending=True.
+- ④ HUMANO: smoke al Mailbox Simulator (3 envíos `aws ses send-email`, from erick@erickaldama.com, config-set
+  mail-config): success / bounce / complaint → 3× MessageId OK.
+- (fix) AGENTE: descubrió que mail-readonly NO podía leer SNS/events para verificar ⑤. Ver Hallazgo #7.
+  Amplió AllowRegionalReadsUsEast1 con sns:*/events:* reads. HUMANO: `cdk deploy FoundationStack` → UPDATE_COMPLETE.
+- ⑤ AGENTE: verificación completa con mail-readonly (ya con los reads):
+  - identidad: DKIM=SUCCESS, VerifiedForSending=true, MailFrom=mail.erickaldama.com/SUCCESS, FeedbackForwarding=false, ConfigSet=mail-config.
+  - EventBridge rule `mail-ses-bounce-complaint`: ENABLED, pattern {source:[aws.ses], detail-type:[Email Bounce,Email Complaint]}, target = SNS topic mail-bounce-complaint.
+  - SNS topic existe; SubsConfirmed=0 (BY DESIGN — fan-out point, el suscriptor lo añade SP-3/operador).
+  - métricas AWS/SES encendidas (Send/Delivery/Bounce/Complaint + Reputation.BounceRate/ComplaintRate con dim ses:configuration-set=mail-config).
+  - alarmas mail-bounce-rate (0.02) / mail-complaint-rate (0.0005): INSUFFICIENT_DATA con treatMissingData=ignore — estado de reposo CORRECTO sin envío sostenido (Reputation.*Rate se agrega en ventanas; por eso IGNORE).
+  - inventario real del stack (list-stack-resources): 6 RecordSet (NO 7 — SPF no duplicado, canario de la auditoría), 1 EmailIdentity, 1 ConfigSet, 1 ConfigSetEventDestination, 1 Events::Rule, 1 SNS Topic, 1 TopicPolicy, 2 Alarm, 1 ManagedPolicy, 1 Role. Coincide con el diseño.
+  - suite completa verde: internal/infra + test/hook (SP-0) + cdk-go-aws-plugin/eval (SP-0).
+
+### LOS 2 HALLAZGOS NUEVOS del deploy real de SP-2 (6º y 7º del proyecto)
+
+**Hallazgo #6 — boundary necesita events:* (intersecta con exec-policy).** El deploy #1 murió en SesEventRule
+con "no permissions boundary allows the events:DescribeRule action". Causa raíz = la lección de SP-1
+(feedback_cdk_permissions_boundary_intersects) aplicada a un servicio NUEVO: el boundary INTERSECTA la
+exec-policy (efectivo = policy ∩ boundary). Ampliar la exec-policy con events:* (anticipado por la auditoría)
+NO basta — el boundary necesita el MISMO permiso. La auditoría de SP-2 anticipó el gap de la exec-policy pero
+no replicó la simetría al boundary. Confirmación operativa de la memoria en un 2º servicio (events vs ssm de SP-1).
+Commit 5979a3b. LECCIÓN: al ampliar la exec-policy con un servicio nuevo, ampliar el boundary en el MISMO cambio.
+
+**Hallazgo #7 — el read-only del agente no puede verificar lo que despliega.** En ⑤, mail-readonly recibió
+AccessDenied en sns:ListTopics y events:DescribeRule (allowlist puro funcionando, tipo #5 de SP-1). El agente
+estaba ciego justo en la observabilidad del camino de eventos que acababa de desplegar. Decisión de gobernanza
+(usuario): ampliar mail-readonly con sns:GetTopicAttributes/ListSubscriptionsByTopic/ListTopics +
+events:DescribeRule/ListRules/ListTargetsByRule (reads scoped us-east-1, hard-deny intacto). Commit e65164b,
+con template-assert que fija las acciones para que un refactor no re-ciegue al verificador. LECCIÓN: el read-only
+del agente debe poder LEER todo lo que el agente despliega — observabilidad es parte del límite, no un extra.
+
+### Estado: SP-2 COMPLETO. Identidad verificada, envío vivo, event path desplegado y verificado.
+Production access (put-account-details) DIFERIDO — paso humano posterior, no parte de SP-2.
+DMARC rua DIFERIDO a SP-3 (Gmail no autoriza rua cross-domain; buzón propio en SP-3).
