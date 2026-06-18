@@ -71,6 +71,23 @@ func TestReadonlyManagedPolicy(t *testing.T) {
 			}),
 		},
 	})
+	// SP-3: the agent must read the receive pipeline it deploys (dynamodb/lambda/sqs).
+	// SES receipt reads are already covered by ses:Describe*. Pinned so a refactor can't re-blind the verifier.
+	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]any{
+		"PolicyDocument": map[string]any{
+			"Statement": assertions.Match_ArrayWith(&[]any{
+				assertions.Match_ObjectLike(&map[string]any{
+					"Sid":    "AllowRegionalReadsUsEast1",
+					"Effect": "Allow",
+					"Action": assertions.Match_ArrayWith(&[]any{
+						"dynamodb:DescribeTable",
+						"lambda:GetFunction",
+						"sqs:GetQueueAttributes",
+					}),
+				}),
+			}),
+		},
+	})
 }
 
 func TestPermissionsBoundaryNotInStack(t *testing.T) {
