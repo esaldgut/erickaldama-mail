@@ -48,23 +48,110 @@ INBOUND (all us-east-1)
 CDK-Go object reference (`NewReceivingStack(app, id, props, storageBucket)`), which emits the
 CloudFormation `Export`/`ImportValue` and orders the deploy (storage first) automatically.
 
+## Audit findings (2026-06-17, 4 agents — applied to this design)
+
+A full adversarial audit ran: a CDK-compiling agent (built + `cdk synth` against awscdk v2.258.1 AND
+v2.260.0), a docs agent (verbatim vs live AWS docs), an IAM/security agent, and a Go/reliability agent
+(compiled + vetted the Lambda in a temp module). Findings, with decisions, encoded here so the plan
+inherits the corrected design — not the original assumptions.
+
+### Critical (changed the design)
+
+- **C1 — bucket↔rule cycle is real; the policy mechanism changes.** Calling
+  `importedBucket.AddToResourcePolicy(...)` from ReceivingStack places the `AWS::S3::BucketPolicy` in the
+  *owning* (Storage) stack; referencing the receipt-rule ARN there creates a verbatim CDK
+  `DependencyCycle` (Storage→Pipeline on top of the existing Pipeline→Storage `Fn::ImportValue`). **Fix
+  (synth-verified):** in ReceivingStack create the policy explicitly with
+  `awss3.NewBucketPolicy(stack, id, &awss3.BucketPolicyProps{Bucket: importedBucket})` then
+  `.Document().AddStatements(...)`. The policy resource then lives in ReceivingStack alongside the
+  rule-ARN token it references; the only cross-stack edge stays Pipeline→Storage. (Approach A stands;
+  only the policy wiring changes — NOT `AddToResourcePolicy`.)
+
+- **C2 — `ReceiptRuleSet` has no declarative "active" field.** `AWS::SES::ReceiptRuleSet` cannot be marked
+  active in CloudFormation. **Decision: activate via a CDK custom resource** —
+  `customresources.NewAwsCustomResource` (package token `customresources`) calling
+  `SES.setActiveReceiptRuleSet` on create/update. Keeps the project 100% IaC and self-sufficient; adds a
+  CDK-managed Lambda + an IAM grant for `ses:SetActiveReceiptRuleSet`.
+
+- **C3 — Lambda correctness (3 fixes, would have shipped a broken Lambda):**
+  - `errors.As` form: `&types.ConditionalCheckFailedException{}` does NOT compile/vet. Use
+    `var cfe *types.ConditionalCheckFailedException; if errors.As(err, &cfe) { ... }`.
+  - `Mail.MessageID` (SES id, = the S3 object key) ≠ `Mail.CommonHeaders.MessageID` (RFC 5322 Message-ID,
+    = the idempotency key). They are different strings. SK uses `CommonHeaders.MessageID`; S3 key uses
+    `Mail.MessageID`.
+  - Recipients = `Receipt.Recipients` (envelope RCPT TO, authoritative, includes Bcc) — NOT
+    `Mail.Destination` / `CommonHeaders.To` (forgeable header content). Filter by domain suffix there.
+  - SK timestamp = `Mail.Timestamp` (real `time.Time`, RFC3339) — NOT the `Date` header (RFC1123Z,
+    missing/forgeable).
+
+### Important (confirmations + hardening)
+
+- **I1 — SES→Lambda invoke permission, or silent loss.** The receipt rule's Lambda action needs a
+  resource-based `lambda:InvokeFunction` (Principal `ses.amazonaws.com`, `SourceAccount=367707589526`,
+  `SourceArn=<receipt-rule ARN>`). If missing, the S3 object still lands but the invoke is denied → no
+  DynamoDB item AND the async DLQ stays empty (the DLQ only catches post-invocation failures). Worst
+  failure mode — must be present and SourceArn-scoped. Use `fn.AddPermission`.
+- **I2 — `OnFailure` destination, not the legacy `DeadLetterQueue`.** Async retries (default 2) then route
+  to an `OnFailure` SQS destination (`awslambdadestinations.NewSqsDestination`). The destination record
+  includes request/response context (far richer for diagnosing failed inbound mail than the DLQ's 3
+  attributes). Returning a non-nil error from the handler triggers it. SQS must be a standard queue.
+  Multi-recipient loop: `continue` on a per-recipient `ConditionalCheckFailedException`, never `return
+  nil` (that would skip remaining recipients).
+- **I3 — no deploy-blocking boundary/exec-policy gap (unlike SP-2 #6).** Go Lambda bundling
+  (`awscdklambdagoalpha.NewGoFunction`) builds locally with the host Go toolchain and uploads a zip asset
+  to the CDK S3 assets bucket — it does NOT push to ECR. `iam:PassRole`/`lambda:*`/`s3:*`/etc. are all
+  already in both layers. **No new service in exec-policy or boundary.** (Correction to prior note:
+  `cloudformation:*` is in the boundary only, not the exec-policy — that asymmetry is by design.)
+- **I4 — mail-readonly #7-style gap (confirmed).** Add to the us-east-1 allow statement:
+  `dynamodb:DescribeTable/Query/GetItem`, `lambda:GetFunction/GetFunctionConfiguration`,
+  `sqs:GetQueueAttributes`. SES receipt-rule reads (`ses:DescribeReceiptRule/DescribeActiveReceiptRuleSet`)
+  are already covered by `ses:Describe*`. All in-allowlist → no exec-policy/boundary change. Do NOT add
+  `dynamodb:Scan` or object-level S3. Hard-deny intact. Pin with a foundation_stack_test assertion.
+- **I5 — TlsPolicy decision: `REQUIRE`.** User chose `TlsPolicy_REQUIRE` (rejects non-TLS senders).
+  Conscious trade-off: SES bounces the long tail of legacy/misconfigured non-TLS senders; acceptable for
+  a new personal domain where modern senders all use STARTTLS. `ScanEnabled` set explicitly (the API
+  default `false` contradicts the concepts-doc default; scanning only stamps verdict headers, never
+  drops mail — the Lambda may act on the headers later).
+- **I6 — tightenings (applied):** inbound max size is **40 MB** (not 30); bucket
+  `BlockPublicAccess_BLOCK_ALL()` + test assertion; bucket policy `StringEquals` on `aws:SourceArn`
+  (not `ArnLike`) with the full receipt-rule ARN; `logs` scoped to the function's log-group ARN
+  (`CreateLogStream`+`PutLogEvents`), not `logs:*`; DLQ `encryption: QUEUE_MANAGED` (SSE-SQS); Lambda
+  DynamoDB grant is PutItem-only (not full `grant`).
+
+### Versions
+
+Stay on **awscdk v2.258.1** (the full SP-3 stack compiles + synths on it and is unchanged on v2.260.0 —
+no bump warranted). Add the alpha module `github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2
+v2.258.1-alpha.0` (not pulled transitively). SES receipt actions live in package `awssesactions`; the
+custom resource in package `customresources`.
+
 ## Component: the receive Lambda (Go)
 
 **Contract (verified trap).** SES invokes the Lambda with an event that does NOT contain the body —
 only metadata + common headers + the `messageId` SES assigned. The body (raw MIME) is already in S3
 (the S3 action ran first). So the Lambda:
 
-1. Receives the SES event (`events.SimpleEmailEvent`) → extracts `messageId`, `commonHeaders`
-   (From, To, Subject, Date), `destination` (recipients).
-2. Builds the deterministic `s3Key` (`inbound/<messageId>`) and reads the object from S3 (v1: confirm
-   existence + size; indexable headers come from the event, no need to download the full body).
-3. Idempotent `PutItem` to `mail-index`, one item per domain recipient (catch-all → a message may have
-   several To/Cc under the domain → N items, all pointing at the same `s3Key`).
+1. Receives the SES event (`events.SimpleEmailEvent`) → `evt.Records[i].SES.{Mail,Receipt}`. Reads
+   `Mail.MessageID` (SES id, = S3 key suffix), `Mail.CommonHeaders` (From, To, Subject, Date,
+   **MessageID** = the RFC 5322 Message-ID), `Mail.Timestamp` (RFC3339 receive time),
+   `Receipt.Recipients` (envelope RCPT TO — authoritative recipient list, includes Bcc).
+2. Builds the deterministic `s3Key` (`inbound/` + `Mail.MessageID` — SES uses the messageId verbatim as
+   the object key, no separator, so the prefix must be literally `"inbound/"`) and reads the object from
+   S3 (v1: confirm existence + size; indexable headers come from the event, no need to download body).
+3. Idempotent `PutItem` to `mail-index`, one item per domain recipient — iterate `Receipt.Recipients`
+   filtered by the `erickaldama.com` suffix → N items, all pointing at the same `s3Key`. SK uses
+   `CommonHeaders.MessageID` (idempotency key) + `Mail.Timestamp`. `continue` (not `return nil`) on a
+   per-recipient conditional failure so the remaining recipients still index.
 
-**Idempotency.** Key = Message-ID. `PutItem` with `ConditionExpression: attribute_not_exists(SK)`. If
-SES re-delivers (retries), the second PutItem fails the condition and is treated as idempotent success
-(return nil). This is NOT error string-matching — detect via `errors.As` on
-`*types.ConditionalCheckFailedException` (discipline: avoid-string-match-error-silencing).
+**Idempotency.** Key = the RFC 5322 Message-ID (`CommonHeaders.MessageID`). `PutItem` with
+`ConditionExpression: attribute_not_exists(SK)`. On a re-delivery the condition fails and is treated as
+idempotent success. This is NOT error string-matching — detect via the typed error with the COMPILING
+form (the `&types.X{}` form does not vet):
+```go
+var cfe *types.ConditionalCheckFailedException
+if errors.As(err, &cfe) { continue }   // idempotent; continue to next recipient
+```
+(discipline: avoid-string-match-error-silencing).
 
 **Runtime/packaging.** Go binary, `provided.al2023`, ARM64 (Graviton). Built via
 `awslambdago.NewGoFunction` (automatic Go bundling). Lambda code lives at `cmd/lambda/receive/main.go`
@@ -113,11 +200,15 @@ SendingStack), NOT duplicate the record in ReceivingStack. Confirm in the audit.
 
 Rule set + rule live in the v1 API. CDK-Go: `awsses.NewReceiptRuleSet` + `ReceiptRule` with `Actions`.
 
-- Only 1 active rule set per account/region — the audit reads real state first (a new account should
-  have none; activating displaces any existing one).
-- `ScanEnabled` (spam/virus) + `TlsPolicy Require` as hardening — audit confirms they don't break
-  legitimate receipt.
-- Action order S3[0] → Lambda[1] guarantees the object is in S3 before the Lambda is invoked.
+- Only 1 active rule set per account/region. The rule set has NO declarative active field (C2) — a CDK
+  custom resource (`customresources.NewAwsCustomResource` → `SES.setActiveReceiptRuleSet`) activates it
+  on deploy. `Recipients: nil` = catch-all (matches all recipients on verified domains).
+- `ScanEnabled` set explicitly (scan only stamps verdict headers, never drops mail). `TlsPolicy_REQUIRE`
+  (I5) — bounces non-TLS senders; conscious trade-off chosen by the user.
+- Action order S3[0] → Lambda[1] (slice order preserved in CFN) guarantees the object is in S3 before
+  the Lambda is invoked. The SES→Lambda invoke permission (I1) must be present + SourceArn-scoped or the
+  invoke fails silently. The bucket policy is created via `awss3.NewBucketPolicy` IN ReceivingStack (C1),
+  not `AddToResourcePolicy`, to avoid the cross-stack cycle.
 
 ## IAM (least-privilege)
 
