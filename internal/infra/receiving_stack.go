@@ -6,9 +6,12 @@ import (
 
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambdadestinations"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsses"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awssesactions"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssqs"
 	"github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2"
 	"github.com/aws/constructs-go/constructs/v10"
@@ -32,7 +35,8 @@ func NewReceivingStack(scope constructs.Construct, id string, props *awscdk.Stac
 	stack := awscdk.NewStack(scope, jsii.String(id), props)
 
 	table := addReceiveTable(stack)
-	addReceiveLambda(stack, table)
+	fn := addReceiveLambda(stack, table)
+	addReceiptRule(stack, bucket, fn)
 
 	for k, v := range sp3Tags() {
 		awscdk.Tags_Of(stack).Add(jsii.String(k), v, nil)
@@ -86,4 +90,55 @@ func addReceiveLambda(stack awscdk.Stack, table awsdynamodb.Table) awslambda.IFu
 
 	table.GrantWriteData(fn)
 	return fn
+}
+
+// addReceiptRule creates the catch-all rule set (S3 action first, Lambda action second), grants SES
+// PutObject on the imported bucket via a BucketPolicy created HERE (not bucket.AddToResourcePolicy,
+// which would land the policy in the owning stack and cycle on the rule ARN — audit finding C1), and
+// grants SES lambda:InvokeFunction (or the invoke fails silently — finding I1).
+func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunction) {
+	ruleSet := awsses.NewReceiptRuleSet(stack, jsii.String("InboundRuleSet"), &awsses.ReceiptRuleSetProps{
+		ReceiptRuleSetName: jsii.String(ReceiptRuleSetName),
+	})
+
+	ruleSet.AddRule(jsii.String("StoreAndIndex"), &awsses.ReceiptRuleOptions{
+		ReceiptRuleName: jsii.String(ReceiptRuleName),
+		Enabled:         jsii.Bool(true),
+		ScanEnabled:     jsii.Bool(true),
+		TlsPolicy:       awsses.TlsPolicy_REQUIRE,
+		Actions: &[]awsses.IReceiptRuleAction{
+			awssesactions.NewS3(&awssesactions.S3Props{
+				Bucket:          bucket,
+				ObjectKeyPrefix: jsii.String(InboundObjectPrefix),
+			}),
+			awssesactions.NewLambda(&awssesactions.LambdaProps{
+				Function:       fn,
+				InvocationType: awssesactions.LambdaInvocationType_EVENT,
+			}),
+		},
+	})
+
+	policy := awss3.NewBucketPolicy(stack, jsii.String("SesPutPolicy"), &awss3.BucketPolicyProps{
+		Bucket: bucket,
+	})
+	policy.Document().AddStatements(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Sid:        jsii.String("AllowSESPuts"),
+		Effect:     awsiam.Effect_ALLOW,
+		Principals: &[]awsiam.IPrincipal{awsiam.NewServicePrincipal(jsii.String("ses.amazonaws.com"), nil)},
+		Actions:    jsii.Strings("s3:PutObject"),
+		Resources:  jsii.Strings(*bucket.BucketArn() + "/*"),
+		Conditions: &map[string]any{
+			"StringEquals": map[string]any{
+				"AWS:SourceAccount": Account,
+				"AWS:SourceArn":     ReceiptRuleArn,
+			},
+		},
+	}))
+
+	fn.AddPermission(jsii.String("AllowSESInvoke"), &awslambda.Permission{
+		Principal:     awsiam.NewServicePrincipal(jsii.String("ses.amazonaws.com"), nil),
+		Action:        jsii.String("lambda:InvokeFunction"),
+		SourceAccount: jsii.String(Account),
+		SourceArn:     jsii.String(ReceiptRuleArn),
+	})
 }
