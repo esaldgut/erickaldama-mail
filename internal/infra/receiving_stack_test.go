@@ -44,3 +44,30 @@ func TestReceiveLambdaAndDlq(t *testing.T) {
 	})
 	template.ResourceCountIs(jsii.String("AWS::Lambda::EventInvokeConfig"), jsii.Number(1))
 }
+
+func TestReceiptRuleAndBucketPolicy(t *testing.T) {
+	template := synthReceiving(t)
+
+	template.ResourceCountIs(jsii.String("AWS::SES::ReceiptRuleSet"), jsii.Number(1))
+	template.HasResourceProperties(jsii.String("AWS::SES::ReceiptRule"), map[string]any{
+		"Rule": assertions.Match_ObjectLike(&map[string]any{
+			"Enabled":     true,
+			"ScanEnabled": true,
+			"TlsPolicy":   "Require",
+		}),
+	})
+	template.HasResourceProperties(jsii.String("AWS::S3::BucketPolicy"), map[string]any{
+		"PolicyDocument": map[string]any{
+			"Statement": assertions.Match_ArrayWith(&[]any{
+				assertions.Match_ObjectLike(&map[string]any{
+					"Action":    "s3:PutObject",
+					"Principal": map[string]any{"Service": "ses.amazonaws.com"},
+				}),
+			}),
+		},
+	})
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Permission"), map[string]any{
+		"Action":    "lambda:InvokeFunction",
+		"Principal": "ses.amazonaws.com",
+	})
+}
