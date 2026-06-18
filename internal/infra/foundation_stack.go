@@ -76,7 +76,7 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 			Sid:        jsii.String("AllowRegionalReadsUsEast1"),
 			Effect:     awsiam.Effect_ALLOW,
-			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTopics", "events:DescribeRule", "events:ListRules", "events:ListTargetsByRule"),
+			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTopics", "events:DescribeRule", "events:ListRules", "events:ListTargetsByRule", "dynamodb:DescribeTable", "dynamodb:Query", "dynamodb:GetItem", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "sqs:GetQueueAttributes"),
 			Resources:  jsii.Strings("*"),
 			Conditions: usEast1,
 		}),
