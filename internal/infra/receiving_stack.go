@@ -5,14 +5,20 @@ import (
 	"runtime"
 
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudwatch"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscloudwatchactions"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambdadestinations"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsroute53"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awss3"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsses"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssesactions"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awssns"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awssnssubscriptions"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssqs"
+	"github.com/aws/aws-cdk-go/awscdk/v2/customresources"
 	"github.com/aws/aws-cdk-go/awscdklambdagoalpha/v2"
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
@@ -35,8 +41,11 @@ func NewReceivingStack(scope constructs.Construct, id string, props *awscdk.Stac
 	stack := awscdk.NewStack(scope, jsii.String(id), props)
 
 	table := addReceiveTable(stack)
-	fn := addReceiveLambda(stack, table)
+	fn, dlq := addReceiveLambda(stack, table)
 	addReceiptRule(stack, bucket, fn)
+	addRuleSetActivation(stack)
+	addDmarcAndMx(stack)
+	addObservability(stack, dlq)
 
 	for k, v := range sp3Tags() {
 		awscdk.Tags_Of(stack).Add(jsii.String(k), v, nil)
@@ -66,7 +75,7 @@ func addReceiveTable(stack awscdk.Stack) awsdynamodb.Table {
 // addReceiveLambda builds the Go Lambda (provided.al2023, arm64), grants it PutItem-only on the table,
 // and routes async failures to an SSE-SQS DLQ via an OnFailure destination (richer than the legacy
 // DeadLetterQueue prop). The handler reads MAIL_INDEX_TABLE + MAIL_DOMAIN from the environment.
-func addReceiveLambda(stack awscdk.Stack, table awsdynamodb.Table) awslambda.IFunction {
+func addReceiveLambda(stack awscdk.Stack, table awsdynamodb.Table) (awslambda.IFunction, awssqs.Queue) {
 	dlq := awssqs.NewQueue(stack, jsii.String("ReceiveDlq"), &awssqs.QueueProps{
 		QueueName:       jsii.String(ReceiveDlqName),
 		Encryption:      awssqs.QueueEncryption_SQS_MANAGED,
@@ -89,7 +98,7 @@ func addReceiveLambda(stack awscdk.Stack, table awsdynamodb.Table) awslambda.IFu
 	})
 
 	table.GrantWriteData(fn)
-	return fn
+	return fn, dlq
 }
 
 // addReceiptRule creates the catch-all rule set (S3 action first, Lambda action second), grants SES
@@ -141,4 +150,58 @@ func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunc
 		SourceAccount: jsii.String(Account),
 		SourceArn:     jsii.String(ReceiptRuleArn),
 	})
+}
+
+// addRuleSetActivation marks the rule set active via the SES API (no declarative CFN field — C2).
+func addRuleSetActivation(stack awscdk.Stack) {
+	customresources.NewAwsCustomResource(stack, jsii.String("ActivateRuleSet"), &customresources.AwsCustomResourceProps{
+		OnCreate: &customresources.AwsSdkCall{
+			Service:            jsii.String("SES"),
+			Action:             jsii.String("setActiveReceiptRuleSet"),
+			Parameters:         map[string]any{"RuleSetName": ReceiptRuleSetName},
+			PhysicalResourceId: customresources.PhysicalResourceId_Of(jsii.String("erickaldama-inbound-active")),
+		},
+		OnUpdate: &customresources.AwsSdkCall{
+			Service:            jsii.String("SES"),
+			Action:             jsii.String("setActiveReceiptRuleSet"),
+			Parameters:         map[string]any{"RuleSetName": ReceiptRuleSetName},
+			PhysicalResourceId: customresources.PhysicalResourceId_Of(jsii.String("erickaldama-inbound-active")),
+		},
+		Policy: customresources.AwsCustomResourcePolicy_FromSdkCalls(&customresources.SdkCallsPolicyOptions{
+			Resources: customresources.AwsCustomResourcePolicy_ANY_RESOURCE(),
+		}),
+	})
+}
+
+// addDmarcAndMx publishes the apex inbound MX. The DMARC TXT is owned by SendingStack (re-pointed
+// there via DmarcValue) — NOT duplicated here, to avoid two stacks managing one record.
+func addDmarcAndMx(stack awscdk.Stack) {
+	zone := awsroute53.HostedZone_FromHostedZoneAttributes(stack, jsii.String("ImportedZone"),
+		&awsroute53.HostedZoneAttributes{
+			HostedZoneId: jsii.String(HostedZoneID),
+			ZoneName:     jsii.String(DomainName),
+		})
+	awsroute53.NewMxRecord(stack, jsii.String("InboundMx"), &awsroute53.MxRecordProps{
+		Zone: zone,
+		Values: &[]*awsroute53.MxRecordValue{
+			{Priority: jsii.Number(10), HostName: jsii.String(InboundMxHost)},
+		},
+	})
+}
+
+// addObservability alarms on DLQ depth>0 and routes it — plus the SP-2 bounce/complaint topic — to the
+// operator's email. Closes the fan-out SP-2 left open (the topic had no subscriber).
+func addObservability(stack awscdk.Stack, dlq awssqs.Queue) {
+	topic := awssns.Topic_FromTopicArn(stack, jsii.String("BounceTopic"),
+		jsii.String("arn:aws:sns:us-east-1:"+Account+":"+BounceTopicName))
+	topic.AddSubscription(awssnssubscriptions.NewEmailSubscription(jsii.String(OperatorEmail), nil))
+
+	alarm := awscloudwatch.NewAlarm(stack, jsii.String("DlqDepthAlarm"), &awscloudwatch.AlarmProps{
+		Metric:             dlq.MetricApproximateNumberOfMessagesVisible(nil),
+		Threshold:          jsii.Number(0),
+		EvaluationPeriods:  jsii.Number(1),
+		ComparisonOperator: awscloudwatch.ComparisonOperator_GREATER_THAN_THRESHOLD,
+		TreatMissingData:   awscloudwatch.TreatMissingData_NOT_BREACHING,
+	})
+	alarm.AddAlarmAction(awscloudwatchactions.NewSnsAction(topic))
 }

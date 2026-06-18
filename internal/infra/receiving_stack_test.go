@@ -71,3 +71,23 @@ func TestReceiptRuleAndBucketPolicy(t *testing.T) {
 		"Principal": "ses.amazonaws.com",
 	})
 }
+
+func TestActivationDnsAndObservability(t *testing.T) {
+	template := synthReceiving(t)
+
+	template.ResourceCountIs(jsii.String("Custom::AWS"), jsii.Number(1))
+	template.HasResourceProperties(jsii.String("AWS::Route53::RecordSet"), map[string]any{
+		"Type": "MX",
+		"Name": "erickaldama.com.",
+	})
+	template.HasResourceProperties(jsii.String("AWS::CloudWatch::Alarm"), map[string]any{
+		"Namespace":          "AWS/SQS",
+		"MetricName":         "ApproximateNumberOfMessagesVisible",
+		"ComparisonOperator": "GreaterThanThreshold",
+		"Threshold":          0,
+	})
+	template.HasResourceProperties(jsii.String("AWS::SNS::Subscription"), map[string]any{
+		"Protocol": "email",
+		"Endpoint": "esaldgut@gmail.com",
+	})
+}
