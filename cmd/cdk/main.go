@@ -20,6 +20,15 @@ func main() {
 		Env: env(),
 	})
 
+	storage, rawBucket := infra.NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{
+		Env: env(),
+	})
+	_ = storage
+
+	infra.NewReceivingStack(app, "ReceivingStack", &awscdk.StackProps{
+		Env: env(),
+	}, rawBucket)
+
 	app.Synth(nil)
 }
 
