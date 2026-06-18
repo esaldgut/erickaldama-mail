@@ -39,7 +39,7 @@ func TestEmailIdentity(t *testing.T) {
 	template.HasResourceProperties(jsii.String("AWS::Route53::RecordSet"),
 		assertions.Match_ObjectLike(&map[string]interface{}{
 			"Type": "TXT", "Name": "_dmarc.erickaldama.com.",
-			"ResourceRecords": []interface{}{`"v=DMARC1; p=none;"`},
+			"ResourceRecords": []interface{}{`"v=DMARC1; p=none; rua=mailto:dmarc-reports@erickaldama.com"`},
 		}))
 }
 
