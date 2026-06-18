@@ -29,3 +29,18 @@ func TestMailIndexTable(t *testing.T) {
 		}),
 	})
 }
+
+func TestReceiveLambdaAndDlq(t *testing.T) {
+	template := synthReceiving(t)
+
+	template.HasResourceProperties(jsii.String("AWS::Lambda::Function"), map[string]any{
+		"FunctionName":  "mail-receive",
+		"Runtime":       "provided.al2023",
+		"Architectures": []any{"arm64"},
+	})
+	template.HasResourceProperties(jsii.String("AWS::SQS::Queue"), map[string]any{
+		"QueueName":            "mail-receive-dlq",
+		"SqsManagedSseEnabled": true,
+	})
+	template.ResourceCountIs(jsii.String("AWS::Lambda::EventInvokeConfig"), jsii.Number(1))
+}
