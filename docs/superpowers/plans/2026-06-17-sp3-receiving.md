@@ -34,7 +34,7 @@
 **Files:**
 - Modify: `internal/infra/naming.go`
 
-- [ ] **Step 1: Add the constants** to `internal/infra/naming.go`, inside the existing `const (...)` block, after the SP-2 constants:
+- [x] **Step 1: Add the constants** to `internal/infra/naming.go`, inside the existing `const (...)` block, after the SP-2 constants:
 
 ```go
 	// SP-3 — receive pipeline.
@@ -54,18 +54,18 @@
 	ReceiptRuleArn = "arn:aws:ses:us-east-1:367707589526:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
 ```
 
-- [ ] **Step 2: Re-point the DMARC rua** — in `internal/infra/naming.go`, change the existing `DmarcValue`:
+- [x] **Step 2: Re-point the DMARC rua** — in `internal/infra/naming.go`, change the existing `DmarcValue`:
 
 ```go
 	DmarcValue = "v=DMARC1; p=none; rua=mailto:dmarc-reports@erickaldama.com"
 ```
 
-- [ ] **Step 3: Verify it compiles**
+- [x] **Step 3: Verify it compiles**
 
 Run: `go build ./...`
 Expected: exit 0, no output.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/infra/naming.go
@@ -79,7 +79,7 @@ git commit -m "feat(sp-3): add receive-pipeline naming constants + re-point DMAR
 **Files:**
 - Modify: `go.mod`, `go.sum`
 
-- [ ] **Step 1: Add the alpha CDK module + Lambda runtime deps**
+- [x] **Step 1: Add the alpha CDK module + Lambda runtime deps**
 
 Run:
 ```bash
@@ -92,12 +92,12 @@ go get github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue@latest
 ```
 Expected: `go.mod` gains the requires; `go.sum` updated.
 
-- [ ] **Step 2: Verify the build still resolves**
+- [x] **Step 2: Verify the build still resolves**
 
 Run: `go build ./... && go mod verify`
 Expected: exit 0; `all modules verified`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add go.mod go.sum
@@ -112,7 +112,7 @@ git commit -m "feat(sp-3): add awscdklambdagoalpha + aws-lambda-go + sdk-v2 deps
 - Create: `internal/infra/mail_storage_stack.go`
 - Create: `internal/infra/mail_storage_stack_test.go`
 
-- [ ] **Step 1: Write the failing test** — create `internal/infra/mail_storage_stack_test.go`:
+- [x] **Step 1: Write the failing test** — create `internal/infra/mail_storage_stack_test.go`:
 
 ```go
 package infra
@@ -157,12 +157,12 @@ func TestRawBucket(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./internal/infra/ -run TestRawBucket`
 Expected: FAIL — `undefined: NewMailStorageStack`.
 
-- [ ] **Step 3: Implement the stack** — create `internal/infra/mail_storage_stack.go`:
+- [x] **Step 3: Implement the stack** — create `internal/infra/mail_storage_stack.go`:
 
 ```go
 package infra
@@ -215,12 +215,12 @@ func sp3Tags() map[string]*string {
 }
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES**
+- [x] **Step 4: Run the test — verify it PASSES**
 
 Run: `go test ./internal/infra/ -run TestRawBucket`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/infra/mail_storage_stack.go internal/infra/mail_storage_stack_test.go
@@ -235,7 +235,7 @@ git commit -m "feat(sp-3): MailStorageStack — SSE-S3 raw bucket, BLOCK_ALL, IA
 - Create: `internal/infra/receiving_stack.go`
 - Create: `internal/infra/receiving_stack_test.go`
 
-- [ ] **Step 1: Write the failing test** — create `internal/infra/receiving_stack_test.go`:
+- [x] **Step 1: Write the failing test** — create `internal/infra/receiving_stack_test.go`:
 
 ```go
 package infra
@@ -272,12 +272,12 @@ func TestMailIndexTable(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./internal/infra/ -run TestMailIndexTable`
 Expected: FAIL — `undefined: NewReceivingStack`.
 
-- [ ] **Step 3: Implement the skeleton + table** — create `internal/infra/receiving_stack.go`:
+- [x] **Step 3: Implement the skeleton + table** — create `internal/infra/receiving_stack.go`:
 
 ```go
 package infra
@@ -324,12 +324,12 @@ func addReceiveTable(stack awscdk.Stack) awsdynamodb.Table {
 }
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES**
+- [x] **Step 4: Run the test — verify it PASSES**
 
 Run: `go test ./internal/infra/ -run TestMailIndexTable`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/infra/receiving_stack.go internal/infra/receiving_stack_test.go
@@ -344,7 +344,7 @@ git commit -m "feat(sp-3): ReceivingStack skeleton + mail-index DynamoDB table (
 - Create: `cmd/lambda/receive/main.go`
 - Create: `cmd/lambda/receive/main_test.go`
 
-- [ ] **Step 1: Write the failing test** — create `cmd/lambda/receive/main_test.go`:
+- [x] **Step 1: Write the failing test** — create `cmd/lambda/receive/main_test.go`:
 
 ```go
 package main
@@ -393,12 +393,12 @@ func TestItemsForMessage_FiltersDomainRecipients(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./cmd/lambda/receive/ -run TestItemsForMessage`
 Expected: FAIL — `undefined: itemsForMessage`.
 
-- [ ] **Step 3: Implement the handler** — create `cmd/lambda/receive/main.go`:
+- [x] **Step 3: Implement the handler** — create `cmd/lambda/receive/main.go`:
 
 ```go
 // Command receive is the SES inbound Lambda: SES writes the raw MIME to S3 first, then invokes this
@@ -525,12 +525,12 @@ func main() {
 }
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES + vet**
+- [x] **Step 4: Run the test — verify it PASSES + vet**
 
 Run: `go test ./cmd/lambda/receive/ -run TestItemsForMessage && go vet ./cmd/lambda/receive/`
 Expected: PASS; vet exit 0 (confirms the `errors.As` form is correct — `&cfe` where `cfe` is `*ConditionalCheckFailedException`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/lambda/receive/main.go cmd/lambda/receive/main_test.go
@@ -545,7 +545,7 @@ git commit -m "feat(sp-3): receive Lambda — index per domain recipient, idempo
 - Modify: `internal/infra/receiving_stack.go`
 - Modify: `internal/infra/receiving_stack_test.go`
 
-- [ ] **Step 1: Append the failing test** to `internal/infra/receiving_stack_test.go`:
+- [x] **Step 1: Append the failing test** to `internal/infra/receiving_stack_test.go`:
 
 ```go
 func TestReceiveLambdaAndDlq(t *testing.T) {
@@ -567,12 +567,12 @@ func TestReceiveLambdaAndDlq(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./internal/infra/ -run TestReceiveLambdaAndDlq`
 Expected: FAIL — no Lambda/SQS resources yet.
 
-- [ ] **Step 3: Add the Lambda + DLQ helper** — in `internal/infra/receiving_stack.go`, add the imports and the helper, and call it from `NewReceivingStack` (capture the table so the Lambda can be granted PutItem):
+- [x] **Step 3: Add the Lambda + DLQ helper** — in `internal/infra/receiving_stack.go`, add the imports and the helper, and call it from `NewReceivingStack` (capture the table so the Lambda can be granted PutItem):
 
 Add to imports:
 ```go
@@ -621,12 +621,12 @@ func addReceiveLambda(stack awscdk.Stack, table awsdynamodb.Table) awslambda.IFu
 }
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES**
+- [x] **Step 4: Run the test — verify it PASSES**
 
 Run: `go test ./internal/infra/ -run TestReceiveLambdaAndDlq`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/infra/receiving_stack.go internal/infra/receiving_stack_test.go
@@ -641,7 +641,7 @@ git commit -m "feat(sp-3): receive Lambda (GoFunction arm64) + SSE-SQS DLQ via O
 - Modify: `internal/infra/receiving_stack.go`
 - Modify: `internal/infra/receiving_stack_test.go`
 
-- [ ] **Step 1: Append the failing test** to `internal/infra/receiving_stack_test.go`:
+- [x] **Step 1: Append the failing test** to `internal/infra/receiving_stack_test.go`:
 
 ```go
 func TestReceiptRuleAndBucketPolicy(t *testing.T) {
@@ -680,12 +680,12 @@ func TestReceiptRuleAndBucketPolicy(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./internal/infra/ -run TestReceiptRuleAndBucketPolicy`
 Expected: FAIL.
 
-- [ ] **Step 3: Add the receipt-rule helper** — in `internal/infra/receiving_stack.go`, add imports and the helper, and call it from the orchestrator (after the Lambda, passing the bucket + fn):
+- [x] **Step 3: Add the receipt-rule helper** — in `internal/infra/receiving_stack.go`, add imports and the helper, and call it from the orchestrator (after the Lambda, passing the bucket + fn):
 
 Add to imports:
 ```go
@@ -756,17 +756,17 @@ func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunc
 }
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES**
+- [x] **Step 4: Run the test — verify it PASSES**
 
 Run: `go test ./internal/infra/ -run TestReceiptRuleAndBucketPolicy`
 Expected: PASS.
 
-- [ ] **Step 5: Verify the whole stack synthesizes WITHOUT a dependency cycle**
+- [x] **Step 5: Verify the whole stack synthesizes WITHOUT a dependency cycle**
 
 Run: `go test ./internal/infra/ -run TestMailIndexTable` then `go build ./...`
 Expected: PASS / exit 0. (If a cycle appears, the BucketPolicy is in the wrong stack — it must be in ReceivingStack per C1.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/infra/receiving_stack.go internal/infra/receiving_stack_test.go
@@ -781,7 +781,7 @@ git commit -m "feat(sp-3): catch-all receipt rule (S3→Lambda) + SES bucket pol
 - Modify: `internal/infra/receiving_stack.go`
 - Modify: `internal/infra/receiving_stack_test.go`
 
-- [ ] **Step 1: Append the failing test** to `internal/infra/receiving_stack_test.go`:
+- [x] **Step 1: Append the failing test** to `internal/infra/receiving_stack_test.go`:
 
 ```go
 func TestActivationDnsAndObservability(t *testing.T) {
@@ -809,12 +809,12 @@ func TestActivationDnsAndObservability(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./internal/infra/ -run TestActivationDnsAndObservability`
 Expected: FAIL.
 
-- [ ] **Step 3: Add the helpers** — in `internal/infra/receiving_stack.go`, add imports and three helpers, called from the orchestrator. Pass the DLQ out of `addReceiveLambda` so the alarm can reference it (change its return to `(awslambda.IFunction, awssqs.Queue)` and update the call site).
+- [x] **Step 3: Add the helpers** — in `internal/infra/receiving_stack.go`, add imports and three helpers, called from the orchestrator. Pass the DLQ out of `addReceiveLambda` so the alarm can reference it (change its return to `(awslambda.IFunction, awssqs.Queue)` and update the call site).
 
 Add to imports:
 ```go
@@ -894,12 +894,12 @@ func addObservability(stack awscdk.Stack, dlq awssqs.Queue) {
 }
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES**
+- [x] **Step 4: Run the test — verify it PASSES**
 
 Run: `go test ./internal/infra/ -run TestActivationDnsAndObservability`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/infra/receiving_stack.go internal/infra/receiving_stack_test.go
@@ -914,7 +914,7 @@ git commit -m "feat(sp-3): rule-set activation custom resource + apex MX + DLQ a
 - Modify: `internal/infra/foundation_stack.go`
 - Modify: `internal/infra/foundation_stack_test.go`
 
-- [ ] **Step 1: Append the failing test** to `internal/infra/foundation_stack_test.go` (inside `TestReadonlyManagedPolicy`, add a third assertion block):
+- [x] **Step 1: Append the failing test** to `internal/infra/foundation_stack_test.go` (inside `TestReadonlyManagedPolicy`, add a third assertion block):
 
 ```go
 	// SP-3: the agent must be able to read the receive pipeline it deploys (dynamodb/lambda/sqs).
@@ -936,12 +936,12 @@ git commit -m "feat(sp-3): rule-set activation custom resource + apex MX + DLQ a
 	})
 ```
 
-- [ ] **Step 2: Run the test — verify it FAILS**
+- [x] **Step 2: Run the test — verify it FAILS**
 
 Run: `go test ./internal/infra/ -run TestReadonlyManagedPolicy`
 Expected: FAIL — the new actions aren't in the policy yet.
 
-- [ ] **Step 3: Add the reads** — in `internal/infra/foundation_stack.go`, in the `AllowRegionalReadsUsEast1` statement's `Actions`, append (after the existing sns/events reads):
+- [x] **Step 3: Add the reads** — in `internal/infra/foundation_stack.go`, in the `AllowRegionalReadsUsEast1` statement's `Actions`, append (after the existing sns/events reads):
 
 ```go
 				"dynamodb:DescribeTable", "dynamodb:Query", "dynamodb:GetItem",
@@ -949,12 +949,12 @@ Expected: FAIL — the new actions aren't in the policy yet.
 				"sqs:GetQueueAttributes",
 ```
 
-- [ ] **Step 4: Run the test — verify it PASSES**
+- [x] **Step 4: Run the test — verify it PASSES**
 
 Run: `go test ./internal/infra/ -run TestReadonlyManagedPolicy`
 Expected: PASS.
 
-- [ ] **Step 5: Mirror in the JSON + commit**
+- [x] **Step 5: Mirror in the JSON + commit**
 
 In `iam/readonly-policy.json`, append the same six actions to the `AllowRegionalReadsUsEast1` Action array. Then:
 ```bash
@@ -971,7 +971,7 @@ git commit -m "feat(sp-3): extend mail-readonly with dynamodb/lambda/sqs reads f
 - Modify: `cmd/cdk/main.go`
 - Modify: `internal/infra/sending_stack_test.go` (the DMARC assertion now includes the rua)
 
-- [ ] **Step 1: Register both stacks** — in `cmd/cdk/main.go`, after the `SendingStack` registration, add:
+- [x] **Step 1: Register both stacks** — in `cmd/cdk/main.go`, after the `SendingStack` registration, add:
 
 ```go
 	storage, rawBucket := infra.NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{
@@ -984,22 +984,22 @@ git commit -m "feat(sp-3): extend mail-readonly with dynamodb/lambda/sqs reads f
 	}, rawBucket)
 ```
 
-- [ ] **Step 2: Update the SendingStack DMARC assertion** — in `internal/infra/sending_stack_test.go`, the DMARC `TxtRecord` test now expects the rua. Find the DMARC assertion and change the expected value to:
+- [x] **Step 2: Update the SendingStack DMARC assertion** — in `internal/infra/sending_stack_test.go`, the DMARC `TxtRecord` test now expects the rua. Find the DMARC assertion and change the expected value to:
 
 ```go
 		"v=DMARC1; p=none; rua=mailto:dmarc-reports@erickaldama.com",
 ```
 
-- [ ] **Step 3: Run the FULL suite + build**
+- [x] **Step 3: Run the FULL suite + build**
 
 Run: `go build ./... && go vet ./... && go test ./...`
 Expected: all green (infra, lambda, hook, eval). vet clean (confirms the Lambda `errors.As`).
 
-- [ ] **Step 4: Synthesize all stacks (read-only) to confirm no cycle + correct inventory**
+- [x] **Step 4: Synthesize all stacks (read-only) to confirm no cycle + correct inventory**
 
 Run: `gofmt -l . ` (expect empty) then verify the app synthesizes — the agent runs `go run ./cmd/cdk` is NOT needed; the unit tests synth each stack. Confirm `go test ./internal/infra/` exercises `synthReceiving` (which builds MailStorage + Receiving together) with no `DependencyCycle` panic.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/cdk/main.go internal/infra/sending_stack_test.go
@@ -1012,14 +1012,14 @@ git commit -m "feat(sp-3): register MailStorageStack + ReceivingStack; SendingSt
 
 The agent never deploys. The human runs the mutations out-of-band with SSO `AdministratorAccess-367707589526`; the agent prepares exact commands and verifies read-only after.
 
-- [ ] **Step 1: Agent — pre-flight (read-only, hook-allowed)**
+- [x] **Step 1: Agent — pre-flight (read-only, hook-allowed)**
 
 ```bash
 aws sts get-caller-identity --profile AdministratorAccess-367707589526   # expect 367707589526
 go build ./... && go test ./...                                          # all green
 ```
 
-- [ ] **Step 2: HUMAN — deploy in order, paste outputs back**
+- [x] **Step 2: HUMAN — deploy in order, paste outputs back**
 
 ```bash
 cdk deploy MailStorageStack --profile AdministratorAccess-367707589526   # bucket first
@@ -1029,15 +1029,15 @@ cdk deploy FoundationStack  --profile AdministratorAccess-367707589526   # mail-
 ```
 (No exec-policy/boundary change needed — audit finding I3: Go bundling is a zip asset, no new service.)
 
-- [ ] **Step 3: HUMAN — confirm the SNS email subscription**
+- [x] **Step 3: HUMAN — confirm the SNS email subscription**
 
 Click the confirmation link in the email AWS sends to `esaldgut@gmail.com` (or it stays PendingConfirmation).
 
-- [ ] **Step 4: HUMAN — send a real test email**
+- [x] **Step 4: HUMAN — send a real test email**
 
 From any external mailbox (the Mailbox Simulator does NOT exercise receiving), send a message to `test@erickaldama.com`.
 
-- [ ] **Step 5: Agent — verify the pipeline (read-only as mail-readonly)**
+- [x] **Step 5: Agent — verify the pipeline (read-only as mail-readonly)**
 
 ```bash
 # object landed in S3 (bucket-level read; agent cannot read the body — hard-deny on GetObject)
@@ -1057,20 +1057,20 @@ Expected: KeyCount ≥ 1; Count ≥ 1; ApproximateNumberOfMessages = 0; Name = `
 
 ## Task 12: Persist state + EXECUTION-LOG + merge
 
-- [ ] **Step 1: Append the SP-3 record to `docs/superpowers/EXECUTION-LOG.md`** — per-task commit hashes + the live results (deploy, real-email receive verified in S3+DynamoDB, DLQ empty, active rule set) + any findings.
+- [x] **Step 1: Append the SP-3 record to `docs/superpowers/EXECUTION-LOG.md`** — per-task commit hashes + the live results (deploy, real-email receive verified in S3+DynamoDB, DLQ empty, active rule set) + any findings.
 
-- [ ] **Step 2: Mark all plan checkboxes `[x]`** in this file.
+- [x] **Step 2: Mark all plan checkboxes `[x]`** in this file.
 
-- [ ] **Step 3: Update task #17 → completed** via TaskUpdate.
+- [x] **Step 3: Update task #17 → completed** via TaskUpdate.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/EXECUTION-LOG.md docs/superpowers/plans/2026-06-17-sp3-receiving.md
 git commit -m "docs(sp-3): record receive-pipeline deploy + verification (Task 11+12)"
 ```
 
-- [ ] **Step 5: Update `RETOMAR-AQUI.md`** (SP-3 done → SP-4 / CD next) and finish via `superpowers:finishing-a-development-branch`. NOTE: this repo now has a remote with Git Flow + branch protection — the finish is a PR `feature → develop` (CI must be green), NOT a local `--no-ff` merge. Use option 2 (push + PR), let CI pass, merge the PR.
+- [x] **Step 5: Update `RETOMAR-AQUI.md`** (SP-3 done → SP-4 / CD next) and finish via `superpowers:finishing-a-development-branch`. NOTE: this repo now has a remote with Git Flow + branch protection — the finish is a PR `feature → develop` (CI must be green), NOT a local `--no-ff` merge. Use option 2 (push + PR), let CI pass, merge the PR.
 
 ---
 
