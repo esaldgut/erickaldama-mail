@@ -30,7 +30,18 @@
         "sns:ListTopics",
         "events:DescribeRule",
         "events:ListRules",
-        "events:ListTargetsByRule"
+        "events:ListTargetsByRule",
+        "dynamodb:DescribeTable",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "sqs:GetQueueAttributes",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:FilterLogEvents",
+        "logs:GetLogEvents",
+        "sns:GetSubscriptionAttributes"
       ],
       "Resource": "*",
       "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }

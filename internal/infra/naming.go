@@ -36,7 +36,22 @@ const (
 	// none (per-domain or wildcard) — so senders would not deliver reports there. rua is added in
 	// SP-3 pointing at a same-domain mailbox (dmarc-reports@erickaldama.com), which needs no
 	// cross-domain authorization. Verified 2026-06-11 via dig + RFC 7489.
-	DmarcValue = "v=DMARC1; p=none;"
+	DmarcValue = "v=DMARC1; p=none; rua=mailto:dmarc-reports@erickaldama.com"
+
+	// SP-3 — receive pipeline.
+	RawBucketName       = "erickaldama-mail-raw"
+	MailIndexTableName  = "mail-index"
+	ReceiveFunctionName = "mail-receive"
+	ReceiveLambdaRole   = "mail-receive-lambda-role"
+	ReceiptRuleSetName  = "erickaldama-inbound"
+	ReceiptRuleName     = "store-and-index"
+	ReceiveDlqName      = "mail-receive-dlq"
+	InboundObjectPrefix = "inbound/" // SES appends messageId verbatim; trailing slash required.
+	InboundMxHost       = "inbound-smtp.us-east-1.amazonaws.com"
+	DmarcReportsAddress = "dmarc-reports@erickaldama.com"
+	OperatorEmail       = "esaldgut@gmail.com" // publishable / benign
+	// ReceiptRuleArn is the ARN used to scope the SES S3 bucket policy and Lambda invoke permission.
+	ReceiptRuleArn = "arn:aws:ses:us-east-1:367707589526:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
 )
 
 // projectTags are applied to the stack so every resource is attributable.

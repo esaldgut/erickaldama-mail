@@ -269,3 +269,49 @@ del agente debe poder LEER todo lo que el agente despliega — observabilidad es
 ### Estado: SP-2 COMPLETO. Identidad verificada, envío vivo, event path desplegado y verificado.
 Production access (put-account-details) DIFERIDO — paso humano posterior, no parte de SP-2.
 DMARC rua DIFERIDO a SP-3 (Gmail no autoriza rua cross-domain; buzón propio en SP-3).
+
+---
+
+## SP-3 (tarea #17) — Pipeline de recepción: EJECUTADO, desplegado, verificado en vivo (2026-06-17/18)
+
+Flujo igual que SP-0/1/2: worktree aislado sp-3-receiving (rama worktree-sp-3-receiving, base develop) →
+brainstorm → spec (9f3d6f8) → auditoría adversarial 4 agentes + compilación (128e358) → plan (2a728ae) →
+subagent-driven-development (subagente fresco/tarea + spec+quality review + final review APPROVED).
+PRIMERA vez con remoto + Git Flow → cierre vía PR a develop (no merge --no-ff local).
+
+### Arquitectura desplegada (2 stacks nuevos, us-east-1, cuenta 367707589526)
+MailStorageStack: S3 erickaldama-mail-raw (SSE-S3, BLOCK_ALL, EnforceSSL, lifecycle IA@90d, RETAIN).
+ReceivingStack (Approach A — bucket como prop Go): SES v1 receipt rule set erickaldama-inbound (catch-all,
+TlsPolicy REQUIRE, ScanEnabled) con acciones S3[0]→Lambda[1]; bucket policy via NewBucketPolicy EN ReceivingStack
+(evita el ciclo C1); Lambda Go mail-receive (provided.al2023/arm64) que indexa 1 item/recipient de dominio,
+idempotente por CommonHeaders.MessageID; DynamoDB mail-index (on-demand, PK=mailbox#addr SK=ts#msgid);
+SQS DLQ SSE via OnFailure destination + alarma depth>0; custom resource AwsCustomResource → setActiveReceiptRuleSet
+(activa el rule set — no hay campo declarativo C2); apex MX 10 inbound-smtp.us-east-1.amazonaws.com; suscripción
+email del operador al topic SP-2 mail-bounce-complaint (cierra el fan-out). SendingStack: DMARC rua reapuntado a
+dmarc-reports@erickaldama.com (mismo dominio). FoundationStack: mail-readonly +dynamodb/lambda/sqs +logs/sns reads.
+
+### Commits (14 en la rama, todos validados con git -C en el worktree, develop NUNCA contaminada)
+9f3d6f8 spec · 128e358 audit findings · 2a728ae plan · 167b1c2 naming+DMARC · 3e12bec deps ·
+b70d112 MailStorageStack · 230fb2e ReceivingStack+DynamoDB · 7350014 Lambda handler · 1906bc5 Lambda+DLQ ·
+b092db6 fix DMARC assertion · a94f2e2 receipt rule+bucket policy+invoke · df5ea35 activation+MX+alarm+SNS sub ·
+0244ff2 mail-readonly dynamodb/lambda/sqs reads · c567cf8 register stacks · dadc4a8 mail-readonly logs/sns reads.
+
+### Deploy (HUMANO, SSO Admin, 2026-06-18) + verificación (AGENTE, mail-readonly)
+4 stacks CREATE/UPDATE_COMPLETE (~18:22-18:30 UTC), 19 recursos en ReceivingStack, 0 CREATE_FAILED/rollback.
+SIN cambio de exec-policy/boundary (hallazgo I3 confirmado en vivo: el bundling Go es zip-a-S3, NO ECR).
+Smoke con correo REAL (esaldgut@icloud.com → test@erickaldama.com): recibido + indexado end-to-end —
+objeto S3 inbound/nk57geuh..., item DynamoDB PK=mailbox#test@erickaldama.com (from/subject/date/s3Key cruzados),
+DLQ vacía. TlsPolicy REQUIRE NO rebotó a iCloud (entregó sobre TLS). Las 2 semánticas de Message-ID (C3)
+verificadas en vivo: s3Key usa Mail.MessageID, SK usa CommonHeaders.MessageID. Suscripción SNS confirmada
+(SubscriptionsConfirmed=1) tras el clic del operador.
+
+### Hallazgo de proceso (8º del proyecto) — gap de observabilidad del read-only
+Los 3 agentes de diagnóstico post-deploy toparon el mismo muro: mail-readonly no podía leer logs de Lambda
+(logs:*) ni sns:GetSubscriptionAttributes; verificaron por el data-plane (DynamoDB + SES describe). LECCIÓN
+(generaliza el #7 de SP-2): el read-only del agente debe cubrir la OBSERVABILIDAD de lo que despliega —
+incluidos logs y estado de suscripción, las 2 señales para diagnosticar un pipeline de recepción. Fix dadc4a8
+(reads añadidos; redeploy FoundationStack pendiente, no bloquea el merge).
+
+### Estado: SP-3 COMPLETO. Recepción viva y verificada con correo real. Cierre vía PR a develop (CI verde).
+Pendiente menor no-bloqueante: redeploy FoundationStack (humano) para activar los reads logs/sns de mail-readonly.
+DMARC sigue en p=none (progresión a quarantine/reject = decisión operativa posterior con datos reales).
