@@ -44,12 +44,12 @@ with Diagram(
     with Cluster("Route 53 — erickaldama.com"):
         dns = Route53("MX · DKIM ×3\nMAIL FROM · DMARC")
 
-    with Cluster("RECEIVE  ·  us-east-1"):
-        ses_in = SimpleEmailServiceSes("SES\nreceipt rule set")
-        s3 = SimpleStorageServiceS3("S3\nraw MIME (SSE-S3)")
-        parse = Lambda("Lambda\nparse (async)")
-        index = Dynamodb("DynamoDB\nmail-index")
-        dlq = SQS("SQS DLQ")
+    with Cluster("RECEIVE  ·  us-east-1  ·  LIVE"):
+        ses_in = SimpleEmailServiceSes("SES v1\nerickaldama-inbound\ncatch-all · TLS Require")
+        s3 = SimpleStorageServiceS3("S3 erickaldama-mail-raw\nSSE-S3 · Block-All-Public")
+        parse = Lambda("Lambda mail-receive\nGo · al2023 · arm64")
+        index = Dynamodb("DynamoDB mail-index\non-demand")
+        dlq = SQS("SQS mail-receive-dlq\nSSE")
 
     with Cluster("SEND"):
         ses_out = SimpleEmailServiceSes("SES v2\nSendEmail (SigV4)")
