@@ -4,6 +4,10 @@ A serverless email system on AWS — receive and send for the `erickaldama.com` 
 provisioned entirely with **AWS CDK (Go)**, consumed by a terminal-native Go client.
 
 > Region: `us-east-1` · Account: ErickSA (367707589526) · All resources provisioned via AWS CDK Go.
+>
+> **Status (2026-06-18):** the SEND path (SP-2) and the RECEIVE path (SP-3) are **live and verified**
+> — a real inbound message was received, stored in S3, and indexed in DynamoDB end-to-end. The Go TUI
+> client (SP-4, dashed below) is the remaining piece.
 
 ```mermaid
 flowchart TB
@@ -12,27 +16,27 @@ flowchart TB
 
     subgraph dns["🌐 Amazon Route 53 — hosted zone erickaldama.com"]
         direction LR
-        mx["MX → inbound-smtp"]
+        mx["MX → inbound-smtp.us-east-1"]
         dkim["DKIM ×3 CNAME"]
-        mailfrom["MAIL FROM · MX + SPF"]
-        dmarc["DMARC TXT · p=none→reject"]
+        mailfrom["MAIL FROM mail.· MX + SPF"]
+        dmarc["DMARC TXT · p=none<br/>rua → dmarc-reports@ (dogfooded)"]
     end
 
-    subgraph receive["📥 RECEIVE path · us-east-1"]
+    subgraph receive["📥 RECEIVE path · us-east-1 · LIVE"]
         direction TB
-        ses_in["✉️ Amazon SES<br/>receipt rule set"]
-        s3["🪣 Amazon S3<br/>raw MIME · SSE-S3"]
-        lambda["⚡ AWS Lambda<br/>parse · async/Event"]
-        ddb["🗄️ Amazon DynamoDB<br/>mail-index"]
-        dlq["📨 Amazon SQS<br/>DLQ"]
+        ses_in["✉️ Amazon SES v1<br/>rule set erickaldama-inbound<br/>catch-all · TLS Require · scan"]
+        s3["🪣 Amazon S3<br/>erickaldama-mail-raw<br/>SSE-S3 · Block-All-Public"]
+        lambda["⚡ AWS Lambda mail-receive<br/>Go · provided.al2023 · arm64<br/>async/Event"]
+        ddb["🗄️ Amazon DynamoDB<br/>mail-index · on-demand<br/>PK mailbox# · SK ts#"]
+        dlq["📨 Amazon SQS<br/>mail-receive-dlq · SSE"]
     end
 
-    subgraph send["📤 SEND path"]
+    subgraph send["📤 SEND path · LIVE"]
         direction TB
-        ses_out["✉️ Amazon SES v2<br/>SendEmail · SigV4"]
+        ses_out["✉️ Amazon SES v2<br/>SendEmail · SigV4<br/>mail-config · DKIM signed"]
     end
 
-    subgraph client["🖥️ Go CLI / TUI client"]
+    subgraph client["🖥️ Go CLI / TUI client · SP-4 (pending)"]
         direction TB
         tui["Go TUI<br/>aws-sdk-go-v2/sesv2"]
     end
@@ -44,11 +48,11 @@ flowchart TB
 
     sender --> mx
     mx --> ses_in
-    ses_in -->|"① store"| s3
-    ses_in -->|"② notify"| lambda
-    lambda -->|read body| s3
-    lambda -->|"PutItem (idempotent, Message-ID)"| ddb
-    lambda -.->|on-failure| dlq
+    ses_in -->|"① store (S3 action first)"| s3
+    ses_in -->|"② invoke (Lambda action, async)"| lambda
+    lambda -->|confirm object| s3
+    lambda -->|"PutItem per Receipt.Recipient (idempotent by RFC5322 Message-ID)"| ddb
+    lambda -.->|on-failure destination| dlq
 
     tui -->|build MIME| ses_out
     ses_out --> sender
