@@ -22,6 +22,7 @@ type Parsed struct {
 	TextPlain   string
 	TextHTML    string
 	MessageID   string
+	InReplyTo   string
 	References  string
 	Attachments []Attachment
 }
@@ -42,6 +43,7 @@ func Parse(r io.Reader) (*Parsed, error) {
 		TextPlain:  env.Text,
 		TextHTML:   env.HTML,
 		MessageID:  env.GetHeader("Message-ID"),
+		InReplyTo:  env.GetHeader("In-Reply-To"),
 		References: env.GetHeader("References"),
 	}
 	for _, a := range env.Attachments {
