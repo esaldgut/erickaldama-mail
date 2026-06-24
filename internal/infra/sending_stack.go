@@ -169,6 +169,13 @@ func addSendIam(stack awscdk.Stack) {
 		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String(Account)),
 		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
 	})
+
+	// SP-4 — mail-sender user: attaches the same mail-send policy directly for long-lived
+	// access key usage by the TUI client. Key generated out-of-band by the human after deploy.
+	awsiam.NewUser(stack, jsii.String("MailSenderUser"), &awsiam.UserProps{
+		UserName:        jsii.String(SenderUserName),
+		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
+	})
 }
 
 // sp2Tags mirrors projectTags but marks Subproject=SP-2.

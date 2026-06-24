@@ -52,6 +52,10 @@ const (
 	OperatorEmail       = "esaldgut@gmail.com" // publishable / benign
 	// ReceiptRuleArn is the ARN used to scope the SES S3 bucket policy and Lambda invoke permission.
 	ReceiptRuleArn = "arn:aws:ses:us-east-1:367707589526:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
+
+	// SP-4 — client principals (long-lived access keys generated out-of-band; never in CDK/git).
+	ClientReadUserName = "mail-client-read" // dynamodb:Query/GetItem on mail-index + s3:GetObject on inbound/*
+	SenderUserName     = "mail-sender"      // attaches mail-send policy directly (SendRawEmail)
 )
 
 // projectTags are applied to the stack so every resource is attributable.
