@@ -27,6 +27,10 @@ const (
 	BounceRuleName       = "mail-ses-bounce-complaint"
 	// IdentityArn is the SES identity ARN used to scope the send policy.
 	IdentityArn = "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com"
+	// ConfigSetArn is the SES configuration-set ARN. mail-config is the identity's default config set, so SES
+	// applies it to every send — the send policy must authorize SendRawEmail on BOTH identity AND config-set
+	// (deploy finding: a send via a default config set is AccessDenied without this resource).
+	ConfigSetArn = "arn:aws:ses:us-east-1:367707589526:configuration-set/mail-config"
 	// HostedZoneID is the SP-1 hosted zone for erickaldama.com (CfnOutput of FoundationStack).
 	// Imported by SP-2+ stacks via HostedZone_FromHostedZoneAttributes.
 	HostedZoneID = "Z023932911KA6S98A6ZRW"

@@ -154,9 +154,11 @@ func addSendIam(stack awscdk.Stack) {
 			ManagedPolicyName: jsii.String(SendPolicyName),
 			Statements: &[]awsiam.PolicyStatement{
 				awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-					Effect:    awsiam.Effect_ALLOW,
-					Actions:   jsii.Strings("ses:SendEmail", "ses:SendRawEmail"),
-					Resources: jsii.Strings(IdentityArn),
+					Effect:  awsiam.Effect_ALLOW,
+					Actions: jsii.Strings("ses:SendEmail", "ses:SendRawEmail"),
+					// Both the identity AND the default config set: SES applies mail-config to every send, so a
+					// send is authorized only when the policy covers the config-set resource too (deploy finding).
+					Resources: jsii.Strings(IdentityArn, ConfigSetArn),
 					Conditions: &map[string]interface{}{
 						"StringEquals": map[string]interface{}{"ses:FromAddress": FromAddress},
 					},
