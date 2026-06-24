@@ -8,8 +8,14 @@ GitHub-native version lives in ../architecture.md (Mermaid). Both are generated
 from code; this one renders real AWS service icons.
 
 Run:
-    python3 architecture_icons.py          # → erickaldama_email_architecture.png
+    cd docs/diagrams && .venv/bin/python architecture_icons.py
+        → erickaldama_email_architecture.png
 Requires: graphviz (system) + `pip install diagrams`.
+
+SP-4 (2026-06-24 LIVE): added Go terminal client cluster with dual AI backend
+(Ollama local qwen3:32b / Claude API claude-opus-4-8) and two disjoint IAM users
+(mail-client-read, mail-sender). PNG not regenerated automatically — run the
+command above after activating the venv.
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -20,8 +26,10 @@ from diagrams.aws.database import Dynamodb
 from diagrams.aws.integration import SQS, SimpleNotificationServiceSns
 from diagrams.aws.network import Route53
 from diagrams.aws.management import Cloudwatch
+from diagrams.aws.security import IAM
 from diagrams.aws.general import User
 from diagrams.onprem.client import Client
+from diagrams.onprem.compute import Server
 
 graph_attr = {
     "fontsize": "16",
@@ -39,7 +47,6 @@ with Diagram(
 ):
     sender = User("External sender")
     operator = Client("Operator\n(nvim + tmux)")
-    tui = Client("Go TUI client\n(read + send)")
 
     with Cluster("Route 53 — erickaldama.com"):
         dns = Route53("MX · DKIM ×3\nMAIL FROM · DMARC")
@@ -53,6 +60,13 @@ with Diagram(
 
     with Cluster("SEND"):
         ses_out = SimpleEmailServiceSes("SES v2\nSendEmail (SigV4)")
+
+    with Cluster("Go terminal client · SP-4 · LIVE"):
+        tui = Client("cmd/mail (CLI Cobra)\ncmd/mail-tui (TUI Bubble Tea\nVim-motions)")
+        read_iam = IAM("mail-client-read\nQuery mail-index\nGetObject erickaldama-mail-raw")
+        send_iam = IAM("mail-sender\nSendRawEmail scoped")
+        ollama = Server("Ollama local\nqwen3:32b\n(default · on-device)")
+        claude_api = Client("Claude API\nclaude-opus-4-8\n(opt-in · explicit warning)")
 
     with Cluster("Observability"):
         cw = Cloudwatch("CloudWatch\nbounce/complaint/DLQ")
@@ -69,14 +83,20 @@ with Diagram(
     # Operator drives the TUI
     operator >> Edge(label="drives") >> tui
 
-    # TUI READS mail (no IMAP — own client over the backend)
-    tui >> Edge(label="① list/threads (Query)") >> index
-    tui >> Edge(label="② open msg (GetObject)", style="dashed") >> s3
+    # TUI uses IAM credentials — read path
+    tui >> Edge(label="mail-client-read") >> read_iam
+    read_iam >> Edge(label="① list/threads (Query)") >> index
+    read_iam >> Edge(label="② open msg (GetObject)", style="dashed") >> s3
 
-    # TUI SENDS mail
-    tui >> Edge(label="③ send (build MIME)") >> ses_out
+    # TUI uses IAM credentials — send path
+    tui >> Edge(label="mail-sender") >> send_iam
+    send_iam >> Edge(label="③ send (build MIME · SigV4)") >> ses_out
     ses_out >> Edge(label="DKIM/SPF/DMARC", style="dashed") >> dns
     ses_out >> Edge(label="to recipient") >> sender
+
+    # AI dual-backend (read-only agent-loop, no send tool)
+    tui >> Edge(label="ai subcommand\n(default · on-device)", style="dashed") >> ollama
+    tui >> Edge(label="ai subcommand\n(opt-in · crosses net)", style="dashed") >> claude_api
 
     # Observability
     ses_out >> Edge(label="events", style="dashed") >> cw
