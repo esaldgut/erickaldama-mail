@@ -36,6 +36,7 @@ Datos extraídos del sistema y de AWS el 2026-06-24, no de supuestos:
 |---|---|
 | Go toolchain | `go 1.26.4` (go.mod del repo) |
 | AWS SDK Go v2 ya en go.sum | `aws-sdk-go-v2 v1.42.0`, `service/dynamodb v1.59.0`, `service/s3 v1.104.0`, `config v1.32.25`, `credentials v1.19.24`, `feature/dynamodb/attributevalue v1.20.48` (indirectas hoy → directas en SP-4) |
+| Deps SES a AÑADIR (binario nuevo, NO hereda del lambda; A7) | `service/ses v1.35.2` (envío SendRawEmail) + `service/sesv2 v1.62.4` (DetectSandbox vía GetAccount). Versiones verificadas vivas 2026-06-24 |
 | Schema `mail-index` (fuente de verdad) | `cmd/lambda/receive/main.go`: `PK="mailbox#<addr-lower>"`, `SK="ts#<RFC3339-UTC>#<RFC5322-MessageID>"`, attrs `messageId, s3Key, from, subject, date` |
 | S3 key del cuerpo | `inbound/<Mail.MessageID>` (SES id). El cuerpo MIME crudo NO está en DynamoDB |
 | `mail-readonly` (gobernanza) | User `arn:aws:iam::367707589526:user/mail-readonly`, profile en `~/.aws/config`. **DENIEGA explícitamente `s3:GetObject`** (Sid `HardDenyMutationReconAndCredentialMinting`, `foundation_stack.go:90-95`) + `ses:Send*`/`sts:AssumeRole*`/`iam:*`. Diseñado como verificador puro: lee **metadata**, NO contenido. **NO sirve como principal de lectura del cliente** (el cliente debe leer cuerpos S3) |
@@ -92,24 +93,33 @@ consumen por igual. Ningún frontend reimplementa lógica; ninguno acopla el dom
 
 **`Reader`** (profile `mail-client-read` — NO `mail-readonly`, que deniega `s3:GetObject`):
 - `List(ctx, mailbox string, n int, cursor PageToken) ([]Header, PageToken, error)` — DynamoDB Query:
-  `PK="mailbox#<addr>"`, `ScanIndexForward=false` (SK descendente = recientes primero), `Limit=n`,
-  paginación por `LastEvaluatedKey`. NO toca S3.
-- `Open(ctx, s3Key string) (io.ReadCloser, error)` — S3 GetObject del MIME crudo (sin parsear).
+  `KeyConditionExpression "PK = :pk"`, `ScanIndexForward: aws.Bool(false)` (es `*bool`; SK descendente = recientes
+  primero), `Limit *int32`, paginación por `LastEvaluatedKey`. Mapea con `attributevalue.UnmarshalListOfMaps`. NO toca S3.
+- `Open(ctx, s3Key string) (io.ReadCloser, error)` — S3 GetObject del MIME crudo (sin parsear). **El consumidor
+  (`message.Parse`) DEBE `defer body.Close()`** — no es explícito en la doc del SDK pero es obligatorio (leak si la TUI abre muchos, A3).
 
 `Header` espeja el schema exacto del handler (`PK,SK,messageId,s3Key,from,subject,date`).
 
 **`Sender`** (profile `mail-sender`):
-- `Send(ctx, raw []byte) (messageID string, error)` — SES `SendRawEmail` con el MIME que arma
-  `message.Build`. Detecta sandbox y traduce el rechazo a error accionable (ver §6).
+- `Send(ctx, raw []byte) (messageID string, error)` — SES v1 **`SendRawEmail`** (`service/ses`, NO sesv2 — sesv2 no
+  tiene SendRawEmail; A1): `SendRawEmailInput{RawMessage:&types.RawMessage{Data: raw}}`. El MIME lo arma `message.Build`.
+- `DetectSandbox(ctx) (bool, error)` — **vive aquí o en awsconf; usa `sesv2.GetAccount`** (`ProductionAccessEnabled`
+  NO existe en SES v1; A5). Lee `out.ProductionAccessEnabled == false`. Requiere dep `service/sesv2` solo para esto.
 
 Ambos clients AWS detrás de **interfaces mínimas** (las ops que se usan) para testear con fakes.
 
 ### 4.2 `internal/message/` — MIME (puro, sin red, máxima densidad de tests)
 
-- **Parse** (`github.com/jhillyerd/enmime`): MIME → `Parsed{Headers, TextPlain, TextHTML, Attachments []AttachmentMeta}`. Decodifica quoted-printable/base64/charsets.
-- **Render** (`github.com/charmbracelet/glamour`): `TextHTML → markdown enriquecido` para la TUI. El CLI usa `TextPlain`.
-- **Build**: MIME multipart saliente (`net/mail` + `mime/multipart`). Soporta adjuntos salientes. Genera `Message-ID` propio.
-- **ReplyHeaders** (función pura): dado el original, devuelve `{InReplyTo, References, Subject:"Re: …"}` para threading RFC-correcto + cita del original.
+- **Parse** (`github.com/jhillyerd/enmime/v2` — v2, go directive 1.25.0, compatible con Go 1.26): `enmime.ReadEnvelope(r)` → `Parsed{Headers, TextPlain (env.Text), TextHTML (env.HTML), Attachments (env.Attachments []*Part)}`. Decodifica quoted-printable/base64/charsets automáticamente (verificado C1).
+- **Render** (C4 — corrección): glamour renderiza **markdown, NO HTML**. Pipeline TUI enriquecido:
+  `env.HTML → html-to-markdown (github.com/JohannesKaufmann/html-to-markdown) → glamour.Render → ANSI`.
+  El CLI usa `env.Text` directo (enmime ya hace HTML→texto-plano cuando solo hay HTML; sin lib extra para el CLI).
+- **Build** (C2/C6 — corrección): construir saliente con **`enmime.Builder()`** (mismo paquete), NO MIME a mano.
+  `Builder().From().To().Subject().Text().AddFileAttachment().Header("In-Reply-To",…).Header("References",…).Header("Message-ID",…).Build()`.
+  **Message-ID se genera a mano** (ni stdlib ni el Builder lo crean): `<unixnano.randhex@erickaldama.com>`, pasado vía `Header()`.
+- **ReplyHeaders** (función pura): dado el **mensaje PARSEADO del original** (no solo el `Header` de DynamoDB — el
+  `References` completo del hilo vive en los headers del MIME en S3, C3), devuelve `{InReplyTo: <Message-ID del padre>,
+  References: <References-del-padre> + <Message-ID-del-padre>, Subject:"Re: …"}` para threading RFC 5322 §3.6.4 + cita.
 
 ### 4.3 `internal/awsconf/` — credenciales y entorno
 
@@ -127,15 +137,28 @@ type LLMProvider interface {
     Name() string // "ollama:llama3.2" | "claude:claude-opus-4-8"
 }
 ```
-- **`ollama/`** → endpoint `http://localhost:11434/api/chat`, tool-calling nativo Ollama (JSON propio). DEFAULT seguro: el cuerpo del correo nunca sale del Mac.
-- **`claude/`** → SDK `anthropic-sdk-go`, modelo `claude-opus-4-8`, adaptive thinking. Opt-in explícito.
+- **`ollama/`** → HTTP directo a `http://localhost:11434/api/chat` (cliente `net/http` propio; no hay SDK Go oficial necesario). DEFAULT seguro: el cuerpo del correo nunca sale del Mac.
+  - **Forma verificada de la API (auditoría B3)**: tools con wrapper `{"type":"function","function":{name,description,parameters}}`; `stream:false` explícito (default es streaming); en la respuesta `message.tool_calls[].function.arguments` es un **objeto JSON** (deserializar a `map[string]any`/`json.RawMessage`, NUNCA como string); el tool result se devuelve como `{"role":"tool","tool_name":<name>,"content":<string>}` — **Ollama NO usa tool_call_id**, correlaciona por `tool_name`+orden.
+- **`claude/`** → SDK `github.com/anthropics/anthropic-sdk-go` (pin `v1.51.x`), modelo `claude-opus-4-8`, adaptive thinking. Opt-in explícito.
+  - **Verificado (B1/B2)**: `Tools` es `[]anthropic.ToolUnionParam` (envolver cada tool con `OfTool`), no `[]ToolParam`. Adaptive vía `ThinkingConfigParamUnion{OfAdaptive:…}` (sin helper). **NO** setear `Temperature`/`TopP`/`budget_tokens` (Opus 4.8 → 400). Key desde `ANTHROPIC_API_KEY` o `option.WithAPIKey(keyFromKeychain)`.
+
+**Modelos por capacidad (auditoría B4 — corrección crítica):** `llama3.2` NO figura en la lista oficial de
+tool-support de Ollama y arrastra bugs de fiabilidad de tool-calling (issues #7824/#8337/#9947). Por tanto:
+- **Summarize/Draft** (sin tools) → cualquier modelo local, default `llama3.2` (ya descargado).
+- **Agent** (tool-use) → modelo con tool-calling confiable: **`qwen2.5` (7B/14B)** o **`llama3.1` (8B)** — el M4 Pro 48GB
+  lo soporta sobrado. Es un cambio de constante de modelo (el `Name()` neutral ya lo permite), no de arquitectura.
+  El cliente verifica que el modelo de Agent esté descargado al arrancar; si no, lo indica.
 
 **Agent loop propio** (no `BetaToolRunner` del SDK — para que ambos backends compartan loop):
 ```
-build prompt → provider.Chat(msgs, tools) → {texto final → return | tool-calls → ejecuta → append → loop}
+build prompt → provider.Chat(msgs, tools) → {texto final → return | tool-calls → ejecuta → acumula → loop}
 ```
-Con tope de iteraciones (anti-runaway), idéntico para ambos providers; cada provider solo traduce su
-formato a/desde los tipos neutrales `ToolSpec`/`ToolCall`.
+Con tope de iteraciones (anti-runaway), idéntico para ambos providers; cada provider traduce a/desde los tipos
+neutrales `ToolSpec`/`ToolCall`. **Impedancia manejada (B5):** `ToolCall` lleva `ID string` (opcional) + `Name string`
+— el adaptador Anthropic correlaciona por `ID` (devuelve `tool_result` con el `tool_use_id` exacto, o 400), el de
+Ollama por `Name`+orden. Reglas Anthropic que el loop respeta: (a) TODOS los `tool_result` de parallel-tool-use van en
+**un solo** user message; (b) chequear `StopReason` (`"tool_use"` continúa, `"refusal"` se maneja sin crashear índice).
+No-streaming en ambos backends para v0.1 (B7; si `max_tokens` crece >~16k, streamear el lado Claude).
 
 **Tres capacidades:**
 1. `Summarize(ctx, parsed)` → resumen + acción requerida + urgencia (una vuelta, sin tools).
@@ -182,7 +205,7 @@ Disciplina `avoid-string-match-error-silencing`: errores tipados del SDK, no mat
 
 | Caso | Manejo |
 |---|---|
-| SES sandbox rechaza destinatario | error tipado → mensaje accionable: "SES en sandbox: verifica el destinatario o usa el Mailbox Simulator (success@simulator.amazonses.com)" |
+| SES sandbox rechaza destinatario | **AWS NO tipa este caso** (A6): llega como `*types.MessageRejected` genérico — NO existe `RecipientNotVerified` (el tipo `FromEmailAddressNotVerifiedException` es para el REMITENTE). Manejo compatible con `avoid-string-match-error-silencing`: `errors.As(err, new(*types.MessageRejected))` clasifica "envío rechazado" (tipado); para inferir el sub-motivo "sandbox" NO se string-matchea el mensaje, se combina con `DetectSandbox()` previo (si sandbox + MessageRejected → presentar como causa probable: "SES en sandbox: verifica el destinatario o usa el Mailbox Simulator success@simulator.amazonses.com"). El `mr.ErrorMessage()` se muestra como **contexto** al usuario, nunca como predicado de control de flujo. Límite del provider declarado (verify-provider-api-supports-property). |
 | Buzón vacío / mensaje no existe | estado limpio, no error |
 | S3 GetObject NoSuchKey | error claro con el s3Key (índice apunta a objeto ausente) |
 | Ollama `:11434` caído | detectar → ofrecer arrancar o degradar: "backend AI no disponible; lectura/envío siguen". El AI nunca bloquea el correo |
@@ -273,7 +296,7 @@ docs/SP-4-*.md, README, runbook
 1. `go build ./... && go test ./...` verde (fixtures MIME + fake LLM + fake AWS).
 2. `mail ls/read/send/reply` funcionan contra recursos reales (lectura `mail-client-read`, envío `mail-sender` al Mailbox Simulator).
 3. TUI navegable con Vim-motions, render HTML, composer con confirmación de envío.
-4. AI: `summarize` + `draft` + `agent` con **Ollama local** (`llama3.2`); backend Claude por flag.
+4. AI: `summarize` + `draft` con **Ollama `llama3.2`**; `agent` (tool-use) con **`qwen2.5` o `llama3.1`** (B4 — llama3.2 no es confiable para tools); backend Claude (`claude-opus-4-8`) por flag.
 5. Smoke end-to-end real: enviar a `test@erickaldama.com` con el cliente → aparece en `mail ls` (cierra SP-2↔SP-3↔SP-4).
 6. Runbook + README publicables (arquitectura, doble backend AI, bindings tmux/nvim sugeridos, seguridad). Diagrama actualizado.
 7. Gate NDA sobre todo el output (repo público).
