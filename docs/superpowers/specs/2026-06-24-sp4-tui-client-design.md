@@ -142,12 +142,22 @@ type LLMProvider interface {
 - **`claude/`** → SDK `github.com/anthropics/anthropic-sdk-go` (pin `v1.51.x`), modelo `claude-opus-4-8`, adaptive thinking. Opt-in explícito.
   - **Verificado (B1/B2)**: `Tools` es `[]anthropic.ToolUnionParam` (envolver cada tool con `OfTool`), no `[]ToolParam`. Adaptive vía `ThinkingConfigParamUnion{OfAdaptive:…}` (sin helper). **NO** setear `Temperature`/`TopP`/`budget_tokens` (Opus 4.8 → 400). Key desde `ANTHROPIC_API_KEY` o `option.WithAPIKey(keyFromKeychain)`.
 
-**Modelos por capacidad (auditoría B4 — corrección crítica):** `llama3.2` NO figura en la lista oficial de
-tool-support de Ollama y arrastra bugs de fiabilidad de tool-calling (issues #7824/#8337/#9947). Por tanto:
+**Modelos por capacidad (auditoría B4 + investigación DeepSeek 2026-06-24 — corrección crítica):** `llama3.2` NO
+figura en la lista oficial de tool-support de Ollama y arrastra bugs de fiabilidad de tool-calling (#7824/#8337/#9947).
+Por tanto:
 - **Summarize/Draft** (sin tools) → cualquier modelo local, default `llama3.2` (ya descargado).
-- **Agent** (tool-use) → modelo con tool-calling confiable: **`qwen2.5` (7B/14B)** o **`llama3.1` (8B)** — el M4 Pro 48GB
-  lo soporta sobrado. Es un cambio de constante de modelo (el `Name()` neutral ya lo permite), no de arquitectura.
+- **Agent** (tool-use) → **`qwen3:32b` local (20GB, cabe holgado en 48GB)** — Ollama lo usa como SU PROPIA referencia
+  de tool-calling y lo describe como agéntico (`docs.ollama.com/capabilities/tool-calling`, `ollama.com/library/qwen3`).
+  Alternativa estable: `qwen2.5:32b`. NO usar `deepseek-r1:32b` para tools (gap de propagación de template #10935; es
+  destilación, no R1 nativo). Cambio de constante de modelo (el `Name()` neutral lo permite), no de arquitectura.
   El cliente verifica que el modelo de Agent esté descargado al arrancar; si no, lo indica.
+
+**Backends `:cloud` (incl. `deepseek-v4-pro:cloud`) — DESCARTADOS para v0.1 (investigación verificada):** los modelos
+`:cloud` de Ollama corren en datacenter remoto (`docs.ollama.com/cloud` verbatim: "offloaded to Ollama's cloud service")
+→ el cuerpo del correo CRUZA la red bajo cuenta identificada. Ollama afirma no-train/no-retain (`ollama.com/privacy`),
+PERO sin DPA firmado, sin SOC2, y sin respuesta oficial a si los requests `:cloud` se enrutan a APIs de terceros (issue
+#14279 cerrado sin respuesta de maintainer). **No NDA-safe sin DPA verificable.** Posible provider extra en v0.2 SOLO si
+se obtiene DPA — la interfaz `LLMProvider` lo admite sin refactor (sería categoría "cruza red → opt-in con aviso", junto a Claude).
 
 **Agent loop propio** (no `BetaToolRunner` del SDK — para que ambos backends compartan loop):
 ```
@@ -296,7 +306,7 @@ docs/SP-4-*.md, README, runbook
 1. `go build ./... && go test ./...` verde (fixtures MIME + fake LLM + fake AWS).
 2. `mail ls/read/send/reply` funcionan contra recursos reales (lectura `mail-client-read`, envío `mail-sender` al Mailbox Simulator).
 3. TUI navegable con Vim-motions, render HTML, composer con confirmación de envío.
-4. AI: `summarize` + `draft` con **Ollama `llama3.2`**; `agent` (tool-use) con **`qwen2.5` o `llama3.1`** (B4 — llama3.2 no es confiable para tools); backend Claude (`claude-opus-4-8`) por flag.
+4. AI: `summarize` + `draft` con **Ollama `llama3.2`**; `agent` (tool-use) con **`qwen3:32b` local** (B4 — llama3.2 no es confiable para tools; qwen3 es la referencia de tool-calling de Ollama); backend Claude (`claude-opus-4-8`) por flag. Backends `:cloud` descartados (no NDA-safe sin DPA).
 5. Smoke end-to-end real: enviar a `test@erickaldama.com` con el cliente → aparece en `mail ls` (cierra SP-2↔SP-3↔SP-4).
 6. Runbook + README publicables (arquitectura, doble backend AI, bindings tmux/nvim sugeridos, seguridad). Diagrama actualizado.
 7. Gate NDA sobre todo el output (repo público).
@@ -310,6 +320,7 @@ docs/SP-4-*.md, README, runbook
 - Sin múltiples cuentas/dominios (solo erickaldama.com).
 - Sin IMAP/POP (el backend es DynamoDB+S3, no un mailserver clásico).
 - Sin auto-arranque del daemon Ollama como servicio (se detecta/ofrece arrancar, no se gestiona).
+- Sin backends `:cloud` de Ollama (deepseek-v4-pro:cloud etc.) — no NDA-safe sin DPA verificable; diferido a v0.2 condicionado a DPA.
 - Production access SES (sigue en sandbox; el cliente lo maneja con gracia, no lo resuelve).
 
 ---
