@@ -28,6 +28,14 @@ spf13/cobra v1.10.2 · Ollama HTTP (net/http) a localhost:11434 · CDK-Go v2.258
 - **Cero secretos en binario/logs/git:** AWS desde profiles `~/.aws`, API key Claude desde `ANTHROPIC_API_KEY`/Keychain.
 - **Versiones de deps verificadas vivas 2026-06-24** (`go list -m -versions`). Pinear las del Tech Stack en go.mod.
 - **subagent-driven en worktree:** todo commit con `git -C "$WT"`, validar rama ≠ develop/main, validar cada SHA.
+- **PRECONDICIÓN DE BASE (verificar antes de Task 0):** el worktree DEBE estar sobre un develop con SP-3 presente.
+  Verificar: `grep MailIndexTableName internal/infra/naming.go` resuelve Y `ls cmd/lambda/receive/main.go` existe Y
+  `ls internal/infra/mail_storage_stack.go receiving_stack.go` existen. (Ya corregido vía rebase sobre `d9c5a0b` el 2026-06-24.)
+- **Logging:** el cliente es CLI/TUI → salida de usuario a stdout, errores/avisos a **stderr** (NO stdout, para no contaminar `--json`).
+  NO se usa `slog` ni se loguean cuerpos de correo a archivo en v0.1 (no hay sink persistente → "secretos en logs" es N/A by-design).
+- **Redacción NDA previa (defensa en profundidad):** todo cuerpo de correo que vaya a un backend que CRUZA RED (Claude)
+  pasa antes por `redact.Redact` (determinista: emails de terceros, tokens AKIA/ghp_/github_pat_/xox). Ollama local no lo requiere
+  (no sale del Mac) pero se aplica igual por simetría. Implementado en Task 6b.
 
 **Schema `mail-index` (fuente de verdad, de `cmd/lambda/receive/main.go`):**
 `PK="mailbox#<addr-lower>"`, `SK="ts#<RFC3339-UTC>#<RFC5322-MessageID>"`, attrs `messageId, s3Key, from, subject, date`.
@@ -181,12 +189,12 @@ Expected: PASS (incl. los asserts SP-1/2/3 existentes).
 
 - [ ] **Step 10: synth + diff read-only (permitidos por el hook)**
 
-Run:
+Run (los 4 stacks reales del repo — Foundation, Sending, MailStorage, Receiving — para que el canario cubra todo):
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk synth FoundationStack SendingStack >/dev/null && echo "synth OK"
-AWS_PROFILE=AdministratorAccess-367707589526 cdk diff FoundationStack SendingStack 2>&1 | grep -A3 "AWS::IAM::User"
+AWS_PROFILE=AdministratorAccess-367707589526 cdk synth --all >/dev/null && echo "synth OK"
+AWS_PROFILE=AdministratorAccess-367707589526 cdk diff --all 2>&1 | grep -B2 -A3 "AWS::IAM::User"
 ```
-Expected: synth OK; diff muestra `+ AWS::IAM::User` para mail-client-read (FoundationStack) y mail-sender (SendingStack), nada más fuera de esos users+policies. Canario: NO debe tocar HostedZone, identity, rule, ni la mailSendPolicy existente.
+Expected: synth OK; el diff muestra exactamente `+ AWS::IAM::User` para mail-client-read (FoundationStack) y mail-sender (SendingStack), más sus dos managed policies. Canario: MailStorageStack y ReceivingStack NO cambian (los users referencian sus recursos por ARN-string, no por import cross-stack); NO se toca HostedZone, identity, rule, ni la mailSendPolicy existente.
 
 - [ ] **Step 11: Commit del código CDK**
 
@@ -373,6 +381,7 @@ package message
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -395,7 +404,7 @@ func TestParsePlain(t *testing.T) {
 	if p.Subject != "Hola plano" || p.From != "alice@example.com" {
 		t.Fatalf("headers: %+v", p)
 	}
-	if p.TextPlain == "" || !contains(p.TextPlain, "café") {
+	if p.TextPlain == "" || !strings.Contains(p.TextPlain, "café") {
 		t.Fatalf("plain text not decoded: %q", p.TextPlain)
 	}
 	if p.MessageID != "<plain-001@example.com>" {
@@ -405,7 +414,7 @@ func TestParsePlain(t *testing.T) {
 
 func TestParseHTMLWithReferences(t *testing.T) {
 	p := parseFixture(t, "html.eml")
-	if p.TextHTML == "" || !contains(p.TextHTML, "<b>mundo</b>") {
+	if p.TextHTML == "" || !strings.Contains(p.TextHTML, "<b>mundo</b>") {
 		t.Fatalf("html missing: %q", p.TextHTML)
 	}
 	if p.References != "<thread-root@example.com>" {
@@ -419,13 +428,6 @@ func TestParseAttachment(t *testing.T) {
 		t.Fatalf("attachments: %+v", p.Attachments)
 	}
 }
-
-func contains(s, sub string) bool { return len(s) >= len(sub) && (func() bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub { return true }
-	}
-	return false
-})() }
 ```
 
 - [ ] **Step 3: Run → FAIL** (Parse no existe)
@@ -725,12 +727,42 @@ func RenderRich(p *Parsed) (string, error) {
 ```
 Nota: verificar firmas vivas (`htmltomd.NewConverter(domain, useReadability, opts).ConvertString(html)`, `glamour.Render(in, style string) (string, error)`) con `go doc`; ajustar si difieren.
 
-- [ ] **Step 8: Run → PASS**
+- [ ] **Step 8: Test round-trip Build→Parse (el más barato y de mayor valor — spec §10)**
+
+Verifica que el MIME que `Build` produce es parseable y que los headers de threading sobreviven. Añadir a `build_test.go`:
+```go
+func TestBuildRoundTrip(t *testing.T) {
+	raw, err := Build(BuildOpts{
+		From: "erick@erickaldama.com", To: "bob@example.com", Subject: "Re: Hola",
+		Body: "cuerpo de prueba", InReplyTo: "<html-001@example.com>",
+		References: "<thread-root@example.com> <html-001@example.com>", MessageID: "<own-1@erickaldama.com>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Parse(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("built MIME not parseable: %v", err)
+	}
+	if p.Subject != "Re: Hola" || p.MessageID != "<own-1@erickaldama.com>" {
+		t.Fatalf("headers lost in round-trip: %+v", p)
+	}
+	if p.References != "<thread-root@example.com> <html-001@example.com>" {
+		t.Fatalf("references chain lost: %q", p.References)
+	}
+	if !strings.Contains(p.TextPlain, "cuerpo de prueba") {
+		t.Fatalf("body lost: %q", p.TextPlain)
+	}
+}
+```
+(añadir `"bytes"` y `"strings"` al import de `build_test.go`.)
+
+- [ ] **Step 9: Run → PASS**
 
 Run: `go test ./internal/message/`
-Expected: PASS (todo el paquete message).
+Expected: PASS (todo el paquete message, incl. round-trip).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add internal/message/build.go internal/message/build_test.go internal/message/render.go internal/message/render_test.go go.mod go.sum
@@ -1020,9 +1052,15 @@ func (s *Sender) DetectSandbox(ctx context.Context) (bool, error) {
 	return !out.ProductionAccessEnabled, nil
 }
 
+// MaxRawBytes is the SES v1 SendRawEmail hard limit (10MB after base64; inadjustable in v1).
+const MaxRawBytes = 10 * 1024 * 1024
+
 // Send delivers raw MIME via SES v1 SendRawEmail (sesv2 has no SendRawEmail). On a typed MessageRejected, if
 // the account is in sandbox, wrap as ErrSandboxRecipient (the actionable cause) — no string-match.
 func (s *Sender) Send(ctx context.Context, raw []byte) (string, error) {
+	if len(raw) > MaxRawBytes {
+		return "", fmt.Errorf("message is %d bytes; SES v1 SendRawEmail caps at %d (10MB, inadjustable)", len(raw), MaxRawBytes)
+	}
 	out, err := s.raw.SendRawEmail(ctx, &ses.SendRawEmailInput{
 		RawMessage: &sestypes.RawMessage{Data: raw},
 	})
@@ -1168,6 +1206,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 
 	"erickaldama-mail/internal/mailbox"
 )
@@ -1208,9 +1248,13 @@ func execTool(ctx context.Context, reader *mailbox.Reader, mb string, call ToolC
 			return fmt.Sprintf("error: %v", err)
 		}
 		defer rc.Close()
-		buf := make([]byte, 64*1024)
-		n, _ := rc.Read(buf)
-		return string(buf[:n])
+		// io.Reader.Read may return <cap in one call (S3 streaming); ReadAll over a LimitReader reads the
+		// whole capped body, not a single truncating chunk (audit bug: single rc.Read).
+		body, err := io.ReadAll(io.LimitReader(rc, 256*1024))
+		if err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		return string(body)
 	case "search_subject":
 		q, _ := call.Args["query"].(string)
 		hs, _, err := reader.List(ctx, mb, 100, nil)
@@ -1219,7 +1263,8 @@ func execTool(ctx context.Context, reader *mailbox.Reader, mb string, call ToolC
 		}
 		var hits []mailbox.Header
 		for _, h := range hs {
-			if containsFold(h.Subject, q) {
+			// stdlib case-insensitive contains — handles Unicode (e.g. "café"); NO hand-rolled toLower (audit).
+			if strings.Contains(strings.ToLower(h.Subject), strings.ToLower(q)) {
 				hits = append(hits, h)
 			}
 		}
@@ -1227,26 +1272,6 @@ func execTool(ctx context.Context, reader *mailbox.Reader, mb string, call ToolC
 		return string(b)
 	}
 	return fmt.Sprintf("unknown tool %q", call.Name)
-}
-
-func containsFold(s, sub string) bool {
-	// case-insensitive contains; small helper to avoid importing strings twice across files
-	ls, lsub := toLower(s), toLower(sub)
-	for i := 0; i+len(lsub) <= len(ls); i++ {
-		if ls[i:i+len(lsub)] == lsub {
-			return true
-		}
-	}
-	return len(lsub) == 0
-}
-func toLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 32
-		}
-	}
-	return string(b)
 }
 ```
 
@@ -1320,6 +1345,105 @@ Expected: PASS (agent loop + cap).
 ```bash
 git add internal/aiassist/provider.go internal/aiassist/tools.go internal/aiassist/agent.go internal/aiassist/agent_test.go
 git commit -m "feat(sp-4): aiassist LLMProvider interface + shared agent loop + read-only tools"
+```
+
+---
+
+## Task 6b: `internal/redact` — redacción NDA determinista (defensa en profundidad)
+
+Cierra la promesa del spec §7 (ausente en la v1 del plan, hallazgo de la auditoría): enmascarar patrones sensibles
+ANTES de mandar cualquier cuerpo a un backend que cruza red. Función PURA, golden corpus, sin red.
+
+**Files:**
+- Create: `internal/redact/redact.go` + `internal/redact/redact_test.go`
+
+**Interfaces:**
+- Produces: `func Redact(s string) string` — reemplaza tokens secret-shaped y emails de terceros por placeholders.
+- Consumido por `aiassist.Summarize/Draft/RunAgent` (Task 8b wiring) antes de `provider.Chat` cuando el provider cruza red.
+
+- [ ] **Step 1: Golden corpus de fixtures leaky/clean**
+
+`internal/redact/redact_test.go`:
+```go
+package redact
+
+import "testing"
+
+func TestRedactSecretShaped(t *testing.T) {
+	cases := map[string]string{
+		"key AKIAIOSFODNN7EXAMPLE here": "key <REDACTED-SECRET> here",
+		"token ghp_1234567890abcdefABCDEF1234567890abcd": "token <REDACTED-SECRET>",
+		"pat github_pat_11ABCDE_xyz": "pat <REDACTED-SECRET>",
+		"slack xoxb-123-456-abc": "slack <REDACTED-SECRET>",
+	}
+	for in, want := range cases {
+		if got := Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRedactThirdPartyEmail(t *testing.T) {
+	got := Redact("contacta a juan.perez@otraempresa.com mañana")
+	if got != "contacta a <REDACTED-EMAIL> mañana" {
+		t.Errorf("email not redacted: %q", got)
+	}
+}
+
+func TestRedactLeavesCleanTextUntouched(t *testing.T) {
+	clean := "Hola, ¿nos vemos el martes para revisar el reporte?"
+	if Redact(clean) != clean {
+		t.Errorf("clean text altered: %q", Redact(clean))
+	}
+}
+
+func TestCanarySeededSecretIsCaught(t *testing.T) {
+	// canary: a known fake secret MUST be caught every build (gate working, not gate broken-open).
+	if Redact("AKIAFAKEFAKEFAKE1234") == "AKIAFAKEFAKEFAKE1234" {
+		t.Fatal("canary leaked: AKIA-shaped token not redacted")
+	}
+}
+```
+
+- [ ] **Step 2: Run → FAIL**
+
+Run: `go test ./internal/redact/`
+Expected: FAIL (paquete no existe).
+
+- [ ] **Step 3: Implementar redact.go (regex estructural determinista)**
+
+```go
+// Package redact deterministically masks secret-shaped tokens and third-party emails before any mail body
+// crosses the network to an LLM backend (defense in depth; spec §7). Pure, golden-corpus tested.
+package redact
+
+import "regexp"
+
+var (
+	reSecret = regexp.MustCompile(`\b(AKIA[0-9A-Z]{16}|ghp_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|xox[baprs]-[0-9A-Za-z-]+)\b`)
+	reEmail  = regexp.MustCompile(`\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b`)
+)
+
+// Redact replaces secret-shaped tokens and emails with placeholders. The control is the deterministic regex;
+// it is intentionally over-eager (masking is safe, leaking is not).
+func Redact(s string) string {
+	s = reSecret.ReplaceAllString(s, "<REDACTED-SECRET>")
+	s = reEmail.ReplaceAllString(s, "<REDACTED-EMAIL>")
+	return s
+}
+```
+Nota: el canary `AKIAFAKEFAKEFAKE1234` tiene 16 chars tras `AKIA` → matchea. Ajustar los fixtures si la longitud exacta difiere; el ghp_ real son 36 chars tras el prefijo.
+
+- [ ] **Step 4: Run → PASS**
+
+Run: `go test ./internal/redact/`
+Expected: PASS (incl. canary).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/redact/
+git commit -m "feat(sp-4): redact package (deterministic NDA masking + golden corpus + canary)"
 ```
 
 ---
@@ -1412,6 +1536,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"erickaldama-mail/internal/aiassist"
 )
@@ -1426,7 +1551,8 @@ func New(model, host string) *Provider {
 	if host == "" {
 		host = "http://localhost:11434"
 	}
-	return &Provider{model: model, host: host, client: http.DefaultClient}
+	// NOT http.DefaultClient (Timeout=0 → hangs if the daemon accepts but never responds, e.g. model loading).
+	return &Provider{model: model, host: host, client: &http.Client{Timeout: 120 * time.Second}}
 }
 
 func (p *Provider) Name() string { return "ollama:" + p.model }
@@ -1526,16 +1652,40 @@ git commit -m "feat(sp-4): Ollama provider (HTTP /api/chat, object args, stream:
 package claude
 
 import (
+	"encoding/json"
 	"testing"
 
 	"erickaldama-mail/internal/aiassist"
 )
 
-func TestToolSpecMapping(t *testing.T) {
-	specs := []aiassist.ToolSpec{{Name: "list_messages", Description: "d", Parameters: map[string]any{"type": "object"}}}
+func TestToolSpecMappingExtractsInnerProperties(t *testing.T) {
+	// audit bug #1: the inner "properties" must land in InputSchema.Properties, NOT the whole schema object.
+	specs := []aiassist.ToolSpec{{Name: "read_message", Description: "d", Parameters: map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"s3Key": map[string]any{"type": "string"}},
+		"required":   []string{"s3Key"},
+	}}}
 	tools := toAnthropicTools(specs)
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool union, got %d", len(tools))
+	}
+	props, ok := tools[0].OfTool.InputSchema.Properties.(map[string]any)
+	if !ok || props["s3Key"] == nil {
+		t.Fatalf("InputSchema.Properties must be the inner props with s3Key, got %#v", tools[0].OfTool.InputSchema.Properties)
+	}
+	if _, nested := props["properties"]; nested {
+		t.Fatal("schema double-nested: 'properties' must not appear inside Properties")
+	}
+}
+
+func TestParseToolInputUnmarshals(t *testing.T) {
+	// audit bug #2: b.Input (json.RawMessage) must be unmarshaled into Args (else tools run with empty args).
+	args := map[string]any{}
+	if err := json.Unmarshal([]byte(`{"s3Key":"inbound/abc"}`), &args); err != nil {
+		t.Fatal(err)
+	}
+	if args["s3Key"] != "inbound/abc" {
+		t.Fatalf("args not parsed: %#v", args)
 	}
 }
 
@@ -1565,6 +1715,8 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -1586,13 +1738,24 @@ func New(apiKey string) *Provider {
 
 func (p *Provider) Name() string { return "claude:" + Model }
 
+// toAnthropicTools maps neutral ToolSpec → Anthropic. ToolInputSchemaParam already injects type:"object" and
+// has a separate Required field — so we extract the INNER "properties"/"required" from ToolSpec.Parameters,
+// NOT the whole schema object (audit bug #1: passing the full schema nests it under a literal "properties" key).
 func toAnthropicTools(specs []aiassist.ToolSpec) []anthropic.ToolUnionParam {
 	var out []anthropic.ToolUnionParam
 	for _, s := range specs {
+		var props any = map[string]any{}
+		if p, ok := s.Parameters["properties"]; ok {
+			props = p
+		}
+		var required []string
+		if r, ok := s.Parameters["required"].([]string); ok {
+			required = r
+		}
 		tp := anthropic.ToolParam{
 			Name:        s.Name,
 			Description: anthropic.String(s.Description),
-			InputSchema: anthropic.ToolInputSchemaParam{Properties: s.Parameters},
+			InputSchema: anthropic.ToolInputSchemaParam{Properties: props, Required: required},
 		}
 		out = append(out, anthropic.ToolUnionParam{OfTool: &tp})
 	}
@@ -1635,7 +1798,11 @@ func (p *Provider) Chat(ctx context.Context, msgs []aiassist.Message, tools []ai
 			out.Text += b.Text
 		case anthropic.ToolUseBlock:
 			args := map[string]any{}
-			_ = b // b.Input is json.RawMessage; unmarshal into args
+			if len(b.Input) > 0 {
+				if err := json.Unmarshal(b.Input, &args); err != nil { // b.Input is json.RawMessage — MUST unmarshal (audit bug #2)
+					return aiassist.Response{}, fmt.Errorf("unmarshal tool input for %s: %w", b.Name, err)
+				}
+			}
 			out.ToolCalls = append(out.ToolCalls, aiassist.ToolCall{ID: b.ID, Name: b.Name, Args: args})
 		}
 	}
@@ -1645,7 +1812,7 @@ func (p *Provider) Chat(ctx context.Context, msgs []aiassist.Message, tools []ai
 	return out, nil
 }
 ```
-Nota: verificar firmas exactas con `go doc github.com/anthropics/anthropic-sdk-go` — `NewToolUseBlock`, `NewToolResultBlock`, `ToolUseBlock.Input` (unmarshal a `args`), `ThinkingConfigAdaptiveParam`. Ajustar al SDK real v1.51.1.
+Nota (firmas YA verificadas compilando contra el SDK real v1.51.1 en la auditoría del plan): `NewClient` devuelve `Client` por valor; `MaxTokens` es `int64`; `ToolInputSchemaParam{Properties any; Required []string}` (Type se inyecta solo → pasar SOLO el objeto properties interno, NO el schema completo); `NewToolUseBlock(id, input any, name)`; `NewToolResultBlock(toolUseID, content, isError)`; `b.Input` es `json.RawMessage` (DEBE `json.Unmarshal`); `ThinkingConfigAdaptiveParam{}` struct vacío válido. Los 2 bugs lógicos (schema anidado + Input sin deserializar) ya están corregidos arriba y cubiertos por tests.
 
 - [ ] **Step 4: Run → PASS**
 
@@ -1712,33 +1879,136 @@ func TestRenderListTable(t *testing.T) {
 Run: `go test ./cmd/mail/`
 Expected: FAIL.
 
-- [ ] **Step 3: Implementar main.go (Cobra + renderList testeable)**
+- [ ] **Step 3: Implementar `internal/wire` (punto ÚNICO de instanciación — DRY, hallazgo de auditoría)**
+
+Evita que cada subcomando reconstruya Reader/Sender/provider. `cmd/mail` y `cmd/mail-tui` lo reusan.
+```go
+// Package wire is the single place that builds clients from profiles/backend. No subcommand duplicates this.
+package wire
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ses"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+
+	"erickaldama-mail/internal/aiassist"
+	"erickaldama-mail/internal/aiassist/claude"
+	"erickaldama-mail/internal/aiassist/ollama"
+	"erickaldama-mail/internal/awsconf"
+	"erickaldama-mail/internal/mailbox"
+)
+
+func Reader(ctx context.Context, profile string) (*mailbox.Reader, error) {
+	cfg, err := awsconf.Load(ctx, profile)
+	if err != nil {
+		return nil, fmt.Errorf("aws config (profile %s): %w — try: aws sso login --profile %s", profile, err, profile)
+	}
+	return mailbox.NewReader(dynamodb.NewFromConfig(cfg), s3.NewFromConfig(cfg)), nil
+}
+
+func Sender(ctx context.Context, profile string) (*mailbox.Sender, error) {
+	cfg, err := awsconf.Load(ctx, profile)
+	if err != nil {
+		return nil, fmt.Errorf("aws config (profile %s): %w — try: aws sso login --profile %s", profile, err, profile)
+	}
+	return mailbox.NewSender(ses.NewFromConfig(cfg), sesv2.NewFromConfig(cfg)), nil
+}
+
+// Provider returns the LLM backend. Ollama (local, default) needs no consent. Claude crosses the network →
+// print the opt-in warning to STDERR once before returning it (spec §7 "opt-in con aviso").
+func Provider(backend, agentModel string) (aiassist.LLMProvider, error) {
+	switch backend {
+	case "", "ollama":
+		return ollama.New(agentModel, ""), nil
+	case "claude":
+		fmt.Fprintln(os.Stderr, "⚠️  backend=claude: el cuerpo del correo cruzará a api.anthropic.com (no se entrena por default; ZDR recomendado). El texto pasa por redact.Redact antes de enviarse.")
+		return claude.New(os.Getenv("ANTHROPIC_API_KEY")), nil
+	}
+	return nil, fmt.Errorf("backend desconocido %q (usa ollama|claude)", backend)
+}
+```
+
+- [ ] **Step 4: Implementar `cmd/mail/main.go` (Cobra; renderList puro; wiring vía internal/wire)**
 
 ```bash
 go get github.com/spf13/cobra@v1.10.2
 ```
-Implementar `cmd/mail/main.go` con:
-- `renderList(w io.Writer, hs []mailbox.Header, asJSON bool) error` — función PURA testeable (json.NewEncoder o tabla con text/tabwriter).
-- root command `mail` + subcomandos `ls`, `read`, `send`, `reply`, `ai summarize|draft|agent`.
-- flags globales: `--read-profile` (default `mail-client-read`), `--send-profile` (default `mail-sender`), `--mailbox`, `--backend` (default `ollama`).
-- `ls`: `awsconf.Load(ctx, readProfile)` → `mailbox.NewReader(dynamodb.NewFromConfig(cfg), s3.NewFromConfig(cfg))` → `List` → `renderList`.
-- `read`: `Open(s3Key)` → `message.Parse` → `RenderPlain` (CLI) a stdout. **defer body.Close().**
-- `send`: construye `message.Build` → `Sender.Send`. Si `errors.Is(err, mailbox.ErrSandboxRecipient)` → imprime el mensaje accionable + `mr.ErrorMessage()` como contexto.
-- `reply <id>`: lee el original (Open+Parse), `message.ReplyHeaders(parsed)`, abre `$EDITOR` con el cuerpo (draft AI opcional con `--instruction`), confirma, envía.
-- `ai`: subcomandos que instancian el provider (ollama default / claude si `--backend claude`) y llaman `aiassist.Summarize/Draft/RunAgent`.
+```go
+package main
 
-(El test cubre `renderList`; el wiring de subcomandos se valida en el smoke de Task 11.)
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"text/tabwriter"
 
-- [ ] **Step 4: Run → PASS + build**
+	"erickaldama-mail/internal/mailbox"
+)
 
-Run: `go test ./cmd/mail/ && go build -o /dev/null ./cmd/mail`
+// renderList is pure and testeable. JSON for piping; table for humans.
+func renderList(w io.Writer, hs []mailbox.Header, asJSON bool) error {
+	if asJSON {
+		return json.NewEncoder(w).Encode(hs)
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	for _, h := range hs {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", h.Date, h.From, h.Subject)
+	}
+	return tw.Flush()
+}
+```
+El resto de `main.go` (Cobra) wirea los subcomandos usando `wire.Reader/Sender/Provider`:
+- flags globales: `--read-profile` (default `mail-client-read`), `--send-profile` (default `mail-sender`), `--mailbox`, `--backend` (default `ollama`), `--agent-model` (default `qwen3:32b`), `--count`.
+- `ls`: `wire.Reader` → `List` → `renderList(os.Stdout, hs, jsonFlag)`. Con `--count`: imprime solo `len(hs)` (para tmux status, spec §5.3).
+- `read <s3Key>`: `Open` → `message.Parse` → `RenderPlain` a stdout. **defer body.Close().**
+- `send`: `message.Build` → `wire.Sender` → `Send`. Si `errors.Is(err, mailbox.ErrSandboxRecipient)` → mensaje accionable + `mr.ErrorMessage()` a **stderr** (no stdout — no contaminar `--json`; el destinatario no va a logs persistentes).
+- `reply <id>`: `Open`+`Parse` del original → `message.ReplyHeaders(parsed)` → `$EDITOR` vía argv-slice (ver Step 5) → confirmación → `Send`.
+- `ai summarize|draft|agent`: `wire.Provider(backend, agentModel)`; para Claude el body pasa por `redact.Redact` antes de `Summarize/Draft/RunAgent`. Si el provider AI falla (ej. Ollama caído), degradar a **stderr** con "backend AI no disponible (¿`ollama serve`?); lectura/envío siguen" — el AI nunca bloquea (spec §6).
+
+- [ ] **Step 5: $EDITOR seguro (argv-slice, NUNCA sh -c) — helper compartido**
+
+```go
+// openEditor edits content in $EDITOR via argv-slice (no shell → no injection). Tmpfile name is random
+// (os.CreateTemp), NOT derived from untrusted mail subject/from.
+func openEditor(ctx context.Context, content string) (string, error) {
+	f, err := os.CreateTemp("", "mail-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	_, _ = f.WriteString(content)
+	f.Close()
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "nvim"
+	}
+	fields := strings.Fields(editor) // e.g. "code -w" → ["code","-w"]
+	args := append(fields[1:], f.Name())
+	cmd := exec.CommandContext(ctx, fields[0], args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	edited, err := os.ReadFile(f.Name())
+	return string(edited), err
+}
+```
+
+- [ ] **Step 6: Run → PASS + build**
+
+Run: `go test ./cmd/mail/ ./internal/wire/ && go build -o /dev/null ./cmd/mail`
 Expected: PASS + build OK.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add cmd/mail/ go.mod go.sum
-git commit -m "feat(sp-4): mail CLI (Cobra ls/read/send/reply/ai, testeable renderList)"
+git add cmd/mail/ internal/wire/ go.mod go.sum
+git commit -m "feat(sp-4): mail CLI (Cobra) + internal/wire (single client wiring) + safe $EDITOR + Claude opt-in warning"
 ```
 
 ---
@@ -1782,11 +2052,14 @@ func TestJMovesDown(t *testing.T) {
 }
 
 func TestGGoesToTop(t *testing.T) {
+	// Bubble Tea delivers each keypress as a SEPARATE KeyMsg — 'gg' is TWO 'g' events, not one Runes:{'g','g'}.
+	// The model detects double-g via lastKey state, so the test must send two consecutive 'g' KeyMsg.
 	m := newTestModel()
 	m.selected = 2
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g', 'g'}})
-	if updated.(model).selected != 0 {
-		t.Fatalf("gg should go to top, got %d", updated.(model).selected)
+	u1, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	u2, _ := u1.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if u2.(model).selected != 0 {
+		t.Fatalf("gg should go to top, got %d", u2.(model).selected)
 	}
 }
 
@@ -1795,6 +2068,23 @@ func TestEnterOpensReader(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if updated.(model).view != viewReader {
 		t.Fatalf("Enter should open reader, got view %d", updated.(model).view)
+	}
+}
+
+func TestComposerSendRequiresConfirmation(t *testing.T) {
+	// Security control #1 of the TUI: Ctrl-S must NOT send directly — it enters a confirm state; only 'y' sends.
+	m := model{view: viewComposer}
+	afterCtrlS, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	mc := afterCtrlS.(model)
+	if !mc.confirming {
+		t.Fatal("Ctrl-S must enter confirming state, not send immediately")
+	}
+	if mc.sent {
+		t.Fatal("Ctrl-S must NOT have sent the email")
+	}
+	afterN, _ := mc.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if afterN.(model).sent {
+		t.Fatal("'n' must cancel, not send")
 	}
 }
 ```
@@ -1809,12 +2099,28 @@ Expected: FAIL.
 ```bash
 go get github.com/charmbracelet/bubbletea@v1.3.10 github.com/charmbracelet/bubbles@latest github.com/charmbracelet/lipgloss@latest
 ```
-Implementar `model` con: campos `view (viewList|viewReader|viewComposer)`, `headers []mailbox.Header`, `selected int`, `lastKey rune` (para `gg`), `body string`, viewport. `Update(tea.Msg)` maneja:
-- `j`/`down`→selected++; `k`/`up`→selected--; `gg`→0; `G`→len-1 (con clamp).
-- `Enter` en list → carga el cuerpo (Open+Parse+RenderRich) y `view=viewReader`.
-- `r`→composer (reply con threading), `s`→summarize, `a`→agent, `q`/`Esc`.
-- composer: `Ctrl-E` $EDITOR, `Ctrl-S` envía con confirmación `y/n`.
-`View()` devuelve `string` (Bubble Tea v1.x; en v2 sería `tea.View`). Render list con lipgloss; reader con el markdown de glamour.
+Struct `model` con los campos que los tests exigen:
+```go
+type viewState int
+const (viewList viewState = iota; viewReader; viewComposer)
+
+type model struct {
+	view       viewState
+	headers    []mailbox.Header
+	selected   int
+	lastKey    rune          // for double-g detection (each 'g' is a separate KeyMsg)
+	body       string        // reader content (RenderRich)
+	confirming bool          // composer: Ctrl-S → true; 'y' sends, 'n' cancels
+	sent       bool          // set true only after a real Send
+	reader     *mailbox.Reader
+	sender     *mailbox.Sender
+}
+```
+`Update(tea.Msg) (tea.Model, tea.Cmd)` maneja, por vista:
+- **list:** `j`/`down`→selected++ (clamp len-1); `k`/`up`→selected-- (clamp 0); `g`→ si `lastKey=='g'` selected=0 else set `lastKey='g'`; `G`→len-1; `Enter`→ carga cuerpo (Open+Parse+RenderRich) y `view=viewReader`; `r`→composer; `s`→summarize; `a`→agent; `q`→quit. (resetear `lastKey=0` tras cualquier tecla ≠ 'g'.)
+- **reader:** `J`/`K` scroll, `Esc`→list, `r`→composer, `s`→summarize.
+- **composer:** `Ctrl-E`→`openEditor` (helper de Task 9, argv-slice); `Ctrl-S`→ `confirming=true` (NO envía); en `confirming`: `y`→`Send` + `sent=true`, `n`→`confirming=false`. **El envío exige confirmación explícita — control de seguridad #1 (test `TestComposerSendRequiresConfirmation`).**
+`View() string` (Bubble Tea v1.x; en v2 sería `tea.View`). Render list con lipgloss; reader con el markdown de glamour.
 
 - [ ] **Step 4: Run → PASS + build**
 
@@ -1882,16 +2188,39 @@ Contenido: Task 0 (comandos cdk deploy + create-access-key + setup de profiles),
 
 README: sección SP-4 (CLI+TUI+AI doble backend, los 4 stacks + el cliente). architecture.md: añadir el cliente al diagrama Mermaid (lee DynamoDB+S3, envía SES, AI Ollama/Claude). Regenerar el PNG con el nuevo nodo cliente.
 
-- [ ] **Step 7: Gate NDA + commit final**
+- [ ] **Step 7: Gate NDA (scope ampliado a TODO lo que toca el PR) + commit final**
 
-Run: `grep -rIE "esagiosapp|yaan|roatech|MercadoPago|476114125529|288761749126|468227865963" --include="*.go" --include="*.md" cmd/ internal/ docs/SP-4-DEPLOY.md README.md docs/architecture.md || echo "✅ NDA clean"`
-Expected: NDA clean.
+El gate escanea TODOS los archivos nuevos/modificados del PR (no solo un subconjunto) — incluye los propios plan/spec/EXECUTION-LOG que se commitean a repo público:
+```bash
+git diff --name-only origin/develop | grep -vE '^docs/superpowers/(plans|specs)/2026-06-24-sp4|13-sp4-audit' \
+  | xargs grep -IlE "esagiosapp|yaan|roatech|MercadoPago|476114125529|288761749126|468227865963" 2>/dev/null \
+  && echo "✗ NDA HIT — revisar" || echo "✅ NDA clean"
+```
+(Se excluyen el plan/spec/findings de SP-4 del grep porque contienen los identificadores prohibidos COMO PATRÓN de detección, no como datos — auto-match falso.) Expected: NDA clean.
 ```bash
 git add docs/SP-4-DEPLOY.md README.md docs/architecture.md docs/diagrams/
 git commit -m "docs(sp-4): runbook + README + architecture (client closes end-to-end loop)"
 ```
 
+- [ ] **Step 8: (endurecimiento CI, opcional pero recomendado) job NDA + secret-scan en ci.yml**
+
+Añadir a `.github/workflows/ci.yml` un job que corra el gate NDA anterior + `gitleaks` sobre el diff, como check requerido del PR. Mueve el gate de "manual que se olvida" a "bloqueante server-side" (defensa que no depende del agente). Si se difiere, dejarlo registrado como deuda en EXECUTION-LOG.
+
 ---
+
+## Decisiones de alcance v0.1 (gaps del spec reclasificados explícitamente — auditoría del plan)
+
+Para que ninguna promesa del spec quede huérfana, estas se difieren CONSCIENTEMENTE a v0.2 (documentar en EXECUTION-LOG):
+- **`mail tmux popup` como subcomando (§5.3):** NO se implementa como subcomando Go. El caso de uso lo cubre el binding
+  tmux directo `bind e display-popup -E "mail-tui"` (Task 11 runbook). Es suficiente y más simple. `--count` SÍ se
+  implementa en `ls` (Task 9) para el status de tmux.
+- **`config.toml` (§5.1):** v0.1 usa SOLO flags con defaults (precedencia flag>env>default). El TOML se difiere a v0.2.
+  Los defaults (`mail-client-read`/`mail-sender`/`ollama`/`qwen3:32b`) cubren el caso común sin config.
+- **Guardar adjuntos ENTRANTES a disco:** v0.1 solo los LISTA (metadata). Cuando se agregue guardado (v0.2), sanitizar
+  `FileName` con `filepath.Base` + dir destino anclado (el FileName viene del MIME untrusted). El adjunto SALIENTE
+  (`--attach`, path elegido por el operador) es trusted y SÍ se soporta en v0.1.
+- **Redacción NDA (§7):** SÍ se implementa (Task 6b) — NO es gap.
+- **Degradación Ollama caído / credenciales AWS expiradas (§6):** SÍ se manejan (Task 9 wiring: stderr + mensaje accionable).
 
 ## Cierre
 
