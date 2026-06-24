@@ -192,7 +192,7 @@ aws sts get-caller-identity --profile mail-sender --query Arn
 Con los profiles configurados, el cliente Go consume la infra real:
 ```bash
 # leer (mail-client-read)
-go run ./cmd/mail ls --mailbox test@erickaldama.com -n 5 --read-profile mail-client-read
+go run ./cmd/mail ls --mailbox test@erickaldama.com --count 5 --read-profile mail-client-read
 go run ./cmd/mail read <s3Key-de-un-item-real> --read-profile mail-client-read
 
 # enviar al Mailbox Simulator (mail-sender) — SES sigue en sandbox (200/día, solo destinatarios verificados)
@@ -202,7 +202,7 @@ go run ./cmd/mail send --to success@simulator.amazonses.com --subject "SP-4 smok
 # lazo completo: enviar a test@erickaldama.com → debe aparecer en ls
 go run ./cmd/mail send --to test@erickaldama.com --subject "SP-4 loop" \
   --body-file <(echo "loop e2e") --send-profile mail-sender
-sleep 15 && go run ./cmd/mail ls --mailbox test@erickaldama.com -n 1 --read-profile mail-client-read
+sleep 15 && go run ./cmd/mail ls --mailbox test@erickaldama.com --count 1 --read-profile mail-client-read
 
 # AI local (el correo no sale del Mac)
 ollama serve >/dev/null 2>&1 &   # si no corre
@@ -214,6 +214,21 @@ go run ./cmd/mail ai agent "¿cuántos correos tengo de la última semana?" --ba
 **Recordatorio SES sandbox** (`ProductionAccessEnabled=false`): solo se puede enviar a destinatarios verificados o
 al Mailbox Simulator. El cliente traduce el rechazo a `ErrSandboxRecipient` con mensaje accionable (no string-match,
 vía `errors.As(*MessageRejected)` + `DetectSandbox`).
+
+### Resultado verificado del smoke (2026-06-24) — el lazo SÍ cierra
+- `mail ls` (mail-client-read) listó el item real de SP-3 (correo de prueba del 18-jun) con claves camelCase correctas.
+- `mail read` bajó el MIME de S3 y lo parseó (mostró el cuerpo en texto).
+- `mail send` (mail-sender) al Mailbox Simulator → `sent: 0100019e...` (SES SendRawEmail OK).
+- **Lazo completo:** un correo enviado por el cliente a `test@erickaldama.com` recorrió SES → S3 → Lambda → DynamoDB
+  y reapareció en `mail ls` en ~12s (buzón 1 → 2); `mail read` mostró su cuerpo. **El sistema entero funciona end-to-end.**
+
+**Hallazgo del smoke #1 — la policy de envío necesitaba el config-set:** `mail-config` es el config-set por defecto
+de la identidad, así que SES lo aplica a todo envío y exige `ses:SendRawEmail` sobre **ambos** recursos (identity +
+config-set). El primer `send` dio `AccessDenied` sobre `configuration-set/mail-config`. Fix: ampliar `mail-send` a
+`Resources: [identity, configuration-set]` (`iam/mail-send-policy.json` + `internal/infra/sending_stack.go`) + redeploy.
+
+**Hallazgo del smoke #2 — flag de límite es `--count`, no `-n`:** el CLI registra el límite como `--count int`
+(default 20), no `-n`. Los comandos de §6 usan `--count`.
 
 ---
 
