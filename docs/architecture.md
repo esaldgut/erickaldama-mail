@@ -5,9 +5,9 @@ provisioned entirely with **AWS CDK (Go)**, consumed by a terminal-native Go cli
 
 > Region: `us-east-1` · Account: ErickSA (367707589526) · All resources provisioned via AWS CDK Go.
 >
-> **Status (2026-06-18):** the SEND path (SP-2) and the RECEIVE path (SP-3) are **live and verified**
-> — a real inbound message was received, stored in S3, and indexed in DynamoDB end-to-end. The Go TUI
-> client (SP-4, dashed below) is the remaining piece.
+> **Status (2026-06-24):** the SEND path (SP-2), the RECEIVE path (SP-3), and the Go terminal client
+> (SP-4) are **all live and verified** — send→receive→read exercised end-to-end against live AWS.
+> The full loop is closed.
 
 ```mermaid
 flowchart TB
@@ -36,9 +36,12 @@ flowchart TB
         ses_out["✉️ Amazon SES v2<br/>SendEmail · SigV4<br/>mail-config · DKIM signed"]
     end
 
-    subgraph client["🖥️ Go CLI / TUI client · SP-4 (pending)"]
+    subgraph client["🖥️ Go CLI / TUI client · SP-4 · LIVE · 2026-06-24"]
         direction TB
-        tui["Go TUI<br/>aws-sdk-go-v2/sesv2"]
+        tui["cmd/mail (CLI Cobra)<br/>cmd/mail-tui (TUI Bubble Tea · Vim-motions)"]
+        read_iam["🔑 mail-client-read<br/>Query mail-index · GetObject erickaldama-mail-raw"]
+        send_iam["🔑 mail-sender<br/>SendRawEmail scoped"]
+        ai["🤖 AI dual-backend<br/>Ollama local qwen3:32b (default, on-device)<br/>Claude API claude-opus-4-8 (opt-in, explicit warning)"]
     end
 
     subgraph obs["📊 Observability"]
@@ -54,10 +57,13 @@ flowchart TB
     lambda -->|"PutItem per Receipt.Recipient (idempotent by RFC5322 Message-ID)"| ddb
     lambda -.->|on-failure destination| dlq
 
-    tui -->|build MIME| ses_out
+    tui --- read_iam
+    tui --- send_iam
+    tui --- ai
+    read_iam -->|"Query (mail-index)"| ddb
+    read_iam -->|"GetObject on open (erickaldama-mail-raw)"| s3
+    send_iam -->|"SendRawEmail · SigV4 · build MIME"| ses_out
     ses_out --> sender
-    tui -->|"Query"| ddb
-    tui -->|"GetObject on open"| s3
     user --> tui
 
     ses_out -.->|bounce/complaint events| cw
@@ -70,8 +76,12 @@ flowchart TB
 
     classDef aws fill:#1a2332,stroke:#ff9900,stroke-width:1px,color:#fff;
     classDef ext fill:#161b22,stroke:#58a6ff,stroke-width:1px,color:#fff;
+    classDef iam fill:#1a2332,stroke:#dd344c,stroke-width:1px,color:#fff;
+    classDef ai fill:#1a2332,stroke:#7b68ee,stroke-width:1px,color:#fff;
     class ses_in,s3,lambda,ddb,dlq,ses_out,cw,sns,mx,dkim,mailfrom,dmarc aws;
     class sender,user,tui ext;
+    class read_iam,send_iam iam;
+    class ai ai;
 ```
 
 ## Provisioning & governance
@@ -93,3 +103,6 @@ through the CDK-Go stack, and a skill-recipe verifies live AWS docs before each 
 | Send via SES v2 API + SigV4, **not SMTP** | Eliminates the only long-lived mail secret |
 | DynamoDB index (not S3-list) | Makes the TUI listing instant; ~$0 at personal volume |
 | DLQ + idempotent PutItem | The one real reliability gap; everything else is right-sized, not over-engineered |
+| AI default = Ollama local (`qwen3:32b`), not Claude API | Mail corpus never crosses the network without explicit opt-in; `qwen3:32b` is Ollama's reference model for tool-calling |
+| Two disjoint IAM users (`mail-client-read` / `mail-sender`) | Least-privilege split: read path cannot send; send path cannot read the inbox |
+| `ErrSandboxRecipient` typed sentinel (not string-match) | SES sandbox rejects non-verified recipients; typed error lets callers handle it cleanly without fragile string comparison |
