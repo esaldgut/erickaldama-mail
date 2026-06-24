@@ -17,13 +17,13 @@ import (
 
 // Header mirrors one mail-index row (schema source: cmd/lambda/receive/main.go).
 type Header struct {
-	PK        string `dynamodbav:"PK"`
-	SK        string `dynamodbav:"SK"`
-	MessageID string `dynamodbav:"messageId"`
-	S3Key     string `dynamodbav:"s3Key"`
-	From      string `dynamodbav:"from"`
-	Subject   string `dynamodbav:"subject"`
-	Date      string `dynamodbav:"date"`
+	PK        string `dynamodbav:"PK"        json:"pk,omitempty"`
+	SK        string `dynamodbav:"SK"        json:"sk,omitempty"`
+	MessageID string `dynamodbav:"messageId" json:"messageId,omitempty"`
+	S3Key     string `dynamodbav:"s3Key"     json:"s3Key,omitempty"`
+	From      string `dynamodbav:"from"      json:"from,omitempty"`
+	Subject   string `dynamodbav:"subject"   json:"subject,omitempty"`
+	Date      string `dynamodbav:"date"      json:"date,omitempty"`
 }
 
 // DynamoAPI is the minimal DynamoDB interface required by Reader.
