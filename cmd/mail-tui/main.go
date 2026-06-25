@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"erickaldama-mail/internal/config"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/wire"
 )
@@ -44,6 +45,23 @@ func main() {
 		}
 	}
 
+	// Load optional config and apply fallbacks (same pattern as cmd/mail/main.go).
+	// Flags explicitly passed on the command line take precedence over config values.
+	from := ""
+	cfg, hasCfg, _ := config.Load()
+	if hasCfg {
+		from = cfg.DefaultFrom
+		if cfg.ReadProfile != "" && readProfile == "mail-client-read" {
+			readProfile = cfg.ReadProfile
+		}
+		if cfg.SendProfile != "" && sendProfile == "mail-sender" {
+			sendProfile = cfg.SendProfile
+		}
+		if mailboxName == "inbox" && len(cfg.Mailboxes) > 0 {
+			mailboxName = cfg.Mailboxes[0]
+		}
+	}
+
 	ctx := context.Background()
 
 	// Wire up reader and sender (errors are non-fatal at TUI startup — the user can still browse
@@ -73,6 +91,7 @@ func main() {
 		headers: headers,
 		reader:  r,
 		sender:  s,
+		from:    from,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())

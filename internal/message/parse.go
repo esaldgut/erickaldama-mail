@@ -18,6 +18,8 @@ type Attachment struct {
 type Parsed struct {
 	Subject     string
 	From        string
+	To          string // for reply-all
+	Cc          string // for reply-all
 	Date        string
 	TextPlain   string
 	TextHTML    string
@@ -39,6 +41,8 @@ func Parse(r io.Reader) (*Parsed, error) {
 	p := &Parsed{
 		Subject:    env.GetHeader("Subject"),
 		From:       env.GetHeader("From"),
+		To:         env.GetHeader("To"),
+		Cc:         env.GetHeader("Cc"),
 		Date:       env.GetHeader("Date"),
 		TextPlain:  env.Text,
 		TextHTML:   env.HTML,
