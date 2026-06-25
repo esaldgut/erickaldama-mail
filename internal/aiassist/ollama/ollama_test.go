@@ -51,3 +51,27 @@ func TestChatFinalText(t *testing.T) {
 		t.Fatalf("resp: %+v err=%v", resp, err)
 	}
 }
+
+func TestChatSerializesAssistantToolCalls(t *testing.T) {
+	// audit NUEVO-1: an assistant turn carrying ToolCalls must be sent back to Ollama with tool_calls populated;
+	// otherwise the multi-turn agent loop ships an empty assistant message and the tool_result loses its trigger.
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"done"}}`))
+	}))
+	defer srv.Close()
+	p := New("llama3.2", srv.URL)
+	_, err := p.Chat(context.Background(), []aiassist.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: []aiassist.ToolCall{{Name: "list_messages", Args: map[string]any{"limit": 3}}}},
+		{Role: "tool", ToolName: "list_messages", Content: "[]"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, `"tool_calls"`) || !strings.Contains(gotBody, `"list_messages"`) {
+		t.Fatalf("assistant tool_calls not serialized into request body: %s", gotBody)
+	}
+}
