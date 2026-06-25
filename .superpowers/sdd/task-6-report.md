@@ -130,3 +130,67 @@ Ninguno crítico.
 - **reply-all con live reader**: la ruta asíncrona (S3 open+parse) usa un nuevo `replyReadyMsg` que el `Update` handler procesa. Si la apertura falla, el fallback usa el pre-fill de header (To/Subject), sin Cc. Comportamiento degradado correcto.
 - **`from` en el model**: el campo `from string` se usa en el send path (`message.Build`). En `main.go` aún no se inyecta desde config (queda como `""` → `Build` retorna `ErrMissingFrom`). Esto es una deuda conocida del wiring de producción, no del invariante BCC ni de los tests. El TUI sin live sender (confirming=true, sender=nil) pone `sent=true` sin llamar Build → esa rama es solo para tests offline.
 - **`cmd/mail-tui/main.go`**: no se le pasó `from` al model. Pendiente wiring de `config.DefaultFrom` al campo `m.from` en una tarea futura si se quiere que el send live funcione desde el TUI sin `--from`.
+
+---
+
+## Fix: wire config into TUI
+
+**Fecha:** 2026-06-25
+**Rama:** `worktree-mail-v0.2`
+
+### Qué se cambió en `cmd/mail-tui/main.go`
+
+1. **Import añadido:** `"erickaldama-mail/internal/config"` (línea 14).
+
+2. **Bloque de config insertado** entre el parseo de flags y la construcción del contexto (líneas 48-63):
+   ```go
+   from := ""
+   cfg, hasCfg, _ := config.Load()
+   if hasCfg {
+       from = cfg.DefaultFrom
+       if cfg.ReadProfile != "" && readProfile == "mail-client-read" {
+           readProfile = cfg.ReadProfile
+       }
+       if cfg.SendProfile != "" && sendProfile == "mail-sender" {
+           sendProfile = cfg.SendProfile
+       }
+       if mailboxName == "inbox" && len(cfg.Mailboxes) > 0 {
+           mailboxName = cfg.Mailboxes[0]
+       }
+   }
+   ```
+   La comparación con los defaults de flag (`"mail-client-read"`, `"mail-sender"`, `"inbox"`) implementa el mismo semántico "flag explícito gana" que usa `cmd/mail` con `cmd.Flags().Changed()` — sin cobra, esta es la forma correcta de detectar si el usuario pasó el flag.
+
+3. **`from` inyectado en el model:** `m := model{..., from: from}` (línea 94). El campo `model.from` (model.go:69) recibe `cfg.DefaultFrom` en lugar de quedar `""`.
+
+### Cómo se inyecta `from`
+
+`config.Load()` → `cfg.DefaultFrom` → `from` local → `model{from: from}`. El send path en `handleComposerKey` (model.go:365) ya tomaba `from := m.from` y lo pasaba a `message.Build(BuildOpts{From: from, ...})`. Con el wiring previo `from` era siempre `""` → `Build` retornaba `ErrMissingFrom`. Ahora `from` lleva la dirección verificada del config.
+
+### Output de tests
+
+```
+ok  erickaldama-mail/cdk-go-aws-plugin/eval   0.516s
+ok  erickaldama-mail/cmd/lambda/receive        0.519s
+ok  erickaldama-mail/cmd/mail                  0.715s
+ok  erickaldama-mail/cmd/mail-tui              0.937s
+ok  erickaldama-mail/internal/aiassist         1.264s
+ok  erickaldama-mail/internal/aiassist/claude  2.292s
+ok  erickaldama-mail/internal/aiassist/ollama  1.608s
+ok  erickaldama-mail/internal/awsconf          2.591s
+ok  erickaldama-mail/internal/config           1.878s
+ok  erickaldama-mail/internal/infra            7.236s
+ok  erickaldama-mail/internal/mailbox          2.611s
+ok  erickaldama-mail/internal/message          3.308s
+ok  erickaldama-mail/internal/redact           4.684s
+ok  erickaldama-mail/test/hook                 3.550s
+```
+
+TestComposerBccNotInRaw: **PASS** — invariante BCC intacto.
+`go vet ./cmd/mail-tui/`: limpio.
+`gofmt -l cmd/mail-tui/`: vacío (sin archivos sin formatear).
+
+### Concerns
+
+- El fallback de mailbox (`cfg.Mailboxes[0]`) solo aplica si `--mailbox` no fue pasado (mailboxName sigue siendo `"inbox"`). Si el usuario pasa `--mailbox custom` explícitamente, el config no lo sobreescribe. Correcto.
+- No hay test de integración que arranque el TUI con un config real y verifique `m.from` post-startup; el fix se confirma por lectura directa del código y el build verde.
