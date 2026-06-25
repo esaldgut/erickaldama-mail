@@ -134,19 +134,25 @@ El L2 `NewOpenIdConnectProvider` daría un 3er rol y una función Lambda nodejs2
 
 ---
 
-## 2. Task 0 — Boundary v5 (prerequisito del deploy del CdStack)
+## 2. Task 0 — Boundary v5 → v6 (dos deploy findings de boundary)
 
 **TAREA DEL HUMANO — out-of-band — antes del primer `cdk deploy CdStack`.**
 
-### Contexto (hallazgo B4)
+Esta sección documenta **dos hallazgos reales** que requirieron dos versiones sucesivas del boundary (`v5` y `v6`).
+El archivo `iam/erickaldama-boundary.json` en disco contiene **ambos** statements aplicados. Al crear una nueva
+versión del boundary en un entorno limpio, se obtendrá la siguiente versión secuencial disponible (no
+necesariamente "v5" o "v6" — depende del historial de versiones de esa cuenta).
 
-El `erickaldama-boundary` actual (v4, live) tiene el statement `DenyEscalationAndOutOfScope` que deniega
+---
+
+### Finding #1 (B4) — `iam:PutRolePermissionsBoundary` denegado (→ boundary v5)
+
+**Causa:** el boundary v4 original tiene el statement `DenyEscalationAndOutOfScope` que deniega
 `iam:PutRolePermissionsBoundary`. Al crear roles CON `PermissionsBoundary` adjunto (como hacen `mail-cd-diff`
 y `mail-cd-deploy`), CloudFormation llama a `CreateRole` + `PutRolePermissionsBoundary`. Aunque el cfn-exec-role
-tiene `iam:*` Allow en su exec-policy, el boundary **intersecta** (no une) — el `Deny PutRolePermissionsBoundary`
-en el boundary prevalece sobre el Allow de la exec-policy.
+tiene `iam:*` Allow en su exec-policy, el boundary **intersecta** (no une) — el Deny de la acción prevalece.
 
-**Consecuencia:** el primer `cdk deploy CdStack` fallará con:
+**Error observado en el primer `cdk deploy CdStack`:**
 
 ```
 User: arn:aws:sts::367707589526:assumed-role/cdk-hnb659fds-cfn-exec-role-... is not authorized to perform:
@@ -154,25 +160,65 @@ iam:PutRolePermissionsBoundary on resource: arn:aws:iam::367707589526:role/mail-
 with an explicit deny in a permissions boundary: arn:aws:iam::367707589526:policy/erickaldama-boundary
 ```
 
-El boundary v4 actual ya tiene el Sid `DenyPutRoleBoundaryExceptErickaldamaBoundary` que permite
-`PutRolePermissionsBoundary` **solo cuando el boundary que se adjunta es `erickaldama-boundary` mismo**
-(vía `StringNotEqualsIfExists`). Esta es la excepción scoped que constituye boundary v5.
+**Fix — boundary v5:** añadir el statement `DenyPutRoleBoundaryExceptErickaldamaBoundary` que convierte el Deny
+global en un Deny condicional: solo deniega `PutRolePermissionsBoundary` si el boundary que se adjunta **no es**
+`erickaldama-boundary` (vía `StringNotEqualsIfExists`). Esto permite que el cfn-exec-role adjunte el propio
+boundary al crear los roles.
 
-**Verificar el estado actual del boundary v4:**
+**Resultado:** re-deploy con v5 live → **7/7 CREATE_COMPLETE** (los roles con boundary se crearon OK → B4 confirmado).
 
-```bash
-aws iam get-policy-version \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --version-id v4 \
-  --profile AdministratorAccess-367707589526 \
-  --query 'PolicyVersion.Document.Statement[?Sid==`DenyPutRoleBoundaryExceptErickaldamaBoundary`]' \
-  --output json
+---
+
+### Finding #2 (A1) — `sts:AssumeRole` denegado por el boundary (→ boundary v6)
+
+**Detectado por:** el smoke de seguridad (`simulate-principal-policy`, §6) tras el deploy exitoso del CdStack.
+Evidencia: `PermissionsBoundaryDecision.AllowedByPermissionsBoundary=false` para `sts:AssumeRole` en los 4 roles
+`cdk-hnb659fds-*`.
+
+**Causa:** el boundary v5 no contenía ningún `Allow` explícito para `sts:AssumeRole`. La lógica
+"boundary intersecta" implica que el effective permission = policy ∩ boundary. Aunque `mail-cd-deploy` tiene
+`sts:AssumeRole` en su inline policy (hacia los 4 roles cdk-*), el boundary v5 no permitía esa acción →
+effective = denegado. Consecuencia: el job `deploy` habría fallado en runtime al intentar asumir los roles CDK
+bootstrap, incluso con el deploy del CdStack exitoso.
+
+**Fix — boundary v6:** añadir el statement `AllowAssumeCdkBootstrapRoles`: `sts:AssumeRole` con `Allow`,
+scoped exactamente a los 4 ARNs `cdk-hnb659fds-*` (menor privilegio — no wildcard en Resource):
+
+```json
+{
+  "Sid": "AllowAssumeCdkBootstrapRoles",
+  "Effect": "Allow",
+  "Action": "sts:AssumeRole",
+  "Resource": [
+    "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1",
+    "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1",
+    "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1",
+    "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
+  ]
+}
 ```
 
-Si el Sid `DenyPutRoleBoundaryExceptErickaldamaBoundary` **ya existe** en v4 (con el `Condition`
-`StringNotEqualsIfExists`), la excepción ya está aplicada y el deploy del CdStack puede proceder directamente.
+**Nota sobre el límite de versiones IAM:** IAM permite máximo 5 versiones por policy. Si ya hay 5 versiones,
+hay que borrar la más vieja no-default antes de crear la nueva:
 
-Si **no existe** (boundary v4 original sin la excepción), aplicar boundary v5:
+```bash
+# Borrar la versión más vieja no-default (ejemplo: v1)
+aws iam delete-policy-version \
+  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --version-id v1 \
+  --profile AdministratorAccess-367707589526
+```
+
+**Resultado tras v6:** el smoke pasó — `mail-cd-deploy` puede asumir los 4 roles cdk-* (`allowed`);
+`mail-cd-diff` solo puede asumir el lookup (`allowed`); `mail-cd-diff` NO puede asumir deploy ni publishing
+(`implicitDeny`). Separación read/write probada en vivo (ver §6).
+
+---
+
+### Aplicar el boundary actual (contiene ambos statements)
+
+El archivo `iam/erickaldama-boundary.json` en disco ya contiene tanto `DenyPutRoleBoundaryExceptErickaldamaBoundary`
+(finding #1) como `AllowAssumeCdkBootstrapRoles` (finding #2). Aplicarlo en un entorno limpio:
 
 ```bash
 # 1. Verificar cuántas versiones hay (límite 5; si hay 5, borrar la más vieja no-default)
@@ -182,7 +228,7 @@ aws iam list-policy-versions \
   --query 'Versions[].{V:VersionId,Default:IsDefaultVersion}' \
   --output table
 
-# 2. Crear la nueva versión con la excepción scoped y hacerla default
+# 2. Crear la nueva versión con ambos statements y hacerla default
 aws iam create-policy-version \
   --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
   --policy-document file://iam/erickaldama-boundary.json \
@@ -190,10 +236,10 @@ aws iam create-policy-version \
   --profile AdministratorAccess-367707589526
 ```
 
-Salida esperada:
+Salida esperada (la versión resultante depende del historial; será la siguiente secuencial disponible):
 
 ```json
-{ "PolicyVersion": { "VersionId": "v5", "IsDefaultVersion": true, "CreateDate": "2026-06-24T..." } }
+{ "PolicyVersion": { "VersionId": "vN", "IsDefaultVersion": true, "CreateDate": "..." } }
 ```
 
 **Verificación read-only antes del deploy (validar, no asumir):**
@@ -201,21 +247,17 @@ Salida esperada:
 ```bash
 aws iam get-policy-version \
   --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --version-id v5 \
+  --version-id vN \
   --profile AdministratorAccess-367707589526 \
   --query 'PolicyVersion.Document.Statement[*].Sid' \
   --output json
-# Debe incluir: "DenyPutRoleBoundaryExceptErickaldamaBoundary"
+# Debe incluir AMBOS:
+# "DenyPutRoleBoundaryExceptErickaldamaBoundary"
+# "AllowAssumeCdkBootstrapRoles"
 ```
 
-### Premisa NO verificada empíricamente
-
-La doc de IAM User Guide + AWS Prescriptive Guidance establece que `CreateRole` con `PermissionsBoundary` requiere
-`iam:PutRolePermissionsBoundary` en el caller. Sin embargo, **no hay smoke-test previo** que confirme que la
-excepción `StringNotEqualsIfExists` en el boundary resuelve el conflicto exactamente como se espera.
-
-**El primer `cdk deploy CdStack` es el smoke definitivo.** Si falla con un error IAM diferente al esperado, anotar
-el finding en §8 (Deploy Findings).
+Tras confirmar ambos Sids presentes, el deploy del CdStack puede proceder. El smoke de seguridad (§6) verifica
+empíricamente la separación read/write — ejecutarlo siempre después del bootstrap.
 
 ---
 
@@ -652,7 +694,7 @@ reconoce el schema de la lib más nueva.
 |---|---|
 | Pre-flight identity | `aws sts get-caller-identity --profile AdministratorAccess-367707589526` |
 | Sesión SSO expirada | `aws sso login --profile AdministratorAccess-367707589526` |
-| Aplicar boundary v5 | `aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --policy-document file://iam/erickaldama-boundary.json --set-as-default --profile AdministratorAccess-367707589526` |
+| Aplicar boundary (v5→v6, ambos findings) | `aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --policy-document file://iam/erickaldama-boundary.json --set-as-default --profile AdministratorAccess-367707589526` |
 | Ver versiones del boundary | `aws iam list-policy-versions --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --profile AdministratorAccess-367707589526` |
 | Bootstrap CdStack | `AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never` |
 | Verificar Environment gate | `gh api repos/esaldgut/erickaldama-mail/environments/production --jq '.protection_rules'` |
@@ -662,34 +704,33 @@ reconoce el schema de la lib más nueva.
 | Kill-switch rol completo | `aws iam delete-role --role-name mail-cd-deploy --profile AdministratorAccess-367707589526` |
 | Deshabilitar workflow | `gh workflow disable cd.yml --repo esaldgut/erickaldama-mail` |
 
-**Cuenta** `367707589526` · **región** `us-east-1` · **boundary** v4 live (v5 = prerequisito del primer deploy del CdStack) · **repo** `esaldgut/erickaldama-mail` (público).
+**Cuenta** `367707589526` · **región** `us-east-1` · **boundary** v6 live (2 deploy findings: v5=B4/PutRolePermissionsBoundary, v6=A1/sts:AssumeRole; ver §2) · **repo** `esaldgut/erickaldama-mail` (público).
 
 ---
 
 ## 11. Deploy Findings
 
-> Esta sección se llena tras el bootstrap real del CdStack y la primera verificación OIDC e2e.
 > El patrón de documentación sigue el de SP-4-DEPLOY.md §3: evento, error exacto, causa raíz, fix, resultado.
+> Ambos findings ocurrieron durante el bootstrap real del CdStack (2026-06-24).
 
-```
-[PENDING — esperando el primer cdk deploy CdStack]
-```
+### Finding B4 — `iam:PutRolePermissionsBoundary` AccessDenied (→ boundary v5)
 
-**Finding esperado (B4 — premisa verificable):**
-- **Evento:** `cdk deploy CdStack` sin boundary v5
-- **Error esperado:** `iam:PutRolePermissionsBoundary AccessDenied` en `DiffRole` o `DeployRole`
-- **Fix:** aplicar boundary v5 (§2) y re-deployer
-- **Status:** PREMISA — el primer deploy es el smoke definitivo
+- **Evento:** primer `cdk deploy CdStack` con boundary v4 live
+- **Error:** `User: ...assumed-role/cdk-hnb659fds-cfn-exec-role-... is not authorized to perform: iam:PutRolePermissionsBoundary` (explicit deny in permissions boundary)
+- **Causa raíz:** el boundary v4 denegaba `iam:PutRolePermissionsBoundary` globalmente; al crear roles con `PermissionsBoundary`, CloudFormation necesita esa acción. El boundary intersecta (no une) con la exec-policy.
+- **Fix:** boundary v5 — statement `DenyPutRoleBoundaryExceptErickaldamaBoundary` con `StringNotEqualsIfExists`: convierte el Deny global en Deny condicional (solo si el boundary adjunto no es `erickaldama-boundary`).
+- **Resultado:** re-deploy con v5 → **7/7 CREATE_COMPLETE** (DiffRole + DeployRole creados con boundary). Finding B4 confirmado en vivo.
+- **Status:** RESUELTO (anticipado en la auditoría del spec)
 
-Si el primer deploy del CdStack tiene éxito **sin** aplicar boundary v5 adicional (porque el Sid
-`DenyPutRoleBoundaryExceptErickaldamaBoundary` ya existe en v4), documentar aquí:
+### Finding A1 — `sts:AssumeRole` denegado por el boundary (→ boundary v6)
 
-```
-Finding B4 — RESUELTO ANTES DEL DEPLOY:
-El boundary v4 ya incluía la excepción DenyPutRoleBoundaryExceptErickaldamaBoundary.
-El deploy del CdStack prosperó sin crear boundary v5 separado.
-Task 0 = no-op (verificar versión activa, confirmar excepción presente).
-```
+- **Evento:** smoke de seguridad post-deploy (§6c) — `simulate-principal-policy` sobre `mail-cd-deploy` intentando asumir los 4 roles `cdk-hnb659fds-*`
+- **Síntoma:** `PermissionsBoundaryDecision.AllowedByPermissionsBoundary=false` para `sts:AssumeRole`
+- **Causa raíz:** el boundary v5 no incluía ningún `Allow` para `sts:AssumeRole`. Effective permission = policy ∩ boundary → aunque `mail-cd-deploy` tiene `sts:AssumeRole` en su inline policy, el boundary lo filtraba. El job `deploy` habría fallado en runtime al intentar asumir los roles CDK bootstrap.
+- **Fix:** boundary v6 — statement `AllowAssumeCdkBootstrapRoles`: `sts:AssumeRole` con `Allow`, scoped a exactamente los 4 ARNs `cdk-hnb659fds-*`. Aplicado out-of-band; requirió borrar la versión más vieja (límite de 5 versiones IAM).
+- **Resultado tras v6:** smoke §6 pasó completamente — `mail-cd-deploy` asume los 4 cdk-* (`allowed`); `mail-cd-diff` solo asume lookup (`allowed`); `mail-cd-diff` no puede asumir deploy ni publishing (`implicitDeny`). Separación read/write verificada en vivo.
+- **Status:** RESUELTO (detectado por smoke; no habría sido evidente sin `simulate-principal-policy`)
+- **Lección:** el smoke de seguridad (§6) es obligatorio antes de declarar el CD operativo — el boundary puede filtrar acciones que la inline policy sí permite.
 
 ---
 
