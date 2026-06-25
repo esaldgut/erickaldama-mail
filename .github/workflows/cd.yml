@@ -7,8 +7,13 @@ on:
     branches: [main]
 
 env:
-  NODE_VERSION: "22"        # CDK v2 requires Node 22+ (audit C5)
-  CDK_VERSION: "2.258.1"   # Must match awscdk/v2 in go.mod (audit C5; skew CLI<lib → "not bootstrapped")
+  NODE_VERSION: "22"         # CDK v2 requires Node 22+ (audit C5)
+  # The npm `aws-cdk` CLI uses a DIFFERENT version scheme (2.1xxx.x) than the Go library
+  # `awscdk/v2` (v2.258.1) — they do NOT share version numbers. Deploy finding #3: the CD's
+  # first live run failed with `npm error notarget aws-cdk@2.258.1` because that CLI version
+  # does not exist. 2.1128.1 is the current CLI (matches the local CLI used for synth/diff)
+  # and supports the v2.258.1 library schema. Bump in lockstep with the local CLI, not the lib.
+  CDK_VERSION: "2.1128.1"
 
 jobs:
   diff:
