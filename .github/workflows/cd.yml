@@ -30,7 +30,9 @@ jobs:
           role-to-assume: arn:aws:iam::367707589526:role/mail-cd-diff
           aws-region: us-east-1
       - name: cdk diff
-        run: cdk diff --all 2>&1 | tee /tmp/diff.txt
+        run: |
+          set -o pipefail
+          cdk diff --all 2>&1 | tee /tmp/diff.txt
       - name: Comment diff on PR
         uses: actions/github-script@v9
         with:
