@@ -37,6 +37,16 @@ func renderList(w io.Writer, hs []mailbox.Header, asJSON bool) error {
 	return tw.Flush()
 }
 
+// tmuxPopupArgs builds the argv for `tmux display-popup` that launches the TUI. Pure + testeable:
+// an argv slice (never a shell string), so the profile/mailbox values cannot inject shell. The TUI
+// inherits the read profile and mailbox the user passed to `mail`.
+func tmuxPopupArgs(readProfile, mailboxName string) []string {
+	return []string{
+		"display-popup", "-E", "-w", "90%", "-h", "90%",
+		"mail-tui", "--read-profile", readProfile, "--mailbox", mailboxName,
+	}
+}
+
 // openEditor edits content in $EDITOR via argv-slice (no shell → no injection). Tmpfile name is random
 // (os.CreateTemp), NOT derived from untrusted mail subject/from.
 func openEditor(ctx context.Context, content string) (string, error) {
@@ -347,7 +357,52 @@ func main() {
 		},
 	}
 
-	root.AddCommand(lsCmd, readCmd, sendCmd, replyCmd, aiCmd)
+	// ── tmux ─────────────────────────────────────────────────────────────
+	// Glue for the tmux integration documented in the SP-4 spec §5.3. Two subcommands:
+	//   popup  → open the full-screen TUI in a tmux display-popup (floating overlay)
+	//   status → print the unread/message count for status-right (no --count ambiguity)
+	tmuxCmd := &cobra.Command{
+		Use:   "tmux <popup|status>",
+		Short: "tmux integration glue (popup overlay, status count)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "popup":
+				// Must run inside tmux (display-popup needs a server + client).
+				if os.Getenv("TMUX") == "" {
+					return fmt.Errorf("mail tmux popup must run inside a tmux session (TMUX env not set)")
+				}
+				// argv-slice, no shell string → no injection. Forward read/mailbox flags to mail-tui.
+				tc := exec.CommandContext(context.Background(), "tmux", tmuxPopupArgs(readProfile, mailboxName)...)
+				tc.Stdin, tc.Stdout, tc.Stderr = os.Stdin, os.Stdout, os.Stderr
+				if err := tc.Run(); err != nil {
+					return fmt.Errorf("tmux display-popup failed: %w", err)
+				}
+				return nil
+
+			case "status":
+				// Count for status-right. Read-only. AI/send never touched.
+				ctx := context.Background()
+				r, err := wire.Reader(ctx, readProfile)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					return err
+				}
+				hs, _, err := r.List(ctx, mailboxName, int32(count), nil)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error listing messages: %v\n", err)
+					return err
+				}
+				fmt.Printf("📬 %d\n", len(hs))
+				return nil
+
+			default:
+				return fmt.Errorf("tmux subcomando desconocido %q (usa popup|status)", args[0])
+			}
+		},
+	}
+
+	root.AddCommand(lsCmd, readCmd, sendCmd, replyCmd, aiCmd, tmuxCmd)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
