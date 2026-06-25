@@ -27,7 +27,7 @@ larga vida en el repo, con doble gate de aprobación humana independiente.
     (NUNCA wildcard), `sts:AssumeRole` sobre los 4 roles `cdk-hnb659fds-*`. Ambos roles con boundary
     `erickaldama-boundary`. Stack ARN `arn:aws:cloudformation:us-east-1:367707589526:stack/CdStack/a8f59b10`.
 - **Workflow `.github/workflows/cd.yml`** — dos jobs:
-  - `diff` (on: pull_request): asume `mail-cd-diff` → `cdk diff --all` → comenta el resultado en el PR.
+  - `diff` (on: pull_request): asume `mail-cd-diff` → `cdk diff` → comenta el resultado en el PR.
     Fork-guard: `if: github.event.pull_request.head.repo.full_name == github.repository` (forks externos no
     obtienen OIDC ni `pull-requests:write` en repos públicos — correcto por diseño, no un bug).
   - `deploy` (on: push → main): PAUSA en estado "Waiting" por el Environment gate → tras aprobación humana,
@@ -53,10 +53,17 @@ El gate humano tiene dos capas independientes:
 
 Si se desactiva la capa 1, la capa 2 sigue activa. Si se elimina el rol (kill-switch), la capa 1 ya no importa.
 
-### Deploy findings — los 2 hallazgos reales del boundary en este subproyecto
+### Verificación e2e en vivo
+
+El CD se verificó end-to-end **en su propio PR #6** antes de mergearse a develop (95ce3a3): el job `diff`
+asumió OIDC `mail-cd-diff`, corrió `cdk diff`, y publicó el comentario del diff directamente en el PR.
+Evidencia binaria visible en el PR — no declarado operativo hasta que el flujo OIDC completo funcionó en vivo.
+
+### Deploy findings — los 4 hallazgos reales del CD
 
 El CdStack es el stack que más ha exigido del boundary `erickaldama-boundary` — 2 versiones nuevas (v5, v6)
-en un solo subproyecto. Son la 4ª y 5ª instancia del patrón "boundary intersecta" en el proyecto (SP-1 ssm,
+en un solo subproyecto. Los findings #3 y #4 son del CLI y el diff flag, cazados por el CD en vivo en su
+propio PR. Son la 4ª y 5ª instancia del patrón "boundary intersecta" en el proyecto (SP-1 ssm,
 SP-2 events, SP-4 iam:CreateUser, CD v5, CD v6).
 
 **Finding B4 — boundary v5: `iam:PutRolePermissionsBoundary` (anticipado en la auditoría, confirmado en vivo)**
@@ -84,6 +91,32 @@ error vendría de AWS STS. El smoke lo cazó **antes del runtime** — `Permissi
 Fix: boundary v6 (commit `75c647d`) con `sts:AssumeRole` scoped exactamente a los 4 ARNs `cdk-hnb659fds-*`
 — no `sts:*`, no `Resource:*`. Menor privilegio: cualquier otro `sts:AssumeRole` sigue bloqueado. Smoke
 re-ejecutado post-v6: los 4 roles cdk-* → `allowed`; diff-role → deploy-role → `implicitDeny`. Pass.
+
+**Finding #3 — CLI version skew: `aws-cdk@2.258.1` no existe en npm**
+
+- **Evento:** primer run del CD (job `diff`) en GitHub Actions — `npm install -g aws-cdk@2.258.1`
+- **Error:** `npm error notarget No matching version found for aws-cdk@2.258.1`
+- **Causa raíz:** el CDK CLI npm y la librería Go `awscdk/v2` usan **esquemas de versión distintos**. La lib
+  Go es `v2.258.1`; el CLI npm sigue el esquema `2.1xxx.x` (actualmente `2.1128.1`). `aws-cdk@2.258.1` y
+  `aws-cdk@2.258.x` no existen en npm. Confundir ambos esquemas reproduce el hallazgo SP-1 "CLI vs lib
+  version skew" pero con un síntoma diferente (notarget en npm en vez de "not bootstrapped" en cdk).
+- **Fix:** `CDK_VERSION=2.1128.1` en el workflow (commit `faae10d`). Cazado por el CD en vivo en su propio
+  primer run — nunca fue visible en un entorno local donde el CLI ya estaba instalado.
+- **Resultado:** workflow corrige la versión y el `npm install -g aws-cdk@2.1128.1` pasa en Actions.
+- **Status:** RESUELTO (finding #3 — ver `docs/CD-DEPLOY.md` §11)
+
+**Finding #4 — `cdk diff --all` flag inválido en CLI 2.1xxx**
+
+- **Evento:** job `diff` del CD — el step `cdk diff --all` corrió pero su output incluía una advertencia
+- **Error/Síntoma:** el comentario del diff publicado en el PR mostraba `Unknown option(s): --all. These will
+  be ignored` al inicio del output
+- **Causa raíz:** en CLI 2.1xxx, `cdk diff` no acepta `--all` — el default ya difea todos los stacks del
+  app. En contraste, `cdk deploy --all` SÍ es flag válido (el subcomando `deploy` lo acepta). El flag `--all`
+  sobre `diff` es simplemente ignorado con advertencia, pero queda en el output como ruido y como señal falsa.
+- **Fix:** quitar `--all` del step `diff` en el workflow (commit `af98821`). `cdk deploy --all` sin cambios —
+  es correcto y válido. Cazado por el comentario del diff en el propio PR #6.
+- **Resultado:** el diff output queda limpio (sin advertencia); el deploy sigue usando `--all` correctamente.
+- **Status:** RESUELTO (finding #4 — ver `docs/CD-DEPLOY.md` §11)
 
 ### Smoke de seguridad empírico (DoD #5 — PASS en vivo)
 

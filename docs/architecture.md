@@ -97,7 +97,7 @@ GitHub Actions                       AWS (us-east-1 / 367707589526)
 on: pull_request                            │  StringEquals sub=…:pull_request
   job: diff ──────────────────────────────► mail-cd-diff
               configure-aws-credentials       └─► sts:AssumeRole ──► cdk-hnb659fds-lookup-role
-              cdk diff --all                                          (read-only, no mutations)
+              cdk diff                                               (read-only, no mutations)
               post comment to PR
                                             │
 on: push → main                             │  StringEquals sub=…:environment:production
