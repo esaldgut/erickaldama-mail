@@ -91,7 +91,7 @@ el boundary correcto (mismo patrón que `DenyCreateUserExceptMailClientPrincipal
   "Action": "iam:PutRolePermissionsBoundary",
   "Resource": "*",
   "Condition": {
-    "StringNotEquals": {
+    "StringNotEqualsIfExists": {
       "iam:PermissionsBoundary": "arn:aws:iam::367707589526:policy/erickaldama-boundary"
     }
   }
@@ -99,6 +99,11 @@ el boundary correcto (mismo patrón que `DenyCreateUserExceptMailClientPrincipal
 ```
 Esto deniega adjuntar CUALQUIER boundary distinto de erickaldama-boundary (anti-escalación preservado) pero permite
 adjuntar erickaldama-boundary al crear un rol. NO toca el `DenyUserExcept...` ni los demás.
+**`StringNotEqualsIfExists`** (no `StringNotEquals` pelado) por recomendación de la auditoría IAM: para este statement
+scopeado a una sola acción que SIEMPRE popula `iam:PermissionsBoundary`, ambos operadores son semánticamente
+equivalentes (un `Deny` negado deniega igual con la key ausente), pero `...IfExists` alinea con la guía oficial AWS
+"use IfExists para keys que pueden faltar" — cero cambio de comportamiento, más defensivo. Verificado: v5 PRESERVA el
+anti-escalación (DeleteRolePermissionsBoundary sigue denegado; adjuntar el boundary solo restringe, no escala).
 
 - [ ] **Step 2: Validar el JSON (sin claves IAM inválidas)**
 
@@ -136,8 +141,15 @@ aws iam get-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickal
   --version-id v5 --profile AdministratorAccess-367707589526 \
   --query 'PolicyVersion.Document.Statement[?Sid==`DenyPutRoleBoundaryExceptErickaldamaBoundary`]' --output json
 ```
-Expected: el statement con la Condition StringNotEquals. Confirma que `PutRolePermissionsBoundary` ya NO está en el
-Deny general. Cierra el gate del hallazgo B4.
+Expected: el statement con la Condition `StringNotEqualsIfExists`. Confirma que `PutRolePermissionsBoundary` ya NO está
+en el Deny general. Cierra el gate del hallazgo B4.
+
+> **Premisa NO VERIFICADA (honestidad):** la auditoría IAM no pudo citar verbatim que adjuntar un boundary EN
+> `CreateRole` requiera el permiso `iam:PutRolePermissionsBoundary` por separado (la doc de la API de CreateRole muestra
+> `PermissionsBoundary` como un parámetro nativo, lo que sugiere que `iam:CreateRole` + condición podría bastar). El
+> SMOKE DEFINITIVO de B4 es el primer `cdk deploy CdStack` (Task 4b): si v5 desbloquea la creación de los roles con
+> boundary → la premisa era correcta; si el deploy aún falla con AccessDenied en otra acción IAM → el deploy finding
+> real nos dirá exactamente qué permiso falta (lo documentamos en el runbook, patrón SP-4).
 
 ---
 
@@ -251,6 +263,41 @@ func TestCdRolesHaveBoundary(t *testing.T) {
 		"PermissionsBoundary": assertions.Match_AnyValue(),
 	}))
 }
+
+// TEST-1 (menor privilegio — el corazón de la separación read/write). El AddToPolicy materializa un
+// AWS::IAM::Policy separado. Shape VERIFICADO por synth real (2026-06-24): el diff role produce
+// Resource como STRING único (solo el lookup); el deploy role produce Resource como ARRAY de los 4.
+func TestCdDiffRoleCanOnlyAssumeLookupRole(t *testing.T) {
+	tpl := synthCd(t)
+	// El diff role NO puede asumir los roles de deploy/publishing — solo el lookup (read-only).
+	tpl.HasResourceProperties(jsii.String("AWS::IAM::Policy"), assertions.Match_ObjectLike(&map[string]any{
+		"PolicyDocument": assertions.Match_ObjectLike(&map[string]any{
+			"Statement": []any{
+				assertions.Match_ObjectLike(&map[string]any{
+					"Action":   "sts:AssumeRole",
+					"Resource": CdkLookupRoleArn, // string exacto — NO un array, NO los 4
+				}),
+			},
+		}),
+	}))
+}
+
+func TestCdDeployRoleAssumesTheFourBootstrapRoles(t *testing.T) {
+	tpl := synthCd(t)
+	// El deploy role asume exactamente los 4 roles cdk-* (array).
+	tpl.HasResourceProperties(jsii.String("AWS::IAM::Policy"), assertions.Match_ObjectLike(&map[string]any{
+		"PolicyDocument": assertions.Match_ObjectLike(&map[string]any{
+			"Statement": []any{
+				assertions.Match_ObjectLike(&map[string]any{
+					"Action": "sts:AssumeRole",
+					"Resource": []any{
+						CdkDeployRoleArn, CdkFilePublishingRoleArn, CdkImagePublishingRoleArn, CdkLookupRoleArn,
+					},
+				}),
+			},
+		}),
+	}))
+}
 ```
 
 - [ ] **Step 3: Run → FAIL** (NewCdStack no existe)
@@ -327,25 +374,49 @@ func NewCdStack(scope constructs.Construct, id string, props *awscdk.StackProps)
 			CdkImagePublishingRoleArn, CdkLookupRoleArn),
 	}))
 
+	// PRAC-1: tags — paridad con los 4 stacks existentes ("every resource is attributable").
+	for k, v := range cdTags() {
+		awscdk.Tags_Of(stack).Add(jsii.String(k), v, nil)
+	}
+
 	return stack
+}
+
+// cdTags mirrors sp2Tags but marks Subproject=CD.
+func cdTags() map[string]*string {
+	return map[string]*string{
+		"Project":    jsii.String("erickaldama-mail"),
+		"Subproject": jsii.String("CD"),
+		"ManagedBy":  jsii.String("CDK-Go"),
+	}
 }
 ```
 
 - [ ] **Step 5: Run → PASS**
 
 Run: `go test ./internal/infra/ -run TestCd`
-Expected: PASS (5 tests). Si `AllResourcesProperties` o `Match_AnyValue` no existen con ese nombre exacto en v2.258.1,
-verificar con `go doc github.com/aws/aws-cdk-go/awscdk/v2/assertions` y ajustar (el agente que auditó confirmó
-`Template_FromStack` + `Match_ObjectLike`; `AllResourcesProperties`/`Match_AnyValue` son del mismo paquete).
+Expected: PASS (7 tests: provider nativo + 0 Lambda, 2 roles, deploy trust env:prod, diff trust pull_request, ambos con
+boundary, diff role solo lookup, deploy role los 4). Firmas verificadas compilando contra v2.258.1: `AllResourcesProperties`,
+`Match_AnyValue`, `Template_FromStack`, `HasResourceProperties`, `Match_ObjectLike`, `ResourceCountIs` todas existen en
+el paquete `assertions`. El shape del `AWS::IAM::Policy` (diff = Resource string; deploy = Resource array de 4) verificado
+por synth real.
 
-- [ ] **Step 6: Registrar CdStack en cmd/cdk/main.go**
+- [ ] **Step 6: Registrar CdStack en cmd/cdk/main.go (con el boundary a nivel stack — GAP-1)**
 
-En `cmd/cdk/main.go`, tras el bloque de ReceivingStack (antes de `app.Synth(nil)`):
+En `cmd/cdk/main.go`, tras el bloque de ReceivingStack (antes de `app.Synth(nil)`). **GAP-1:** el boundary a nivel
+STACK se aplica vía `StackProps.PermissionsBoundary` (la API real verificada — NO existe `PermissionsBoundary_Of(stack).Apply()`;
+el aspect correcto es el campo de StackProps con `PermissionsBoundary_FromName`). Esto es defensa en profundidad: cubre
+TODO rol del scope (los 2 actuales ya lo tienen por-rol; cualquiera futuro queda cubierto automáticamente):
 ```go
 	infra.NewCdStack(app, "CdStack", &awscdk.StackProps{
-		Env: env(),
+		Env:                 env(),
+		PermissionsBoundary: awscdk.PermissionsBoundary_FromName(jsii.String(infra.BoundaryManagedPolicyName)),
 	})
 ```
+(`jsii` ya está importado en main.go; `infra.BoundaryManagedPolicyName` es la constante existente.)
+Nota: con `StackProps.PermissionsBoundary`, el `PermissionsBoundary:` por-rol dentro de `cd_stack.go` se vuelve
+redundante pero NO conflictivo (ambos resuelven al mismo boundary) — dejarlo hace los template-asserts por-rol
+(`TestCdRolesHaveBoundary`) explícitos. El aspect a nivel stack es la red para roles futuros.
 
 - [ ] **Step 7: Run suite completa + synth**
 
@@ -402,7 +473,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22          # CDK v2 requires Node.js 22+ (audit C5)
-      - run: npm install -g aws-cdk@2.258.0
+      - run: npm install -g aws-cdk@2.258.1
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::367707589526:role/mail-cd-diff
@@ -415,7 +486,13 @@ jobs:
           script: |
             const fs = require('fs');
             const marker = '<!-- cdk-diff-bot -->';
-            const diff = fs.readFileSync('/tmp/diff.txt', 'utf8').slice(0, 60000);
+            const raw = fs.readFileSync('/tmp/diff.txt', 'utf8');
+            // Truncado NO silencioso (audit MEDIO): si el diff combinado de los 5 stacks excede el límite de
+            // comment de GitHub (~65536), avisar explícitamente para que el revisor no apruebe creyendo que vio todo.
+            const LIMIT = 60000;
+            const diff = raw.length > LIMIT
+              ? raw.slice(0, LIMIT) + '\n\n... [TRUNCADO — diff > ' + LIMIT + ' chars; ver los logs del job para el diff completo]'
+              : raw;
             const body = `${marker}\n## cdk diff\n\`\`\`\n${diff}\n\`\`\``;
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
@@ -446,7 +523,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - run: npm install -g aws-cdk@2.258.0
+      - run: npm install -g aws-cdk@2.258.1
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::367707589526:role/mail-cd-deploy
@@ -532,13 +609,12 @@ git commit -m "docs(cd): auditable trust policy JSONs for the 2 CD roles"
 
 ---
 
-## Task 4: Runbook + CHANGELOG + architecture (evidencia de portafolio) + bootstrap + verificación e2e
+## Task 4a: Pre-deploy — canario + runbook (agente)
 
 **Files:**
 - Create: `docs/CD-DEPLOY.md`
-- Modify: `CHANGELOG.md`, `docs/architecture.md`, `docs/diagrams/architecture_icons.py`
 
-**Interfaces:** N/A (docs + verificación humana).
+**Interfaces:** N/A (docs + synth/diff read-only).
 
 - [ ] **Step 1: Suite completa + synth + diff read-only (canario)**
 
@@ -547,56 +623,146 @@ Run:
 go build ./... && go test -count=1 ./... && go vet ./... && gofmt -l internal/ cmd/
 AWS_PROFILE=AdministratorAccess-367707589526 cdk diff CdStack 2>&1 | grep -E "AWS::IAM::Role|AWS::IAM::OIDCProvider" | head
 ```
-Expected: todo verde; el diff muestra `+ OIDCProvider` + 2 `+ Role`, nada más (canario: no toca los 4 stacks existentes).
+Expected: todo verde (incluye los 7 template-asserts del CdStack); el diff muestra `+ OIDCProvider` + 2 `+ Role`, nada
+más (canario: no toca los 4 stacks existentes).
 
 - [ ] **Step 2: Escribir docs/CD-DEPLOY.md (runbook)**
 
-Contenido (estilo SP-4-DEPLOY.md, datos reales): pre-flight identity; Task 0 (boundary v5 — el comando create-policy-version
-+ por qué B4); bootstrap out-of-band del CdStack (`cdk deploy CdStack --require-approval never` — el humano, el CD aún no
-existe); config manual del GitHub Environment `production` (required reviewers=tú, "Prevent self-review" DESACTIVADO,
-deployment branches=main); verificación OIDC e2e (PR de prueba → diff comenta; merge a main → deploy PAUSA pidiendo approval);
-smoke de seguridad (mail-cd-diff no puede mutar → AccessDenied); kill-switch (`aws iam delete-role` o quitar el trust);
-el matiz de concurrency (1 pending); y los deploy findings reales (los habrá). ~400+ líneas.
+Contenido (estilo SP-4-DEPLOY.md, datos reales, ~400+ líneas): pre-flight identity; Task 0 (boundary v5 — el comando
+create-policy-version + por qué B4 + la premisa NO VERIFICADA); bootstrap out-of-band del CdStack; **el GATE CRÍTICO
+del Environment (ver Task 4b — sin él, el deploy corre SIN aprobación)**; verificación OIDC e2e; el smoke de seguridad
+empírico (Task 4c); kill-switch (`aws iam delete-role` o quitar el trust); el matiz de concurrency (1 pending); que el
+job `diff` NO debe marcarse como required status check (sino un PR de fork queda bloqueado por el job skipped); y los
+deploy findings reales (los habrá — espacio reservado).
 
-- [ ] **Step 3: GATE HUMANO — bootstrap del CdStack + config del Environment**
+- [ ] **Step 3: Commit del runbook**
 
-El usuario ejecuta out-of-band:
+```bash
+git add docs/CD-DEPLOY.md
+git commit -m "docs(cd): CD-DEPLOY runbook (boundary v5, bootstrap, environment gate, kill-switch)"
+```
+
+---
+
+## Task 4b: GATE HUMANO — bootstrap del CdStack + Environment con verificación API (CRÍTICO)
+
+**El HUMANO ejecuta el deploy out-of-band Y configura el Environment. El agente entrega los comandos + verifica.**
+
+**🔴 CRÍTICO (auditoría del plan, verbatim docs.github.com):** *"Running a workflow that references an environment that
+does not exist will create an environment with the referenced name [...] the newly created environment will not have any
+protection rules."* Si el Environment `production` NO está pre-configurado con required reviewers, el primer push a main
+lo auto-crea VACÍO, el job NO pausa, y `cdk deploy --require-approval never` corre a prod SIN aprobación. El approval del
+Environment es el ÚNICO gate humano (CDK ya desactivado con `never`). **Configurar el Environment es bloqueante, ANTES
+del primer push a main.**
+
+- [ ] **Step 1: GATE HUMANO — bootstrap del CdStack**
+
+El usuario ejecuta out-of-band (el CD aún no existe para auto-desplegarse; el boundary v5 de Task 0 ya debe estar vivo):
 ```bash
 AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never
 ```
-(crea el OIDC provider + los 2 roles; el boundary v5 de Task 0 permite el PutRolePermissionsBoundary). Luego configura
-el Environment `production` en GitHub Settings (a mano, documentado en el runbook).
+Crea el OIDC provider nativo + los 2 roles con boundary. **Este es el SMOKE DEFINITIVO de B4:** si el deploy crea los
+roles con boundary → la premisa B4 + el boundary v5 eran correctos; si falla con AccessDenied en alguna acción IAM → ese
+es el deploy finding real, documentarlo en el runbook (patrón SP-4) y ajustar el boundary.
 
-- [ ] **Step 4: Verificación post-deploy (agente, read-only)**
+- [ ] **Step 2: GATE HUMANO — configurar el Environment `production`**
+
+En GitHub Settings → Environments → New environment `production`:
+- **Required reviewers** = tú (1 basta). ESTE es el gate. Sin él, no hay aprobación.
+- **"Prevent self-review" DESACTIVADO** (single-dev — si lo activas te bloqueas a ti mismo).
+- **Deployment branches** = "Selected branches and tags" → `main`.
+
+- [ ] **Step 3: Verificación del gate por API (agente, read-only) — CIERRA EL CRÍTICO**
+
+```bash
+# Verifica que el Environment existe Y tiene required_reviewers (sin esto, el deploy corre sin gate):
+gh api repos/esaldgut/erickaldama-mail/environments/production --jq '.protection_rules'
+```
+Expected: un array con una regla `{"type":"required_reviewers", ...}` NO vacía. Si retorna `[]` o 404 → el gate NO está
+configurado, NO proceder con ningún push a main. Este check es el cierre del hallazgo CRÍTICO.
+
+---
+
+## Task 4c: Post-deploy — smoke de seguridad empírico + evidencia (agente)
+
+**Files:**
+- Modify: `CHANGELOG.md`, `docs/architecture.md`, `docs/diagrams/architecture_icons.py`
+- Create: `~/.claude/projects/-Users-esaldgut/memory/feedback_oidc_secure_pattern.md` (+ MEMORY.md)
+
+- [ ] **Step 1: Verificación post-deploy (agente, read-only)**
 
 ```bash
 aws iam list-open-id-connect-providers --profile AdministratorAccess-367707589526
 aws iam get-role --role-name mail-cd-diff --profile AdministratorAccess-367707589526 --query 'Role.Arn'
 aws iam get-role --role-name mail-cd-deploy --profile AdministratorAccess-367707589526 --query 'Role.Arn'
-# smoke de seguridad: el trust de mail-cd-diff NO debe permitir asumirlo sin un token OIDC (no testeable read-only;
-# se valida en la verificación e2e del runbook con un PR real).
 ```
 Expected: el provider existe; los 2 roles existen con sus ARNs.
 
-- [ ] **Step 5: Actualizar CHANGELOG + architecture + diagrama**
+- [ ] **Step 2: SMOKE DE SEGURIDAD EMPÍRICO (GAP-3, DoD #5) — la separación read/write probada**
 
-CHANGELOG: entrada `[CD]` (los 2 deploy findings anticipados B4/A1, las correcciones de la auditoría). architecture.md:
+El smoke SÍ es testeable read-only vía `simulate-principal-policy` (refuta la nota previa "no testeable"). Confirma
+empíricamente que el diff role NO puede escalar al deploy-role:
+```bash
+# El diff role NO debe poder asumir el deploy-role (debe dar implicitDeny):
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --action-names sts:AssumeRole \
+  --resource-arns arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1 \
+  --profile AdministratorAccess-367707589526 --query 'EvaluationResults[0].EvalDecision' --output text
+# Esperado: implicitDeny
+
+# El diff role SÍ puede asumir el lookup-role (debe dar allowed):
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --action-names sts:AssumeRole \
+  --resource-arns arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1 \
+  --profile AdministratorAccess-367707589526 --query 'EvaluationResults[0].EvalDecision' --output text
+# Esperado: allowed
+```
+Expected: deploy-role → `implicitDeny`; lookup-role → `allowed`. Esto prueba con evidencia binaria la separación
+read/write — el corazón del diseño de dos roles. Documentar el resultado en el runbook (cierra DoD #5).
+
+- [ ] **Step 3: Crear la memoria del patrón OIDC seguro (GAP-2, DoD #6)**
+
+Crear `~/.claude/projects/-Users-esaldgut/memory/feedback_oidc_secure_pattern.md` (type: feedback): el patrón canónico
+OIDC GitHub→AWS — trust `StringEquals` sub=`environment:production` (NUNCA wildcard en repo público), separación
+read/write (diff lookup-only / deploy 4 roles), el doble gate (environment pausa + trust scopeado), el L1 CfnOIDCProvider
+(no el L2 custom-resource), el deploy finding B4 (boundary v5 para PutRolePermissionsBoundary), el CRÍTICO del environment
+auto-creado sin gate. Añadir el pointer en MEMORY.md. Linkear [[feedback_cdk_permissions_boundary_intersects]] y
+[[feedback_subproject_delivery_methodology]].
+
+- [ ] **Step 4: Actualizar CHANGELOG + architecture + diagrama**
+
+CHANGELOG: entrada `[CD]` (los deploy findings B4/A1, las correcciones de las dos auditorías — spec y plan). architecture.md:
 añadir el plano de CD (GitHub Actions → OIDC → AWS, doble gate). Regenerar el PNG con el nodo CD si el venv está disponible.
 
-- [ ] **Step 6: Gate NDA + commit final**
+- [ ] **Step 5: Gate NDA (incluye el output del cdk diff) + commit final**
 
-Run: `grep -rIE "esagiosapp|yaan|roatech|MercadoPago|476114125529|288761749126|468227865963" .github/ internal/infra/cd_stack.go iam/cd-*.json docs/CD-DEPLOY.md CHANGELOG.md docs/architecture.md || echo "✅ NDA clean"`
-Expected: NDA clean.
+Run:
 ```bash
-git add docs/CD-DEPLOY.md CHANGELOG.md docs/architecture.md docs/diagrams/
-git commit -m "docs(cd): runbook + CHANGELOG + architecture (CD pipeline live)"
+grep -rIE "esagiosapp|yaan|roatech|MercadoPago|476114125529|288761749126|468227865963" \
+  .github/ internal/infra/cd_stack.go iam/cd-*.json docs/CD-DEPLOY.md CHANGELOG.md docs/architecture.md || echo "✅ NDA clean source"
+# El output del cdk diff que se comenta en el PR también debe estar limpio (no solo el source):
+AWS_PROFILE=AdministratorAccess-367707589526 cdk diff CdStack 2>&1 | grep -IE "476114125529|288761749126|468227865963|esagiosapp|yaan|MercadoPago" && echo "⚠️ NDA HIT en el diff" || echo "✅ NDA clean diff"
+```
+Expected: NDA clean en source Y en el diff.
+```bash
+git add CHANGELOG.md docs/architecture.md docs/diagrams/
+git commit -m "docs(cd): CHANGELOG + architecture + memory (CD pipeline live, security smoke verified)"
 ```
 
 ---
 
 ## Cierre
 
-Tras Task 4: PR a develop con CI verde (Git Flow — NO merge local). `gh pr create --base develop`.
+Tras Task 4c: PR a develop con CI verde (Git Flow — NO merge local). `gh pr create --base develop`.
 Recordar el quirk de `gh pr merge` (verificar state=MERGED, limpiar con `git -C` si falla la fase 2).
 Persistencia triple-capa: checkboxes (este plan) + `docs/superpowers/EXECUTION-LOG.md` + task #23.
 Es el primer fogueo de `subproject-delivery-canonical` — anotar si el skill tuvo algún gap.
+
+## Orden de ejecución (gates humanos intercalados)
+
+`Task 0` (agente escribe boundary v5 → **GATE HUMANO aplica** → agente verifica) → `Task 1` (agente: CdStack + 7 tests +
+registrar) → `Task 2` (agente: cd.yml) → `Task 3` (agente: trust JSONs) → `Task 4a` (agente: canario + runbook) →
+**`Task 4b` GATE HUMANO** (bootstrap CdStack + Environment + agente verifica el gate por API) → `Task 4c` (agente: smoke
+empírico + memoria + CHANGELOG + NDA) → PR a develop.
