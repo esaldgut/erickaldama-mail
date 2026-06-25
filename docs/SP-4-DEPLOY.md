@@ -334,7 +334,10 @@ mail send \
   --subject "Prueba CC/BCC" \
   --body "cuerpo"
 
-# reply con reply-all automático (--cc pre-llenado con To+Cc originales minus self)
+# reply-all AUTOMÁTICO: SIN --cc, el Cc se pre-llena con los To+Cc originales (minus self)
+mail reply <s3Key>
+
+# --cc EXPLÍCITO REEMPLAZA el reply-all (NO lo añade): este reply va SOLO a extra@, no a los originales
 mail reply <s3Key> --cc extra@erickaldama.com
 
 # listas multi-valor
