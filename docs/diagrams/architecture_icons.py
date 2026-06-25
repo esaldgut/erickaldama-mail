@@ -16,6 +16,11 @@ SP-4 (2026-06-24 LIVE): added Go terminal client cluster with dual AI backend
 (Ollama local qwen3:32b / Claude API claude-opus-4-8) and two disjoint IAM users
 (mail-client-read, mail-sender). PNG not regenerated automatically — run the
 command above after activating the venv.
+
+CD (2026-06-25 LIVE): added CI/CD cluster — GitHub Actions deploys the CDK-Go
+stacks to AWS via OIDC (no long-lived keys) with manual prod approval. CdStack
+(5th stack) provisions a native OIDC provider + two scoped roles: mail-cd-diff
+(read-only) and mail-cd-deploy (environment:production-gated).
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -30,6 +35,8 @@ from diagrams.aws.security import IAM
 from diagrams.aws.general import User
 from diagrams.onprem.client import Client
 from diagrams.onprem.compute import Server
+from diagrams.onprem.ci import GithubActions
+from diagrams.onprem.vcs import Github
 
 graph_attr = {
     "fontsize": "16",
@@ -72,6 +79,13 @@ with Diagram(
         cw = Cloudwatch("CloudWatch\nbounce/complaint/DLQ")
         sns = SimpleNotificationServiceSns("SNS → operator")
 
+    with Cluster("CI/CD · GitHub Actions → OIDC · LIVE"):
+        gh = Github("PR / push to main")
+        gha = GithubActions("cd.yml\ndiff (PR) · deploy (main)")
+        oidc = IAM("OIDC provider\ntoken.actions.\ngithubusercontent.com")
+        diff_iam = IAM("mail-cd-diff\nread-only · lookup only")
+        deploy_iam = IAM("mail-cd-deploy\nsub=environment:production")
+
     # Receive flow
     sender >> Edge(label="MX") >> dns >> ses_in
     ses_in >> Edge(label="① store") >> s3
@@ -102,3 +116,11 @@ with Diagram(
     ses_out >> Edge(label="events", style="dashed") >> cw
     dlq >> Edge(style="dashed") >> cw
     cw >> sns
+
+    # CI/CD: GitHub Actions assumes scoped OIDC roles to diff (PR) and deploy (main, gated)
+    gh >> Edge(label="PR / push") >> gha
+    gha >> Edge(label="diff (read-only)") >> diff_iam
+    gha >> Edge(label="deploy\n(approval gate)") >> deploy_iam
+    diff_iam >> Edge(label="AssumeRoleWithWebIdentity", style="dashed") >> oidc
+    deploy_iam >> Edge(label="AssumeRoleWithWebIdentity", style="dashed") >> oidc
+    deploy_iam >> Edge(label="cdk deploy → mutates", style="dashed") >> ses_in
