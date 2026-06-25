@@ -122,7 +122,7 @@ SP-1's first-deploy runbook is in **[`docs/SP-1-DEPLOY.md`](docs/SP-1-DEPLOY.md)
 shared domain core:
 
 ```
-cmd/mail         CLI Cobra · ls / read / send / reply / ai
+cmd/mail         CLI Cobra · ls / read / send / reply / ai / tmux (popup·status)
 cmd/mail-tui     TUI Bubble Tea · list / reader / composer · Vim-motions (j/k/gg/G)
 
 internal/message    MIME parse/build (enmime/v2) · threading RFC 5322 · html-to-markdown render (glamour)
@@ -136,6 +136,10 @@ internal/redact     Deterministic NDA mask (secret-shaped tokens + third-party e
 internal/awsconf    Credential loader for the two scoped IAM users
 internal/wire       Single instantiation point (DRY)
 ```
+
+**Editor/multiplexer integration** — `mail tmux popup` opens the TUI in a floating tmux overlay; `mail tmux
+status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
+[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)): tmux `prefix+e` → popup; nvim `<leader>m{l,s,c,a}` → list/search/compose/AI.
 
 Two IAM users provisioned via CDK with least-privilege disjoint scopes:
 

@@ -253,5 +253,35 @@ vs STS temporal). Mitigación: ambas policies fuertemente scopeadas → blast ra
 | Crear key segura | ver §4 (capturar a var + `aws configure set`) |
 | Verificar profile | `aws sts get-caller-identity --profile mail-client-read` |
 
-**Cuenta** 367707589526 · **región** us-east-1 · **boundary activo** v4 · **SES** sandbox (200/día).
+**Cuenta** 367707589526 · **región** us-east-1 · **boundary activo** v6 (CD: +sts:AssumeRole scoped) · **SES** sandbox (200/día).
 Documentado 2026-06-24 con los 3 incidentes reales del deploy. NDA: este repo es público; sin secrets ni marcas internas.
+
+---
+
+## 9. Integración tmux / nvim (consumir el cliente — 2026-06-25)
+
+Los binarios se instalan globales con `go install ./cmd/mail ./cmd/mail-tui` (quedan en `~/go/bin`, en PATH).
+El subcomando `mail tmux` (cierra la deuda SP-4 §5.3) da la glue; los bindings están verificados sin colisión
+contra la config real. Copy-paste:
+
+**tmux** (`~/.tmux.conf`, prefix `C-a`, tecla `e` libre):
+```tmux
+# prefix+e → cliente de correo en popup flotante
+bind e display-popup -E -w 90% -h 90% "mail-tui"
+# (opcional) conteo en el status-right:
+# set -g status-right "#(mail tmux status) #[fg=yellow]%Y-%m-%d #[fg=cyan]%H:%M:%S"
+```
+
+**nvim** (`~/.config/nvim/lua/config/keymaps.lua`, leader `\`, prefijo `<leader>m` libre):
+```lua
+keymap('n', '<leader>ml', ':split | terminal mail-tui<CR>i',        { desc = 'Mail: list (TUI)' })
+keymap('n', '<leader>ms', ':split | terminal mail ls<CR>i',         { desc = 'Mail: search/list' })
+keymap('n', '<leader>mc', ':split | terminal mail send<CR>i',       { desc = 'Mail: compose' })
+keymap('n', '<leader>ma', ':split | terminal mail ai agent<CR>i',   { desc = 'Mail: AI agent' })
+```
+
+Notas:
+- `mail tmux popup` falla con error claro si se corre fuera de tmux (guarda contra `$TMUX`).
+- El AI (`mail ai …`) requiere Ollama corriendo (`ollama serve` + `qwen3:32b`) para el backend on-device por
+  defecto; `--backend claude` es opt-in (el cuerpo cruza la red, aviso explícito una vez).
+- El TUI v0.1 tiene stubs de AI (`s`/`a`) que NO llaman al AI real — esa función vive en el CLI (`mail ai`).
