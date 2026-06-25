@@ -12,6 +12,33 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail tmux] — Integración tmux del cliente (cierra deuda SP-4 §5.3) — 2026-06-25
+
+El spec de SP-4 (§5.3) diseñó una glue de tmux para el cliente que v0.1 dejó sin implementar. Se cierra esa deuda
+para que la integración apunte a un subcomando real, no a un atajo.
+
+### Added
+- **`mail tmux popup`** — lanza `mail-tui` en un `tmux display-popup` (overlay flotante 90%×90%), forwarding
+  `--read-profile`/`--mailbox`. Guarda contra el env `TMUX` (error claro si se corre fuera de tmux). El argv lo
+  construye `tmuxPopupArgs()` (función pura, testeada) — un slice de argv, NUNCA un string de shell → sin inyección.
+- **`mail tmux status`** — imprime el conteo de mensajes (`📬 N`) para el `status-right` de tmux. Read-only; no toca
+  los caminos de AI ni de envío.
+- **Test** `TestTmuxPopupArgs` — verifica el forward de flags + que los valores son elementos de argv independientes
+  (no concatenación de shell). El paquete `cmd/mail` pasa de tener solo tests de `renderList` a cubrir el subcomando.
+
+### Integración del entorno (bindings sin colisión, verificados contra la config real)
+- **tmux** (`~/.tmux.conf`, prefix `C-a`): `bind e display-popup -E -w 90% -h 90% "mail-tui"` → `prefix+e` abre el
+  cliente en un popup. Tecla `e` verificada libre.
+- **nvim** (`~/.config/nvim/lua/config/keymaps.lua`, leader `\`): `<leader>ml` (TUI), `<leader>ms` (list),
+  `<leader>mc` (compose), `<leader>ma` (AI agent). Prefijo `<leader>m` verificado libre.
+
+### Notas
+- Ambos binarios (`mail`, `mail-tui`) instalados en `~/go/bin` (en PATH) — consumibles globalmente, no temporales.
+- Menor privilegio verificado en vivo: `mail-client-read` autoriza `Query` (el `mail ls`/`tmux status` funcionan)
+  pero niega `s3:ListBucket`/`Scan` (AccessDenied) — la policy es exactamente Query+GetItem + GetObject scoped.
+
+---
+
 ## [CD] — Pipeline de CI/CD con OIDC — 2026-06-24
 
 Automatización del `cdk deploy` vía GitHub Actions con credenciales temporales OIDC — sin access keys de
