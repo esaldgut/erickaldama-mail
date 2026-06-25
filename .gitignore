@@ -27,3 +27,8 @@ cdk.out/
 
 # CDK CLI local cache (acknowledged notices, context lookups) — machine-local
 cdk.context.json
+
+# SP-4 client binaries (built locally; never committed)
+/mail
+/mail-tui
+/mail-smoke
