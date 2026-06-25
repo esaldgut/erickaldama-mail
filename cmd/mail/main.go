@@ -12,12 +12,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"erickaldama-mail/internal/aiassist"
+	"erickaldama-mail/internal/config"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/message"
 	"erickaldama-mail/internal/redact"
@@ -72,6 +74,23 @@ func openEditor(ctx context.Context, content string) (string, error) {
 	return string(edited), err
 }
 
+// replyAllCc returns the original To+Cc addresses minus self, comma-joined. Uses message.SplitAddrs (exported).
+func replyAllCc(parsedTo, parsedCc, self string) string {
+	seen := map[string]bool{}
+	if self != "" { // REPLY-1: with self="" do NOT seed seen[""] (would filter nothing → own addr enters Cc)
+		seen[strings.ToLower(self)] = true
+	}
+	var out []string
+	for _, a := range append(message.SplitAddrs(parsedTo), message.SplitAddrs(parsedCc)...) {
+		la := strings.ToLower(a)
+		if !seen[la] {
+			seen[la] = true
+			out = append(out, a)
+		}
+	}
+	return strings.Join(out, ",")
+}
+
 func main() {
 	var (
 		readProfile string
@@ -107,17 +126,36 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				return err
 			}
-			hs, _, err := r.List(ctx, mailboxName, int32(count), nil)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error listing messages: %v\n", err)
-				return err
+			cfg, hasCfg, _ := config.Load()
+			var mailboxes []string
+			if cmd.Flags().Changed("mailbox") { // cmd.Flags() includes PersistentFlags inherited from root
+				mailboxes = []string{mailboxName} // explicit override
+			} else if hasCfg && len(cfg.Mailboxes) > 0 {
+				mailboxes = cfg.Mailboxes // all mailboxes from config
+			} else {
+				fmt.Fprintln(os.Stderr, "no hay config; crea ~/.config/erickaldama-mail/config.toml con tus mailboxes, o usa --mailbox <dirección>")
+				return fmt.Errorf("no mailbox specified and no config") // exit≠0
 			}
-			// --count flag with no --json: just print the count (for tmux status, spec §5.3)
+			var all []mailbox.Header
+			for _, mb := range mailboxes {
+				hs, _, err := r.List(ctx, mb, int32(count), nil) // full limit per mailbox
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error listing %s: %v\n", mb, err)
+					continue // don't abort all mailboxes on one error
+				}
+				all = append(all, hs...)
+			}
+			// sort by SK descending (ISO8601, NOT by Date which is RFC1123Z and sorts incorrectly)
+			slices.SortFunc(all, func(a, b mailbox.Header) int { return strings.Compare(b.SK, a.SK) })
+			if len(all) > count {
+				all = all[:count] // truncate merged result to limit
+			}
+			// PRESERVE (tmux status uses `mail ls --count N` without --json to get the number)
 			if cmd.Flags().Changed("count") && !jsonFlag {
-				fmt.Println(len(hs))
+				fmt.Println(len(all))
 				return nil
 			}
-			return renderList(os.Stdout, hs, jsonFlag)
+			return renderList(os.Stdout, all, jsonFlag)
 		},
 	}
 
@@ -150,17 +188,30 @@ func main() {
 	}
 
 	// ── send ─────────────────────────────────────────────────────────────
-	var sendFrom, sendTo, sendSubject, sendBody string
+	var sendFrom, sendTo, sendSubject, sendBody, sendCc, sendBcc string
 	sendCmd := &cobra.Command{
 		Use:   "send",
 		Short: "Send a new message",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			raw, _, err := message.Build(message.BuildOpts{
+			// Profile and from fallbacks from config (GAP-1 / spec §3.5)
+			cfg, hasCfg, _ := config.Load()
+			if !cmd.Flags().Changed("from") && hasCfg && cfg.DefaultFrom != "" {
+				sendFrom = cfg.DefaultFrom
+			}
+			if !cmd.Flags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
+				readProfile = cfg.ReadProfile
+			}
+			if !cmd.Flags().Changed("send-profile") && hasCfg && cfg.SendProfile != "" {
+				sendProfile = cfg.SendProfile
+			}
+			raw, dests, err := message.Build(message.BuildOpts{
 				From:    sendFrom,
 				To:      sendTo,
 				Subject: sendSubject,
 				Body:    sendBody,
+				Cc:      sendCc,
+				Bcc:     sendBcc,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error building message: %v\n", err)
@@ -171,7 +222,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				return err
 			}
-			msgID, err := s.Send(ctx, raw)
+			msgID, err := s.Send(ctx, raw, dests)
 			if err != nil {
 				if errors.Is(err, mailbox.ErrSandboxRecipient) {
 					// Actionable error to stderr (not stdout — keeps --json clean)
@@ -189,17 +240,30 @@ func main() {
 	sendCmd.Flags().StringVar(&sendTo, "to", "", "To address")
 	sendCmd.Flags().StringVar(&sendSubject, "subject", "", "Subject")
 	sendCmd.Flags().StringVar(&sendBody, "body", "", "Body text")
-	_ = sendCmd.MarkFlagRequired("from")
+	sendCmd.Flags().StringVar(&sendCc, "cc", "", "Cc addresses (comma-separated, plain addresses)")
+	sendCmd.Flags().StringVar(&sendBcc, "bcc", "", "Bcc addresses (comma-separated, plain addresses)")
 	_ = sendCmd.MarkFlagRequired("to")
 	_ = sendCmd.MarkFlagRequired("subject")
 
 	// ── reply ─────────────────────────────────────────────────────────────
+	var replyCc, replyBcc string
 	replyCmd := &cobra.Command{
 		Use:   "reply <s3Key>",
 		Short: "Reply to a message (opens $EDITOR)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
+			// Profile and from fallbacks from config (GAP-1 / spec §3.5)
+			cfg, hasCfg, _ := config.Load()
+			if !cmd.Flags().Changed("from") && hasCfg && cfg.DefaultFrom != "" {
+				replyFrom = cfg.DefaultFrom
+			}
+			if !cmd.Flags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
+				readProfile = cfg.ReadProfile
+			}
+			if !cmd.Flags().Changed("send-profile") && hasCfg && cfg.SendProfile != "" {
+				sendProfile = cfg.SendProfile
+			}
 			r, err := wire.Reader(ctx, readProfile)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -217,6 +281,10 @@ func main() {
 				return err
 			}
 			inReplyTo, references, subject := message.ReplyHeaders(parsed)
+			// reply-all: pre-fill --cc with To+Cc of original minus self, unless user passed --cc explicitly
+			if !cmd.Flags().Changed("cc") {
+				replyCc = replyAllCc(parsed.To, parsed.Cc, replyFrom)
+			}
 			// Pre-fill editor with quoted original
 			initial := fmt.Sprintf("To: %s\nSubject: %s\n\n\n-- Original --\n%s", parsed.From, subject, message.RenderPlain(parsed))
 			edited, err := openEditor(ctx, initial)
@@ -238,11 +306,13 @@ func main() {
 				fmt.Fprintln(os.Stderr, "error: --from is required (your verified sender address, e.g. erick@erickaldama.com)")
 				return fmt.Errorf("reply: --from is required")
 			}
-			raw, _, err := message.Build(message.BuildOpts{
+			raw, dests, err := message.Build(message.BuildOpts{
 				From:       replyFrom,
 				To:         parsed.From,
 				Subject:    subject,
 				Body:       edited,
+				Cc:         replyCc,
+				Bcc:        replyBcc,
 				InReplyTo:  inReplyTo,
 				References: references,
 			})
@@ -255,7 +325,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				return err
 			}
-			msgID, err := s.Send(ctx, raw)
+			msgID, err := s.Send(ctx, raw, dests)
 			if err != nil {
 				if errors.Is(err, mailbox.ErrSandboxRecipient) {
 					fmt.Fprintf(os.Stderr, "send rejected (SES sandbox): verify the recipient address or use success@simulator.amazonses.com\ndetails: %v\n", err)
@@ -269,6 +339,8 @@ func main() {
 		},
 	}
 	replyCmd.Flags().StringVar(&replyFrom, "from", "", "Your verified sender address (e.g. erick@erickaldama.com); required")
+	replyCmd.Flags().StringVar(&replyCc, "cc", "", "Cc addresses (comma-separated, plain addresses)")
+	replyCmd.Flags().StringVar(&replyBcc, "bcc", "", "Bcc addresses (comma-separated, plain addresses)")
 
 	// ── ai ───────────────────────────────────────────────────────────────
 	aiCmd := &cobra.Command{
