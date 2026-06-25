@@ -53,3 +53,17 @@ func TestParseAttachment(t *testing.T) {
 		t.Fatalf("attachment fields: %+v (want doc.pdf/application/pdf/9 bytes)", a)
 	}
 }
+
+func TestParseCapturesCcAndTo(t *testing.T) {
+	raw := "From: a@x.com\r\nTo: to@x.com\r\nCc: cc1@x.com, cc2@x.com\r\nSubject: hi\r\n\r\nbody\r\n"
+	p, err := Parse(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.To != "to@x.com" {
+		t.Fatalf("To = %q", p.To)
+	}
+	if !strings.Contains(p.Cc, "cc1@x.com") || !strings.Contains(p.Cc, "cc2@x.com") {
+		t.Fatalf("Cc = %q", p.Cc)
+	}
+}
