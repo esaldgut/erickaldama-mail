@@ -73,8 +73,18 @@ func TestCdDiffRoleTrustIsScopedToPullRequest(t *testing.T) {
 
 func TestCdRolesHaveBoundary(t *testing.T) {
 	tpl := synthCd(t)
+	// PermissionsBoundary in the synthesized template is NOT a plain string — CDK emits a
+	// Fn::Join that resolves to the full ARN. We assert the exact boundary name appears in the
+	// join array so the test fails if anyone swaps or removes the boundary policy.
+	// Shape verified by synth: {"Fn::Join":["",["arn:",{"Ref":"AWS::Partition"},":iam::<acct>:policy/<name>"]]}
+	boundaryArn := ":iam::" + Account + ":policy/" + BoundaryManagedPolicyName
 	tpl.AllResourcesProperties(jsii.String("AWS::IAM::Role"), assertions.Match_ObjectLike(&map[string]any{
-		"PermissionsBoundary": assertions.Match_AnyValue(),
+		"PermissionsBoundary": map[string]any{
+			"Fn::Join": []any{
+				"",
+				assertions.Match_ArrayWith(&[]interface{}{boundaryArn}),
+			},
+		},
 	}))
 }
 
