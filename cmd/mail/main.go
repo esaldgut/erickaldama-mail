@@ -156,7 +156,7 @@ func main() {
 		Short: "Send a new message",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			raw, err := message.Build(message.BuildOpts{
+			raw, _, err := message.Build(message.BuildOpts{
 				From:    sendFrom,
 				To:      sendTo,
 				Subject: sendSubject,
@@ -238,7 +238,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "error: --from is required (your verified sender address, e.g. erick@erickaldama.com)")
 				return fmt.Errorf("reply: --from is required")
 			}
-			raw, err := message.Build(message.BuildOpts{
+			raw, _, err := message.Build(message.BuildOpts{
 				From:       replyFrom,
 				To:         parsed.From,
 				Subject:    subject,
