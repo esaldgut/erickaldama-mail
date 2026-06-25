@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"erickaldama-mail/internal/mailbox"
@@ -45,7 +48,7 @@ func TestEnterOpensReader(t *testing.T) {
 
 func TestComposerSendRequiresConfirmation(t *testing.T) {
 	// Security control #1 of the TUI: Ctrl-S must NOT send directly — it enters a confirm state; only 'y' sends.
-	m := model{view: viewComposer}
+	m := model{view: viewComposer, compose: newComposer()}
 	afterCtrlS, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	mc := afterCtrlS.(model)
 	if !mc.confirming {
@@ -61,27 +64,106 @@ func TestComposerSendRequiresConfirmation(t *testing.T) {
 }
 
 func TestSentMsgClearsConfirmState(t *testing.T) {
-	// audit H-2: a successful send (sentMsg) must clear confirming + draft so a later 'y' cannot re-send.
-	m := model{view: viewComposer, confirming: true, composeDraft: "body"}
+	// audit H-2: a successful send (sentMsg) must clear confirming + compose so a later 'y' cannot re-send.
+	c := newComposer()
+	c.inputs[cTo].SetValue("alice@example.com")
+	m := model{view: viewComposer, confirming: true, compose: c}
 	updated, _ := m.Update(sentMsg{messageID: "mid-1"})
 	mu := updated.(model)
-	if mu.confirming || !mu.sent || mu.composeDraft != "" || mu.view != viewList {
-		t.Fatalf("sentMsg must clear confirm/draft, set sent, return to list; got %+v", mu)
+	if mu.confirming || !mu.sent || mu.compose.inputs[cTo].Value() != "" || mu.view != viewList {
+		t.Fatalf("sentMsg must clear confirm/compose, set sent, return to list; got confirming=%v sent=%v to=%q view=%d",
+			mu.confirming, mu.sent, mu.compose.inputs[cTo].Value(), mu.view)
 	}
 }
 
 func TestReplyDraftPrePopulates(t *testing.T) {
-	// audit H-4: replying pre-populates To:/Subject: (Re:) from the selected header; bounds-checked.
-	hs := []mailbox.Header{{From: "alice@example.com", Subject: "Hola"}}
-	got := replyDraft(hs, 0)
-	if got != "To: alice@example.com\nSubject: Re: Hola\n\n" {
-		t.Fatalf("replyDraft: %q", got)
+	// audit H-4: pressing 'r' on a list header pre-populates To/Subject without a live reader.
+	m := model{
+		view: viewList,
+		headers: []mailbox.Header{
+			{From: "alice@example.com", Subject: "Hola", S3Key: ""},
+		},
+		selected: 0,
 	}
-	if replyDraft(hs, 5) != "" || replyDraft(nil, 0) != "" {
-		t.Fatal("replyDraft must be bounds-safe (out-of-range / empty → \"\")")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	mu := updated.(model)
+	if mu.view != viewComposer {
+		t.Fatalf("'r' must open composer, got view %d", mu.view)
+	}
+	if mu.compose.inputs[cTo].Value() != "alice@example.com" {
+		t.Fatalf("To must be pre-filled with sender, got %q", mu.compose.inputs[cTo].Value())
+	}
+	if mu.compose.inputs[cSubject].Value() != "Re: Hola" {
+		t.Fatalf("Subject must be pre-filled with Re:, got %q", mu.compose.inputs[cSubject].Value())
 	}
 	// already-"Re:" subject must not double-prefix
-	if replyDraft([]mailbox.Header{{From: "b@x", Subject: "Re: x"}}, 0) != "To: b@x\nSubject: Re: x\n\n" {
-		t.Fatal("replyDraft must not double Re:")
+	m2 := model{
+		view:     viewList,
+		headers:  []mailbox.Header{{From: "b@x.com", Subject: "Re: existing", S3Key: ""}},
+		selected: 0,
+	}
+	u2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	mu2 := u2.(model)
+	if mu2.compose.inputs[cSubject].Value() != "Re: existing" {
+		t.Fatalf("must not double Re:, got %q", mu2.compose.inputs[cSubject].Value())
+	}
+}
+
+// fakeSender captures the raw bytes and destinations passed to Send (for invariant testing).
+type fakeSender struct {
+	gotRaw   []byte
+	gotDests []string
+}
+
+func (f *fakeSender) Send(_ context.Context, raw []byte, dests []string) (string, error) {
+	f.gotRaw = raw
+	f.gotDests = dests
+	return "mid-1", nil
+}
+
+func TestComposerBccNotInRaw(t *testing.T) {
+	// BCC-1: the TUI send path uses message.Build, so the Bcc never leaks into the raw MIME.
+	// The fakeSender captures what Build produces; we assert Bcc: header absent and secret@x.com absent from raw,
+	// but present in the envelope destinations.
+	fs := &fakeSender{}
+	c := newComposer()
+	c.inputs[cTo].SetValue("to@x.com")
+	c.inputs[cBcc].SetValue("secret@x.com")
+	c.body = "hi"
+	m := model{
+		view:       viewComposer,
+		confirming: true,
+		sender:     fs,
+		from:       "me@example.com",
+		compose:    c,
+	}
+	// 'y' fires the send tea.Cmd.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("'y' with a live sender must return a tea.Cmd")
+	}
+	// Execute the cmd to trigger the actual Send call.
+	cmd()
+	if strings.Contains(string(fs.gotRaw), "Bcc:") {
+		t.Fatalf("BCC header leaked into TUI-sent raw:\n%s", fs.gotRaw)
+	}
+	if strings.Contains(string(fs.gotRaw), "secret@x.com") {
+		t.Fatalf("BCC address leaked into TUI-sent raw:\n%s", fs.gotRaw)
+	}
+	if !slices.Contains(fs.gotDests, "secret@x.com") {
+		t.Fatalf("BCC must be in the envelope destinations: %v", fs.gotDests)
+	}
+}
+
+func TestComposerTabNavigation(t *testing.T) {
+	// GAP-4: Tab advances the active field from To → Cc.
+	m := model{view: viewComposer, compose: newComposer()}
+	if m.compose.active != cTo {
+		t.Fatalf("starts at To (%d), got %d", cTo, m.compose.active)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	mu := updated.(model)
+	if mu.compose.active != cCc {
+		t.Fatalf("Tab → Cc (%d), got %d", cCc, mu.compose.active)
 	}
 }

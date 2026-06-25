@@ -455,18 +455,36 @@ func main() {
 
 			case "status":
 				// Count for status-right. Read-only. AI/send never touched.
+				// Multi-mailbox: same logic as ls — config.Mailboxes wins unless --mailbox was
+				// passed explicitly (H-4, deferred from Task 5).
 				ctx := context.Background()
+				cfg, hasCfg, _ := config.Load()
+				var statusMailboxes []string
+				if cmd.Root().PersistentFlags().Changed("mailbox") {
+					statusMailboxes = []string{mailboxName}
+				} else if hasCfg && len(cfg.Mailboxes) > 0 {
+					statusMailboxes = cfg.Mailboxes
+				} else {
+					statusMailboxes = []string{mailboxName} // fallback: the flag default ("inbox")
+				}
+				if !cmd.Root().PersistentFlags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
+					readProfile = cfg.ReadProfile
+				}
 				r, err := wire.Reader(ctx, readProfile)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					return err
 				}
-				hs, _, err := r.List(ctx, mailboxName, int32(count), nil)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error listing messages: %v\n", err)
-					return err
+				var total int
+				for _, mb := range statusMailboxes {
+					hs, _, lerr := r.List(ctx, mb, int32(count), nil)
+					if lerr != nil {
+						fmt.Fprintf(os.Stderr, "warning: listing %s: %v\n", mb, lerr)
+						continue
+					}
+					total += len(hs)
 				}
-				fmt.Printf("📬 %d\n", len(hs))
+				fmt.Printf("📬 %d\n", total)
 				return nil
 
 			default:

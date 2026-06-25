@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -23,6 +24,39 @@ const (
 	viewComposer           // composing / confirming send
 )
 
+// composer field indices — keep in sync with newComposer.
+const (
+	cTo      = 0
+	cCc      = 1
+	cBcc     = 2
+	cSubject = 3
+)
+
+// composer holds the multi-field compose state.
+type composer struct {
+	inputs []textinput.Model // [To, Cc, Bcc, Subject] — Bcc VISIBLE (UX standard; BCC travels only in SES envelope)
+	active int               // index of focused input
+	body   string            // edited via $EDITOR (editorCmd flow)
+}
+
+// newComposer creates a fresh composer with To focused.
+func newComposer() composer {
+	labels := []string{"To", "Cc", "Bcc", "Subject"}
+	ins := make([]textinput.Model, len(labels))
+	for i, l := range labels {
+		ti := textinput.New()
+		ti.Prompt = l + ": "
+		ins[i] = ti
+	}
+	ins[cTo].Focus()
+	return composer{inputs: ins, active: cTo}
+}
+
+// mailSender is the minimal interface the TUI needs to send mail. *mailbox.Sender satisfies it.
+type mailSender interface {
+	Send(ctx context.Context, raw []byte, destinations []string) (string, error)
+}
+
 // model is the Bubble Tea Elm model for the TUI.
 type model struct {
 	view       viewState
@@ -32,19 +66,20 @@ type model struct {
 	body       string // reader content (RenderRich output)
 	confirming bool   // composer: Ctrl-S → true; 'y' sends, 'n' cancels
 	sent       bool   // set true only after a real Send
+	from       string // sender identity (from config.DefaultFrom); enforced by SES ses:FromAddress
 	reader     *mailbox.Reader
-	sender     *mailbox.Sender
+	sender     mailSender
 	// scroll offset for reader view
 	scrollOffset int
-	// compose draft body
-	composeDraft string
+	// compose state: multi-field textinput composer
+	compose composer
 	// status message shown at the bottom
 	statusMsg string
 }
 
-// Init satisfies tea.Model. No I/O at startup — the TUI loads mail lazily on Enter.
+// Init satisfies tea.Model. Start the textinput blink timer.
 func (m model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(textinput.Blink)
 }
 
 // Update handles all keypresses for all views. Returns (tea.Model, tea.Cmd).
@@ -65,13 +100,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// without a fresh Ctrl-S confirmation (audit H-2). Return to the list with a status line.
 		m.sent = true
 		m.confirming = false
-		m.composeDraft = ""
+		m.compose = newComposer() // reset to blank composer (inputs always initialized)
 		m.view = viewList
 		m.statusMsg = "reply sent: " + msg.messageID
 		return m, nil
 	case editorDoneMsg:
-		// Editor finished: update the compose draft and stay in the composer (do NOT open the reader).
-		m.composeDraft = msg.body
+		// Editor finished: update the compose body and stay in the composer (do NOT open the reader).
+		m.compose.body = msg.body
+		return m, nil
+	case replyReadyMsg:
+		// Async reply-all fetch complete: switch to composer with pre-filled fields.
+		m.compose = msg.c
+		m.view = viewComposer
 		return m, nil
 	}
 	return m, nil
@@ -141,7 +181,42 @@ func (m model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case 'r':
 			resetLastKey()
-			m.composeDraft = replyDraft(m.headers, m.selected) // pre-populate To:/Subject: from the selected header (audit H-4)
+			c := newComposer()
+			// Pre-fill from header (bounds-checked). Deep reply-all requires the parsed message (Step 4).
+			if m.selected >= 0 && m.selected < len(m.headers) {
+				h := m.headers[m.selected]
+				subject := h.Subject
+				if !strings.HasPrefix(strings.ToLower(subject), "re:") {
+					subject = "Re: " + subject
+				}
+				c.inputs[cTo].SetValue(h.From)
+				c.inputs[cSubject].SetValue(subject)
+			}
+			// If a live reader is available, open the message and parse it for full reply-all (Cc).
+			if m.reader != nil && m.selected >= 0 && m.selected < len(m.headers) && m.headers[m.selected].S3Key != "" {
+				s3Key := m.headers[m.selected].S3Key
+				r := m.reader
+				self := m.from
+				orig := c // capture pre-filled compose
+				return m, func() tea.Msg {
+					rc, err := r.Open(context.Background(), s3Key)
+					if err != nil {
+						return replyReadyMsg{c: orig} // fallback: use header-only pre-fill
+					}
+					defer rc.Close()
+					parsed, err := message.Parse(rc)
+					if err != nil {
+						return replyReadyMsg{c: orig}
+					}
+					orig.inputs[cTo].SetValue(parsed.From)
+					orig.inputs[cCc].SetValue(replyAllCc(parsed.To, parsed.Cc, self))
+					inReplyTo, _, subject := message.ReplyHeaders(parsed)
+					orig.inputs[cSubject].SetValue(subject)
+					_ = inReplyTo // threading headers stored in body/metadata in future
+					return replyReadyMsg{c: orig}
+				}
+			}
+			m.compose = c
 			m.view = viewComposer
 			return m, nil
 		case 's':
@@ -210,6 +285,9 @@ func (m model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// replyReadyMsg is sent when the async reply-all fetch finishes.
+type replyReadyMsg struct{ c composer }
+
 // handleReaderKey handles Vim-motions in the reader view.
 func (m model) handleReaderKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Type == tea.KeyRunes && len(key.Runes) == 1 {
@@ -223,7 +301,40 @@ func (m model) handleReaderKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case 'r':
-			m.composeDraft = replyDraft(m.headers, m.selected) // pre-populate To:/Subject: (audit H-4)
+			c := newComposer()
+			// Pre-fill from current header (bounds-checked). Deep reply-all via reader open.
+			if m.selected >= 0 && m.selected < len(m.headers) {
+				h := m.headers[m.selected]
+				subject := h.Subject
+				if !strings.HasPrefix(strings.ToLower(subject), "re:") {
+					subject = "Re: " + subject
+				}
+				c.inputs[cTo].SetValue(h.From)
+				c.inputs[cSubject].SetValue(subject)
+			}
+			if m.reader != nil && m.selected >= 0 && m.selected < len(m.headers) && m.headers[m.selected].S3Key != "" {
+				s3Key := m.headers[m.selected].S3Key
+				r := m.reader
+				self := m.from
+				orig := c
+				return m, func() tea.Msg {
+					rc, err := r.Open(context.Background(), s3Key)
+					if err != nil {
+						return replyReadyMsg{c: orig}
+					}
+					defer rc.Close()
+					parsed, err := message.Parse(rc)
+					if err != nil {
+						return replyReadyMsg{c: orig}
+					}
+					orig.inputs[cTo].SetValue(parsed.From)
+					orig.inputs[cCc].SetValue(replyAllCc(parsed.To, parsed.Cc, self))
+					_, _, subject := message.ReplyHeaders(parsed)
+					orig.inputs[cSubject].SetValue(subject)
+					return replyReadyMsg{c: orig}
+				}
+			}
+			m.compose = c
 			m.view = viewComposer
 			return m, nil
 		case 's':
@@ -238,20 +349,34 @@ func (m model) handleReaderKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleComposerKey handles composer input: Ctrl-E, Ctrl-S, confirm y/n.
+// handleComposerKey handles composer input: Tab/Shift-Tab (field nav), Ctrl-E, Ctrl-S, confirm y/n.
 func (m model) handleComposerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// If waiting for confirmation (Ctrl-S already pressed):
 	if m.confirming {
 		if key.Type == tea.KeyRunes && len(key.Runes) == 1 {
 			switch key.Runes[0] {
 			case 'y':
-				// Attempt Send if sender is available. Return a dedicated sentMsg (NOT bodyLoadedMsg) so the
-				// Update handler clears confirming/draft — otherwise a later 'y' would re-send (audit H-2).
+				// Attempt Send if sender is available. Use message.Build so the BCC never leaks
+				// into the raw MIME (audit BCC-1). Return a dedicated sentMsg (NOT bodyLoadedMsg) so
+				// the Update handler clears confirming/compose — otherwise a later 'y' would re-send
+				// (audit H-2).
 				if m.sender != nil {
-					raw := []byte(m.composeDraft)
+					c := m.compose
+					from := m.from
 					s := m.sender
 					return m, func() tea.Msg {
-						id, err := s.Send(context.Background(), raw)
+						raw, dests, err := message.Build(message.BuildOpts{
+							From:    from,
+							To:      c.inputs[cTo].Value(),
+							Cc:      c.inputs[cCc].Value(),
+							Bcc:     c.inputs[cBcc].Value(),
+							Subject: c.inputs[cSubject].Value(),
+							Body:    c.body,
+						})
+						if err != nil {
+							return errMsg{err}
+						}
+						id, err := s.Send(context.Background(), raw, dests)
 						if err != nil {
 							return errMsg{err}
 						}
@@ -280,7 +405,7 @@ func (m model) handleComposerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyCtrlE:
 		// Open $EDITOR via tea.ExecProcess so Bubble Tea releases the terminal during edit (audit H-3).
-		cmd, tmpPath, err := editorCmd(m.composeDraft)
+		cmd, tmpPath, err := editorCmd(m.compose.body)
 		if err != nil {
 			m.statusMsg = "editor error: " + err.Error()
 			return m, nil
@@ -296,8 +421,32 @@ func (m model) handleComposerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return editorDoneMsg{body: string(edited)}
 		})
+	case tea.KeyTab:
+		// Advance to next field (wraps around).
+		old := m.compose.active
+		next := (old + 1) % len(m.compose.inputs)
+		m.compose.inputs[old].Blur()
+		m.compose.inputs[next].Focus()
+		m.compose.active = next
+		return m, nil
+	case tea.KeyShiftTab:
+		// Retreat to previous field (wraps around).
+		old := m.compose.active
+		prev := (old - 1 + len(m.compose.inputs)) % len(m.compose.inputs)
+		m.compose.inputs[old].Blur()
+		m.compose.inputs[prev].Focus()
+		m.compose.active = prev
+		return m, nil
 	case tea.KeyEsc:
 		m.view = viewList
+		return m, nil
+	}
+
+	// Forward key to active textinput.
+	if len(m.compose.inputs) > 0 {
+		var cmd tea.Cmd
+		m.compose.inputs[m.compose.active], cmd = m.compose.inputs[m.compose.active].Update(key)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -367,34 +516,43 @@ func (m model) viewReader() string {
 func (m model) viewComposer() string {
 	var sb strings.Builder
 	sb.WriteString(headerStyle.Render("Composer") + "\n\n")
-	sb.WriteString(m.composeDraft)
-	sb.WriteString("\n\n")
+	// Render the 4 textinput fields.
+	for _, ti := range m.compose.inputs {
+		sb.WriteString(ti.View() + "\n")
+	}
+	// Preview body.
+	if m.compose.body != "" {
+		sb.WriteString("\n" + m.compose.body + "\n")
+	}
+	sb.WriteString("\n")
 	if m.confirming {
 		sb.WriteString(confirmStyle.Render("Send this message? [y/n]") + "\n")
 	} else {
 		if m.statusMsg != "" {
 			sb.WriteString(statusStyle.Render(m.statusMsg) + "\n")
 		}
-		sb.WriteString(normalStyle.Render("Ctrl-E edit  Ctrl-S confirm send  Esc back"))
+		sb.WriteString(normalStyle.Render("Tab/Shift-Tab switch field  Ctrl-E edit body  Ctrl-S confirm send  Esc back"))
 	}
 	return sb.String()
 }
 
-// ── openEditor ───────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
-// replyDraft pre-populates a composer draft with To:/Subject: derived from the selected header, so the user
-// sees who they are replying to (audit H-4). Pure + bounds-checked. The From line is intentionally absent:
-// the verified sender identity is enforced by SES (ses:FromAddress), not by editable draft text.
-func replyDraft(headers []mailbox.Header, selected int) string {
-	if selected < 0 || selected >= len(headers) {
-		return ""
+// replyAllCc returns the original To+Cc addresses minus self, comma-joined. Matches the CLI cmd/mail.
+func replyAllCc(parsedTo, parsedCc, self string) string {
+	seen := map[string]bool{}
+	if self != "" {
+		seen[strings.ToLower(self)] = true
 	}
-	h := headers[selected]
-	subject := h.Subject
-	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
-		subject = "Re: " + subject
+	var out []string
+	for _, a := range append(message.SplitAddrs(parsedTo), message.SplitAddrs(parsedCc)...) {
+		la := strings.ToLower(a)
+		if !seen[la] {
+			seen[la] = true
+			out = append(out, a)
+		}
 	}
-	return fmt.Sprintf("To: %s\nSubject: %s\n\n", h.From, subject)
+	return strings.Join(out, ",")
 }
 
 // editorCmd builds the $EDITOR *exec.Cmd over a temp file seeded with content, plus the temp path. It uses
