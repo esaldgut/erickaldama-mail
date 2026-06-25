@@ -27,7 +27,7 @@ sigue siendo la segunda barrera; si el rol se elimina (kill-switch), el Environm
 
 | Evento | Job | Principal OIDC | Acción |
 |---|---|---|---|
-| PR abierto / actualizado | `diff` (on: pull_request) | `mail-cd-diff` (lookup-role, read-only) | `cdk diff --all` → comenta en el PR |
+| PR abierto / actualizado | `diff` (on: pull_request) | `mail-cd-diff` (lookup-role, read-only) | `cdk diff` → comenta en el PR |
 | Merge a `main` + approval | `deploy` (on: push → main) | `mail-cd-deploy` (4 roles cdk-*) | `cdk deploy --all --require-approval never` |
 
 El job `diff` es un **preview no-bloqueante**: muestra qué cambiaría en los stacks antes del merge, como evidencia
@@ -323,20 +323,11 @@ aws iam get-role --role-name mail-cd-deploy \
 # Debe coincidir con iam/cd-deploy-trust.json: StringEquals environment:production
 ```
 
-### Deploy Findings — espacio reservado
+### Deploy Findings — resumen del bootstrap real
 
-Anotar aquí cualquier error IAM o CFN que aparezca durante el bootstrap real:
-
-```
-[PENDING — se llenará tras el primer cdk deploy CdStack]
-
-Ejemplo del patrón de incidente (cf. SP-4 §3):
-  Evento: CREATE_FAILED en DiffRole / DeployRole
-  Error: iam:PutRolePermissionsBoundary AccessDenied
-  Causa: boundary vX no tiene la excepción scoped
-  Fix: aplicar boundary vX+1 con el Sid correcto
-  Resultado: re-deploy exitoso
-```
+El bootstrap del CdStack (2026-06-24) generó 4 deploy findings, los 2 de boundary durante el deploy
+(`CREATE_COMPLETE 7/7`) y los 2 del CLI/diff-flag cazados por el primer run del CD en PR #6.
+Los hallazgos completos (evento/error/causa/fix/resultado) están documentados en **§11** de este mismo runbook.
 
 ---
 
@@ -418,7 +409,7 @@ Abrir un PR de cualquier feature branch a `develop` (o a `main` directamente par
 # Revisar Actions tab → job "diff":
 # - checkout OK
 # - configure-aws-credentials: asume mail-cd-diff (role-to-assume)
-# - cdk diff --all: muestra los stacks y sus cambios (o "no differences")
+# - cdk diff: muestra los stacks y sus cambios (o "no differences")
 # - github-script: crea/actualiza el comment con el diff
 ```
 
@@ -679,12 +670,18 @@ en el `cdk diff` / `cdk deploy` con un error latente difícil de diagnosticar.
 ### Version pinning del CDK CLI
 
 ```bash
-npm install -g aws-cdk@2.258.x
+npm install -g aws-cdk@2.1128.1
 ```
 
-Mantener el CLI cerca de la versión de la librería (`awscdk/v2 v2.258.1` en `go.mod`). El skew CLI < lib genera
-el error "stack not bootstrapped" (hallazgo SP-1) — engañoso porque el bootstrap sí existe, pero el CLI no
-reconoce el schema de la lib más nueva.
+**IMPORTANTE:** el CDK CLI npm y la librería Go `awscdk/v2` **usan esquemas de versión distintos**. La lib Go
+está en `v2.258.1` (esquema `2.X.Y`); el CLI npm sigue el esquema `2.1xxx.x` (actualmente `2.1128.1`).
+Instalar el CLI npm con la versión de la lib Go (ej. `@2.258.1`) genera `npm error notarget No matching version
+found` — esa versión no existe en el registro npm (deploy finding #3, cazado por el CD en su primer run).
+
+El pin correcto para el workflow es `CDK_VERSION=2.1128.1`. Actualizar el CLI npm cuando la versión de la lib Go
+suba: verificar la última versión disponible con `npm view aws-cdk versions --json | tail -5`. El skew CLI < lib
+genera el error "stack not bootstrapped" (hallazgo SP-1) — engañoso porque el bootstrap sí existe, pero el CLI
+no reconoce el schema de la lib más nueva.
 
 ---
 
@@ -731,6 +728,24 @@ reconoce el schema de la lib más nueva.
 - **Resultado tras v6:** smoke §6 pasó completamente — `mail-cd-deploy` asume los 4 cdk-* (`allowed`); `mail-cd-diff` solo asume lookup (`allowed`); `mail-cd-diff` no puede asumir deploy ni publishing (`implicitDeny`). Separación read/write verificada en vivo.
 - **Status:** RESUELTO (detectado por smoke; no habría sido evidente sin `simulate-principal-policy`)
 - **Lección:** el smoke de seguridad (§6) es obligatorio antes de declarar el CD operativo — el boundary puede filtrar acciones que la inline policy sí permite.
+
+### Finding #3 — CLI version skew: versión de la lib Go no existe en npm como CLI
+
+- **Evento:** primer run del CD en GitHub Actions (PR #6) — step `npm install -g aws-cdk@$CDK_VERSION` con `CDK_VERSION` seteado a la versión de la lib Go (`v2.258.1`)
+- **Error:** `npm error notarget No matching version found for aws-cdk@<versión-lib-go>`
+- **Causa raíz:** el CDK CLI npm usa el esquema de versión `2.1xxx.x` (ej. `2.1128.1`), **completamente distinto** del esquema de la lib Go `awscdk/v2` (que es `v2.258.1`). Los dos esquemas no comparten números — la versión de la lib Go no es una versión válida del CLI npm. Este es un nuevo modo de fallo del hallazgo SP-1 "CLI vs lib version skew": en SP-1 el síntoma era "stack not bootstrapped"; aquí es un `notarget` de npm, más obvio pero igual de engañoso si se asume que los esquemas son equivalentes.
+- **Fix:** `CDK_VERSION=2.1128.1` en `cd.yml` (commit `faae10d`). Verificar la versión disponible con `npm view aws-cdk versions --json`. El pin correcto es siempre del esquema `2.1xxx.x`, nunca la versión de la lib Go.
+- **Resultado:** `npm install -g aws-cdk@2.1128.1` pasa en Actions; el workflow continúa.
+- **Status:** RESUELTO. Cazado por el CD en su propio primer run — nunca visible en local donde el CLI ya estaba instalado con la versión correcta.
+
+### Finding #4 — `cdk diff --all` flag inválido en CLI 2.1xxx
+
+- **Evento:** job `diff` del CD (PR #6) — el step `cdk diff --all` corrió y publicó un comentario en el PR
+- **Síntoma:** el comentario del diff incluía `Unknown option(s): --all. These will be ignored` al inicio del output — el flag fue ignorado silenciosamente, el diff corrió igual pero con ruido en la salida
+- **Causa raíz:** en CLI 2.1xxx, `cdk diff` no acepta `--all` — el subcomando `diff` ya difea todos los stacks del app por defecto. El flag `--all` es específico de `cdk deploy` (donde sí es válido y necesario). Usar `--all` en `diff` no falla el comando pero añade una advertencia que contamina el output del PR comment.
+- **Fix:** quitar `--all` del step `cdk diff` en `cd.yml` (commit `af98821`). `cdk deploy --all` permanece sin cambios — es correcto y necesario.
+- **Resultado:** el PR comment del diff queda limpio; `cdk deploy --all` sigue funcionando.
+- **Status:** RESUELTO. Cazado por el output del comment del diff en el propio PR #6.
 
 ---
 

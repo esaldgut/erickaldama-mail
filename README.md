@@ -13,6 +13,7 @@ This is the umbrella repo. The system is decomposed into independent subprojects
 | SP-2 | SES identity + send — DKIM, custom MAIL FROM, DMARC, reputation (CDK-Go) | ✅ live |
 | SP-3 | Receive pipeline — catch-all receipt rule → S3 → Go Lambda → DynamoDB + DLQ (CDK-Go) | ✅ live |
 | SP-4 | Go TUI/CLI/AI client — reads DynamoDB+S3, sends via SES, AI dual-backend (Ollama+Claude) | ✅ live |
+| CD | GitHub Actions → OIDC → AWS, deployed 2026-06-24, PR #6 | ✅ live |
 | SP-5 | iOS Swift client (future) — same backend | pending |
 
 The send, receive, **and** client layers are live: mail to any `*@erickaldama.com` lands parsed and
@@ -49,7 +50,7 @@ diagram is the eagle-eye view.
 
 ## What's deployed (live)
 
-Four CDK-Go stacks plus a Go terminal client are live in `367707589526` / `us-east-1`:
+Five CDK-Go stacks plus a Go terminal client are live in `367707589526` / `us-east-1`:
 
 **`FoundationStack` (SP-1)** — the public Route 53 hosted zone for `erickaldama.com`
 (`Z023932911KA6S98A6ZRW`, CAA pinned to Amazon), plus the `mail-readonly` managed policy that scopes
@@ -154,17 +155,37 @@ triage) — no send tool in the agent path.
 Full build and deploy history, including the 3 live-deploy incidents and the end-to-end verification, is
 in **[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)** and **[`CHANGELOG.md`](CHANGELOG.md)**.
 
+**`CdStack` (CD pipeline)** — the fifth stack, deployed 2026-06-24 (PR #6, merged to develop at 95ce3a3):
+
+```
+CdStack
+  AWS::IAM::OIDCProvider  GithubOidc   — token.actions.githubusercontent.com (L1, 0 Lambda, 0 custom-resource)
+  AWS::IAM::Role          mail-cd-diff — trust sub=…:pull_request → sts:AssumeRole on lookup-role only
+  AWS::IAM::Role          mail-cd-deploy — trust sub=…:environment:production → sts:AssumeRole on 4 cdk-* roles
+  Both roles carry boundary erickaldama-boundary
+```
+
+Workflow `.github/workflows/cd.yml` automates future deploys: `diff` job runs `cdk diff` on every PR and
+comments the result; `deploy` job runs `cdk deploy --all` on every push to `main`, gated behind the GitHub
+Environment `production` (required reviewer: esaldgut) and the OIDC trust `StringEquals` — two independent
+human-approval layers. The first real run of `diff` verified the full OIDC flow end-to-end (PR #6 received
+the bot comment with the CDK diff). Four deploy findings captured during bootstrap — see
+**[`docs/CD-DEPLOY.md`](docs/CD-DEPLOY.md)** (§11) and **[`docs/architecture.md`](docs/architecture.md)**
+(§ CD pipeline) for details.
+
 ### Why this is the interesting part
 
 Every mutation is human-executed out-of-band with SSO Admin; the agent works only as `mail-readonly`
-and a `PreToolUse` hook (SP-0) mechanically blocks any non-CDK-Go write. Across four subprojects, eight
+and a `PreToolUse` hook (SP-0) mechanically blocks any non-CDK-Go write. Across five subprojects, twelve
 real-deploy findings were recorded — not hidden — including failures that the adversarial audit did not
 anticipate (a permissions boundary that intersects the exec-policy, a receipt rule set with no
-declarative "active" field, two Lambda field traps that `go build` accepts but `go vet` rejects). The
-discipline on display: adversarial audit before implementing (agents that *compile* the CDK against the
-live version, not just read docs), real-output verification before declaring done (a green deploy is not
-a verified one — DKIM is asynchronous and the SP-3 "bug reports" turned out to be a confirmed pipeline
-plus a missing click), and productivizing every real-deploy lesson into memories, skills, and this repo.
+declarative "active" field, two Lambda field traps that `go build` accepts but `go vet` rejects, a CDK
+CLI npm version scheme that is entirely separate from the Go library version, and a `cdk diff --all` flag
+that does not exist in CLI 2.1xxx). The discipline on display: adversarial audit before implementing
+(agents that *compile* the CDK against the live version, not just read docs), real-output verification
+before declaring done (a green deploy is not a verified one — DKIM is asynchronous and the SP-3 "bug
+reports" turned out to be a confirmed pipeline plus a missing click), and productivizing every
+real-deploy lesson into memories, skills, and this repo.
 
 ## Ecosystem
 
