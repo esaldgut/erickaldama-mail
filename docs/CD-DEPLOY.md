@@ -1,0 +1,698 @@
+# CD Pipeline — Deploy Runbook
+
+> Subproyecto transversal (tarea #23): el CD que automatiza `cdk deploy` a AWS vía OIDC sin access keys
+> de larga vida, con approval manual a producción.
+> **Cuenta** ErickSA `367707589526` / **región** `us-east-1`. **Repo** `esaldgut/erickaldama-mail` (público, Git Flow).
+> **Worktree:** `worktree-cd-pipeline` / rama `worktree-cd-pipeline`.
+> **Runbook documentado:** 2026-06-24. Canario verificado previo al primer deploy.
+
+---
+
+## Resumen del CD
+
+El CD automatiza el comando `cdk deploy`, NO el juicio. Lo que hoy se hace a mano (el humano corre `cdk deploy` con
+SSO Admin) lo ejecuta GitHub Actions con credenciales temporales OIDC — **sin access keys de larga vida en el repo**.
+El gate de aprobación humana se preserva en **dos capas independientes**:
+
+1. **GitHub Environment `production`:** el job `deploy` queda en estado "Waiting" hasta que el humano aprueba en
+   la UI de Actions (o la API).
+2. **Trust OIDC `StringEquals`:** AWS solo emite credenciales de deploy si el token OIDC tiene
+   `sub=repo:esaldgut/erickaldama-mail:environment:production`. Aunque alguien evadiera GitHub, AWS rechaza la
+   emisión si el contexto no coincide exactamente — cero wildcard.
+
+Ninguna de las dos capas depende de la otra para sostener el gate: si GitHub Environment se desactiva, el trust OIDC
+sigue siendo la segunda barrera; si el rol se elimina (kill-switch), el Environment gate ya no importa.
+
+### Qué automatiza
+
+| Evento | Job | Principal OIDC | Acción |
+|---|---|---|---|
+| PR abierto / actualizado | `diff` (on: pull_request) | `mail-cd-diff` (lookup-role, read-only) | `cdk diff --all` → comenta en el PR |
+| Merge a `main` + approval | `deploy` (on: push → main) | `mail-cd-deploy` (4 roles cdk-*) | `cdk deploy --all --require-approval never` |
+
+El job `diff` es un **preview no-bloqueante**: muestra qué cambiaría en los stacks antes del merge, como evidencia
+de auditoría (skill `pr-as-auditable-evidence`). Nunca muta.
+
+El job `deploy` **PAUSA** (estado "Waiting") tras el merge a main y solo corre tras la aprobación humana explícita.
+Este es el 4º principal con poder de mutación a producción en el proyecto (junto a Admin SSO, cfn-exec-role y, en
+scope limitado, el SES sender de SP-4).
+
+### Stacks que gestiona el CD (5 en total tras este subproyecto)
+
+| Stack | Contenido | Primera vez desplegado |
+|---|---|---|
+| `FoundationStack` | DynamoDB mail-index, S3 raw, usuarios IAM cliente | SP-4 (manual) |
+| `SendingStack` | SES identity, config-set, mail-sender | SP-4 (manual) |
+| `MailStorageStack` | Retention policy S3, TTL DynamoDB | SP-2 (manual) |
+| `ReceivingStack` | SES receipt rule, Lambda, SNS | SP-3 (manual) |
+| `CdStack` | OIDC provider, mail-cd-diff, mail-cd-deploy | **este subproyecto — bootstrap out-of-band** |
+
+---
+
+## 0. Pre-flight
+
+**Antes de cualquier `aws`/`cdk` que toque recursos:** verificar identity y sesión SSO.
+
+Disciplina: `aws-cli-pre-flight-canonical`.
+
+```bash
+aws sts get-caller-identity --profile AdministratorAccess-367707589526 --output json
+```
+
+Salida esperada:
+
+```json
+{
+    "UserId": "AROA...",
+    "Account": "367707589526",
+    "Arn": "arn:aws:sts::367707589526:assumed-role/AWSReservedSSO_AdministratorAccess_.../admin@esaldgut"
+}
+```
+
+Si la sesión SSO expiró (`InvalidClientTokenId` / `no credentials have been configured`):
+
+```bash
+aws sso login --profile AdministratorAccess-367707589526
+```
+
+Volver a verificar con `get-caller-identity` antes de continuar.
+
+**Condiciones de abort:** si `Account` no es `367707589526`, detener. El deploy en la cuenta equivocada es
+irreversible para varios recursos.
+
+---
+
+## 1. Canario pre-deploy (verificado — no repetir salvo rollback)
+
+El canario fue ejecutado por el controller antes de la fase de deploy. Resultados:
+
+### Suite completa
+
+```bash
+go build ./... && go test -count=1 ./...
+```
+
+Resultado (VERDE, 5 paquetes):
+
+```
+ok      github.com/esaldgut/erickaldama-mail/internal/infra     0.XXXs
+ok      github.com/esaldgut/erickaldama-mail/internal/mailbox   0.XXXs
+ok      github.com/esaldgut/erickaldama-mail/internal/message   0.XXXs
+ok      github.com/esaldgut/erickaldama-mail/internal/redact    0.XXXs
+ok      github.com/esaldgut/erickaldama-mail/test/hook          0.XXXs
+```
+
+`go vet ./...` — 0 issues. `gofmt -l internal/ cmd/` — 0 archivos con formato incorrecto.
+
+### cdk diff (stacks existentes — canario de no-regresión)
+
+```bash
+AWS_PROFILE=AdministratorAccess-367707589526 cdk diff FoundationStack SendingStack MailStorageStack ReceivingStack
+```
+
+Resultado: **"There were no differences"** en los 4 stacks existentes. El CdStack NO los toca — canario
+correcto: el diff del nuevo stack está aislado.
+
+### cdk diff CdStack (preview del deploy)
+
+```bash
+AWS_PROFILE=AdministratorAccess-367707589526 cdk diff CdStack
+```
+
+Recursos que **se crearán** (exactamente estos, nada más):
+
+```
++ AWS::IAM::OIDCProvider  GithubOidc
++ AWS::IAM::Role          DiffRole    (mail-cd-diff)
++ AWS::IAM::Role          DeployRole  (mail-cd-deploy)
++ AWS::IAM::ManagedPolicy DiffRoleDefaultPolicy
++ AWS::IAM::ManagedPolicy DeployRoleDefaultPolicy
+```
+
+**Verificación clave:** exactamente 2 `AWS::IAM::Role` (el L1 `CfnOIDCProvider` nativo, 0 Lambda, 0 custom-resource).
+El L2 `NewOpenIdConnectProvider` daría un 3er rol y una función Lambda nodejs22.x sin boundary — por eso se usa L1.
+
+---
+
+## 2. Task 0 — Boundary v5 (prerequisito del deploy del CdStack)
+
+**TAREA DEL HUMANO — out-of-band — antes del primer `cdk deploy CdStack`.**
+
+### Contexto (hallazgo B4)
+
+El `erickaldama-boundary` actual (v4, live) tiene el statement `DenyEscalationAndOutOfScope` que deniega
+`iam:PutRolePermissionsBoundary`. Al crear roles CON `PermissionsBoundary` adjunto (como hacen `mail-cd-diff`
+y `mail-cd-deploy`), CloudFormation llama a `CreateRole` + `PutRolePermissionsBoundary`. Aunque el cfn-exec-role
+tiene `iam:*` Allow en su exec-policy, el boundary **intersecta** (no une) — el `Deny PutRolePermissionsBoundary`
+en el boundary prevalece sobre el Allow de la exec-policy.
+
+**Consecuencia:** el primer `cdk deploy CdStack` fallará con:
+
+```
+User: arn:aws:sts::367707589526:assumed-role/cdk-hnb659fds-cfn-exec-role-... is not authorized to perform:
+iam:PutRolePermissionsBoundary on resource: arn:aws:iam::367707589526:role/mail-cd-diff
+with an explicit deny in a permissions boundary: arn:aws:iam::367707589526:policy/erickaldama-boundary
+```
+
+El boundary v4 actual ya tiene el Sid `DenyPutRoleBoundaryExceptErickaldamaBoundary` que permite
+`PutRolePermissionsBoundary` **solo cuando el boundary que se adjunta es `erickaldama-boundary` mismo**
+(vía `StringNotEqualsIfExists`). Esta es la excepción scoped que constituye boundary v5.
+
+**Verificar el estado actual del boundary v4:**
+
+```bash
+aws iam get-policy-version \
+  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --version-id v4 \
+  --profile AdministratorAccess-367707589526 \
+  --query 'PolicyVersion.Document.Statement[?Sid==`DenyPutRoleBoundaryExceptErickaldamaBoundary`]' \
+  --output json
+```
+
+Si el Sid `DenyPutRoleBoundaryExceptErickaldamaBoundary` **ya existe** en v4 (con el `Condition`
+`StringNotEqualsIfExists`), la excepción ya está aplicada y el deploy del CdStack puede proceder directamente.
+
+Si **no existe** (boundary v4 original sin la excepción), aplicar boundary v5:
+
+```bash
+# 1. Verificar cuántas versiones hay (límite 5; si hay 5, borrar la más vieja no-default)
+aws iam list-policy-versions \
+  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --profile AdministratorAccess-367707589526 \
+  --query 'Versions[].{V:VersionId,Default:IsDefaultVersion}' \
+  --output table
+
+# 2. Crear la nueva versión con la excepción scoped y hacerla default
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --policy-document file://iam/erickaldama-boundary.json \
+  --set-as-default \
+  --profile AdministratorAccess-367707589526
+```
+
+Salida esperada:
+
+```json
+{ "PolicyVersion": { "VersionId": "v5", "IsDefaultVersion": true, "CreateDate": "2026-06-24T..." } }
+```
+
+**Verificación read-only antes del deploy (validar, no asumir):**
+
+```bash
+aws iam get-policy-version \
+  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --version-id v5 \
+  --profile AdministratorAccess-367707589526 \
+  --query 'PolicyVersion.Document.Statement[*].Sid' \
+  --output json
+# Debe incluir: "DenyPutRoleBoundaryExceptErickaldamaBoundary"
+```
+
+### Premisa NO verificada empíricamente
+
+La doc de IAM User Guide + AWS Prescriptive Guidance establece que `CreateRole` con `PermissionsBoundary` requiere
+`iam:PutRolePermissionsBoundary` en el caller. Sin embargo, **no hay smoke-test previo** que confirme que la
+excepción `StringNotEqualsIfExists` en el boundary resuelve el conflicto exactamente como se espera.
+
+**El primer `cdk deploy CdStack` es el smoke definitivo.** Si falla con un error IAM diferente al esperado, anotar
+el finding en §8 (Deploy Findings).
+
+---
+
+## 3. Bootstrap out-of-band del CdStack
+
+**TAREA DEL HUMANO — el CD no puede auto-desplegarse (aún no existe).**
+
+Este es el único deploy del CdStack que se hace a mano. Después del bootstrap exitoso, el propio CD gestiona el
+CdStack como un stack más en el `cdk deploy --all`.
+
+### Sutileza gallina-huevo
+
+El job `deploy` del CD necesita que `mail-cd-deploy` exista. El rol `mail-cd-deploy` lo crea el CdStack. El
+CdStack lo despliega el humano la primera vez. Es el patrón bootstrap canónico del proyecto (cf. SP-1 boot).
+
+### Comando de bootstrap
+
+```bash
+AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never
+```
+
+Por qué `--require-approval never`: el CDK con el flag default `broadening` exige un TTY para confirmar cambios
+de seguridad. En operaciones no interactivas (y como prevención del incidente #1 de SP-4) se usa `never` cuando
+el diff ya fue auditado previamente (el canario de §1 lo auditó).
+
+### Salida esperada
+
+```
+CdStack | CREATE_IN_PROGRESS | AWS::IAM::OIDCProvider | GithubOidc
+CdStack | CREATE_COMPLETE    | AWS::IAM::OIDCProvider | GithubOidc
+CdStack | CREATE_IN_PROGRESS | AWS::IAM::Role          | DiffRole
+CdStack | CREATE_IN_PROGRESS | AWS::IAM::Role          | DeployRole
+CdStack | CREATE_COMPLETE    | AWS::IAM::Role          | DiffRole
+CdStack | CREATE_COMPLETE    | AWS::IAM::Role          | DeployRole
+ ✅  CdStack
+```
+
+### Verificación post-bootstrap
+
+```bash
+# El OIDC provider existe
+aws iam list-open-id-connect-providers \
+  --profile AdministratorAccess-367707589526 \
+  --query 'OpenIDConnectProviderList[].Arn'
+# Debe incluir: arn:aws:iam::367707589526:oidc-provider/token.actions.githubusercontent.com
+
+# Los roles existen
+aws iam get-role --role-name mail-cd-diff \
+  --profile AdministratorAccess-367707589526 \
+  --query 'Role.Arn'
+# → arn:aws:iam::367707589526:role/mail-cd-diff
+
+aws iam get-role --role-name mail-cd-deploy \
+  --profile AdministratorAccess-367707589526 \
+  --query 'Role.Arn'
+# → arn:aws:iam::367707589526:role/mail-cd-deploy
+
+# Los trust policies son los esperados (auditables en iam/)
+aws iam get-role --role-name mail-cd-deploy \
+  --profile AdministratorAccess-367707589526 \
+  --query 'Role.AssumeRolePolicyDocument' \
+  --output json
+# Debe coincidir con iam/cd-deploy-trust.json: StringEquals environment:production
+```
+
+### Deploy Findings — espacio reservado
+
+Anotar aquí cualquier error IAM o CFN que aparezca durante el bootstrap real:
+
+```
+[PENDING — se llenará tras el primer cdk deploy CdStack]
+
+Ejemplo del patrón de incidente (cf. SP-4 §3):
+  Evento: CREATE_FAILED en DiffRole / DeployRole
+  Error: iam:PutRolePermissionsBoundary AccessDenied
+  Causa: boundary vX no tiene la excepción scoped
+  Fix: aplicar boundary vX+1 con el Sid correcto
+  Resultado: re-deploy exitoso
+```
+
+---
+
+## 4. GATE CRÍTICO del Environment `production`
+
+**TAREA DEL HUMANO — before any push to main.**
+
+Este es el gate más crítico del runbook. Si se omite o se configura mal, el deploy corre **sin aprobación humana**
+— el principal objetivo de seguridad del CD queda anulado.
+
+### Por qué es crítico
+
+GitHub auto-crea el environment `production` cuando el workflow referencia `environment: production` **si no existe
+pre-configurado**. El environment auto-creado viene **vacío**: sin required reviewers, sin deployment branch rules.
+El job `deploy` corre inmediatamente tras el merge a main, sin pausa.
+
+`cdk deploy` en el workflow usa `--require-approval never` (necesario en CI — cf. incidente #1 SP-4). Si el
+Environment está vacío, **no hay ningún gate humano entre el merge y la mutación a producción**.
+
+### Configuración paso a paso (UI de GitHub)
+
+1. Ir a `https://github.com/esaldgut/erickaldama-mail/settings/environments`
+2. Crear (o editar si fue auto-creado) el environment **`production`**
+3. En **"Required reviewers"**: añadir tu usuario (`esaldgut`) — 1 reviewer basta
+4. **"Prevent self-review"**: **DESACTIVADO** (single-dev; con 1 reviewer y self-review habilitado nunca se podría aprobar)
+5. En **"Deployment branches and tags"**: seleccionar "Selected branches and tags" → añadir `main`
+6. Guardar
+
+### Verificación por API (antes de cualquier push a main)
+
+```bash
+gh api repos/esaldgut/erickaldama-mail/environments/production \
+  --jq '.protection_rules'
+```
+
+Salida esperada (required_reviewers NO vacío):
+
+```json
+[
+  {
+    "id": 123456,
+    "type": "required_reviewers",
+    "reviewers": [
+      {
+        "type": "User",
+        "reviewer": { "login": "esaldgut" }
+      }
+    ]
+  }
+]
+```
+
+Si la salida es `[]` o el campo `required_reviewers` está vacío: **NO hacer push a main**. Configurar el
+environment primero.
+
+### Verificación adicional — deployment branch rule
+
+```bash
+gh api repos/esaldgut/erickaldama-mail/environments/production \
+  --jq '.deployment_branch_policy'
+```
+
+Debe indicar `"protected_branches": false, "custom_branch_policies": true` (o el equivalente con main protegido).
+Si es `null`, el environment acepta deploy desde cualquier rama — configurar la regla.
+
+---
+
+## 5. Verificación OIDC end-to-end
+
+Esta sección documenta la verificación funcional completa del CD tras el bootstrap del CdStack y la configuración
+del Environment.
+
+### 5a. Job `diff` — PR de prueba
+
+Abrir un PR de cualquier feature branch a `develop` (o a `main` directamente para la prueba):
+
+```
+# El job diff corre automáticamente (on: pull_request)
+# Revisar Actions tab → job "diff":
+# - checkout OK
+# - configure-aws-credentials: asume mail-cd-diff (role-to-assume)
+# - cdk diff --all: muestra los stacks y sus cambios (o "no differences")
+# - github-script: crea/actualiza el comment con el diff
+```
+
+Evidencia esperada: el PR recibe un comment del bot con el cdk diff, marcado con `<!-- cdk-diff-bot -->`.
+
+**Nota sobre PRs de fork:** el job `diff` tiene un fork guard:
+
+```yaml
+if: github.event.pull_request.head.repo.full_name == github.repository
+```
+
+Los PRs de forks externos no obtienen OIDC ni `pull-requests:write` en repos públicos — el job hace skip.
+Esto es la barrera de seguridad funcionando correctamente, no un bug. **Por esta razón el job `diff` NO debe
+marcarse como "required status check"** en las branch protection rules de develop/main: un PR de fork lo dejaría
+en estado `skipped`, que bloquearía el PR indefinidamente.
+
+### 5b. Job `deploy` — merge a main + approval
+
+Después de que el PR se aprueba y se mergea a `main`:
+
+```
+# El push a main dispara el job "deploy"
+# En Actions tab: el job queda en estado "Waiting" (Environment gate activo)
+# Aparece el botón "Review deployments" o "Approve"
+
+# APROBAR en la UI de GitHub Actions (o API):
+gh api repos/esaldgut/erickaldama-mail/actions/runs/<RUN_ID>/pending_deployments \
+  -X POST \
+  -f environment_ids[]='<ENV_ID>' \
+  -f state='approved' \
+  -f comment='Approved by human reviewer — deployment verified'
+```
+
+Tras la aprobación, el job reanuda:
+
+```
+deploy | configure-aws-credentials: asumiendo mail-cd-deploy
+deploy | cdk deploy --all --require-approval never
+deploy | FoundationStack: no changes
+deploy | SendingStack: no changes
+deploy | MailStorageStack: no changes
+deploy | ReceivingStack: no changes
+deploy | CdStack: no changes (o los cambios del PR)
+deploy | ✅ Deployment complete
+```
+
+---
+
+## 6. Smoke de seguridad empírico
+
+Verificar que `mail-cd-diff` **no puede mutar** y que `mail-cd-deploy` **no es asumible desde un PR**.
+
+Disciplina: los permisos correctos se verifican empíricamente, no solo en el papel (cf. SP-4 §5).
+
+### 6a. `mail-cd-diff` no puede asumir el deploy-role
+
+```bash
+# Simular que mail-cd-diff intenta asumir mail-cd-deploy
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --action-names sts:AssumeRole \
+  --resource-arns arn:aws:iam::367707589526:role/mail-cd-deploy \
+  --profile AdministratorAccess-367707589526 \
+  --query 'EvaluationResults[].{Action:EvalActionName,Decision:EvalDecision}' \
+  --output table
+```
+
+Resultado esperado: `implicitDeny` (o `explicitDeny`). Si dice `allowed`: revisar la inline policy del rol diff.
+
+### 6b. `mail-cd-diff` puede asumir el lookup-role
+
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --action-names sts:AssumeRole \
+  --resource-arns arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1 \
+  --profile AdministratorAccess-367707589526 \
+  --query 'EvaluationResults[].{Action:EvalActionName,Decision:EvalDecision}' \
+  --output table
+```
+
+Resultado esperado: `allowed`.
+
+### 6c. `mail-cd-deploy` puede asumir los 4 roles cdk-*
+
+```bash
+for ROLE in deploy-role-367707589526-us-east-1 file-publishing-role-367707589526-us-east-1 \
+            image-publishing-role-367707589526-us-east-1 lookup-role-367707589526-us-east-1; do
+  aws iam simulate-principal-policy \
+    --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-deploy \
+    --action-names sts:AssumeRole \
+    --resource-arns "arn:aws:iam::367707589526:role/cdk-hnb659fds-${ROLE}" \
+    --profile AdministratorAccess-367707589526 \
+    --query "EvaluationResults[].{Role:'${ROLE}',Decision:EvalDecision}" \
+    --output table
+done
+```
+
+Resultado esperado: `allowed` para los 4.
+
+### 6d. Verificar que el trust del deploy-role rechaza tokens sin `environment:production`
+
+El trust de `mail-cd-deploy` usa `StringEquals` (no `StringLike`) en el `sub`. Un PR (sub=`pull_request`)
+**no puede** asumir el rol de deploy — verificar que el trust policy en AWS coincide con `iam/cd-deploy-trust.json`:
+
+```bash
+aws iam get-role --role-name mail-cd-deploy \
+  --profile AdministratorAccess-367707589526 \
+  --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition' \
+  --output json
+```
+
+Salida esperada:
+
+```json
+{
+    "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:esaldgut/erickaldama-mail:environment:production"
+    }
+}
+```
+
+Si hay un `StringLike` o wildcard en el `sub`: **STOP — riesgo crítico**. Cualquier PR podría obtener credenciales
+de deploy. Corregir el trust policy antes de continuar.
+
+---
+
+## 7. Matiz de concurrency
+
+El workflow tiene:
+
+```yaml
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+```
+
+**Por qué `cancel-in-progress: false`:** cancela el job **en espera** (el siguiente que llegó), NO el que está
+corriendo. Si se cancelara el deploy en curso, el stack quedaría en estado inconsistente (CloudFormation en
+rollback parcial). Con `false`, el deploy en curso termina; solo el pending intermedio se cancela.
+
+**Consecuencia práctica:** si se mergean 2 PRs a `main` mientras hay un deploy activo:
+
+```
+PR A mergea → deploy A corre
+PR B mergea → deploy B encola (pending)
+PR C mergea → deploy C cancela a B (solo 1 pending permitido); C encola
+deploy A termina → deploy C corre
+```
+
+El estado final converge (cada deploy es `--all` desde HEAD), pero el commit de PR B no tiene su run verde propio
+en Actions. Esto es aceptable para single-dev en v0.1 — documentar si se convierte en problema.
+
+---
+
+## 8. Kill-switch
+
+Si se detecta un compromiso del CD o se necesita revocar el acceso de GitHub Actions a AWS de forma inmediata:
+
+### Opción 1 (rápida) — Eliminar el trust del rol de deploy
+
+```bash
+# Reemplazar el trust policy por uno vacío (no asumible)
+aws iam update-assume-role-policy \
+  --role-name mail-cd-deploy \
+  --policy-document '{"Version":"2012-10-17","Statement":[]}' \
+  --profile AdministratorAccess-367707589526
+
+# Verificar que el trust quedó vacío
+aws iam get-role --role-name mail-cd-deploy \
+  --profile AdministratorAccess-367707589526 \
+  --query 'Role.AssumeRolePolicyDocument.Statement'
+# → []
+```
+
+El CD no puede emitir credenciales de deploy de inmediato. El job fallará en el step `configure-aws-credentials`.
+
+### Opción 2 (irreversible) — Eliminar el rol
+
+```bash
+# Primero, desadjuntar las policies inline
+aws iam list-role-policies --role-name mail-cd-deploy \
+  --profile AdministratorAccess-367707589526
+
+aws iam delete-role-policy --role-name mail-cd-deploy \
+  --policy-name <inline-policy-name> \
+  --profile AdministratorAccess-367707589526
+
+# Luego borrar el rol
+aws iam delete-role --role-name mail-cd-deploy \
+  --profile AdministratorAccess-367707589526
+```
+
+Para recuperarlo: `cdk deploy CdStack` (out-of-band, como en §3).
+
+### Opción 3 (GitHub-side) — Deshabilitar el Environment
+
+En `https://github.com/esaldgut/erickaldama-mail/settings/environments`, eliminar o deshabilitar `production`.
+El job deploy queda bloqueado aunque tenga credenciales AWS. Es la barrera de la capa 1.
+
+### Opción 4 (GitHub-side) — Deshabilitar el workflow
+
+```bash
+gh workflow disable cd.yml --repo esaldgut/erickaldama-mail
+```
+
+El job no se disparará aunque haya un push a main.
+
+**Recomendación:** en una emergencia real, combinar Opción 1 (AWS) + Opción 4 (GitHub) — corte inmediato en ambas
+capas. La Opción 2 se usa si se sospecha que el rol fue comprometido y se quiere evidencia forense antes de
+recrearlo.
+
+---
+
+## 9. Notas de seguridad adicionales
+
+### El job `diff` NO debe ser required status check
+
+**Importante:** no marcar el job `diff` como "required status check" en las branch protection rules de `develop`
+o `main`.
+
+PRs de forks externos tienen el fork guard activo:
+
+```yaml
+if: github.event.pull_request.head.repo.full_name == github.repository
+```
+
+En repos públicos, un PR de fork no puede obtener OIDC ni `pull-requests:write`. El job hace skip (`skipped`).
+GitHub trata `skipped` distinto a `success` — un required check en `skipped` **bloquea el PR**. El PR de un
+colaborador externo quedaría bloqueado indefinidamente aunque su código sea correcto.
+
+Esto no es un bug: es la barrera de seguridad funcionando. Los forks no obtienen credenciales AWS — exactamente
+el diseño correcto. Solo es importante no convertirlo en un bloqueo de PR innecesario.
+
+### `pull-requests:write` es del GITHUB_TOKEN, no del rol OIDC
+
+Los dos jobs usan credenciales separadas:
+
+- **OIDC (`id-token: write`):** para asumir roles AWS. Las credenciales AWS temporales van a `configure-aws-credentials`.
+- **GITHUB_TOKEN (`pull-requests:write` en el job diff):** para comentar en el PR. Es el token de la Actions app,
+  no tiene permisos AWS.
+
+Esta separación es intencional (skill `pr-as-auditable-evidence`): el comentario del diff en el PR es una acción
+de GitHub, no de AWS. El rol `mail-cd-diff` no tiene ni necesita permisos de GitHub API.
+
+### Node 22 — requerido para CDK v2
+
+```yaml
+- uses: actions/setup-node@v6
+  with:
+    node-version: 22
+```
+
+CDK v2 requiere Node 22+ (verificado en doc oficial). Sin esto el runner podría tener Node 20 o anterior y fallar
+en el `cdk diff` / `cdk deploy` con un error latente difícil de diagnosticar.
+
+### Version pinning del CDK CLI
+
+```bash
+npm install -g aws-cdk@2.258.x
+```
+
+Mantener el CLI cerca de la versión de la librería (`awscdk/v2 v2.258.1` en `go.mod`). El skew CLI < lib genera
+el error "stack not bootstrapped" (hallazgo SP-1) — engañoso porque el bootstrap sí existe, pero el CLI no
+reconoce el schema de la lib más nueva.
+
+---
+
+## 10. Quick Reference
+
+| Acción | Comando |
+|---|---|
+| Pre-flight identity | `aws sts get-caller-identity --profile AdministratorAccess-367707589526` |
+| Sesión SSO expirada | `aws sso login --profile AdministratorAccess-367707589526` |
+| Aplicar boundary v5 | `aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --policy-document file://iam/erickaldama-boundary.json --set-as-default --profile AdministratorAccess-367707589526` |
+| Ver versiones del boundary | `aws iam list-policy-versions --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --profile AdministratorAccess-367707589526` |
+| Bootstrap CdStack | `AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never` |
+| Verificar Environment gate | `gh api repos/esaldgut/erickaldama-mail/environments/production --jq '.protection_rules'` |
+| Verificar OIDC provider | `aws iam list-open-id-connect-providers --profile AdministratorAccess-367707589526` |
+| Smoke diff-role no puede deploy | `aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff --action-names sts:AssumeRole --resource-arns arn:aws:iam::367707589526:role/mail-cd-deploy --profile AdministratorAccess-367707589526` |
+| Kill-switch rápido | `aws iam update-assume-role-policy --role-name mail-cd-deploy --policy-document '{"Version":"2012-10-17","Statement":[]}' --profile AdministratorAccess-367707589526` |
+| Kill-switch rol completo | `aws iam delete-role --role-name mail-cd-deploy --profile AdministratorAccess-367707589526` |
+| Deshabilitar workflow | `gh workflow disable cd.yml --repo esaldgut/erickaldama-mail` |
+
+**Cuenta** `367707589526` · **región** `us-east-1` · **boundary** v4 live (v5 = prerequisito del primer deploy del CdStack) · **repo** `esaldgut/erickaldama-mail` (público).
+
+---
+
+## 11. Deploy Findings
+
+> Esta sección se llena tras el bootstrap real del CdStack y la primera verificación OIDC e2e.
+> El patrón de documentación sigue el de SP-4-DEPLOY.md §3: evento, error exacto, causa raíz, fix, resultado.
+
+```
+[PENDING — esperando el primer cdk deploy CdStack]
+```
+
+**Finding esperado (B4 — premisa verificable):**
+- **Evento:** `cdk deploy CdStack` sin boundary v5
+- **Error esperado:** `iam:PutRolePermissionsBoundary AccessDenied` en `DiffRole` o `DeployRole`
+- **Fix:** aplicar boundary v5 (§2) y re-deployer
+- **Status:** PREMISA — el primer deploy es el smoke definitivo
+
+Si el primer deploy del CdStack tiene éxito **sin** aplicar boundary v5 adicional (porque el Sid
+`DenyPutRoleBoundaryExceptErickaldamaBoundary` ya existe en v4), documentar aquí:
+
+```
+Finding B4 — RESUELTO ANTES DEL DEPLOY:
+El boundary v4 ya incluía la excepción DenyPutRoleBoundaryExceptErickaldamaBoundary.
+El deploy del CdStack prosperó sin crear boundary v5 separado.
+Task 0 = no-op (verificar versión activa, confirmar excepción presente).
+```
+
+---
+
+> **Repo público** · Cuenta `367707589526` publicable · Sin secrets ni marcas internas.
+> Documentado 2026-06-24 con los resultados reales del canario pre-deploy.
+> Patrón de referencia: `SP-4-DEPLOY.md` (mismo proyecto, mismo estilo).
