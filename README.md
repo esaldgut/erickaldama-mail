@@ -12,12 +12,15 @@ This is the umbrella repo. The system is decomposed into independent subprojects
 | SP-1 | Foundation — Route 53 hosted zone + base IAM (CDK-Go) | ✅ live |
 | SP-2 | SES identity + send — DKIM, custom MAIL FROM, DMARC, reputation (CDK-Go) | ✅ live |
 | SP-3 | Receive pipeline — catch-all receipt rule → S3 → Go Lambda → DynamoDB + DLQ (CDK-Go) | ✅ live |
-| SP-4 | Go TUI client — reads DynamoDB+S3, sends via SES v2 (nvim/tmux) | pending |
+| SP-4 | Go TUI/CLI/AI client — reads DynamoDB+S3, sends via SES, AI dual-backend (Ollama+Claude) | ✅ live |
 | SP-5 | iOS Swift client (future) — same backend | pending |
 
-The send **and** receive halves are live: mail to any `*@erickaldama.com` lands parsed and indexed in
-DynamoDB, and `erick@erickaldama.com` can send DKIM-signed, DMARC-aligned mail. Only the reader (SP-4)
-remains before the loop is closed end-to-end from a terminal.
+The send, receive, **and** client layers are live: mail to any `*@erickaldama.com` lands parsed and
+indexed in DynamoDB; `erick@erickaldama.com` can send DKIM-signed, DMARC-aligned mail; and the Go
+terminal client (SP-4) closes the loop end-to-end — send→receive→read verified in live AWS on
+2026-06-24. See **[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)** and
+**[`CHANGELOG.md`](CHANGELOG.md#sp-4----cliente-tuicliai-go----2026-06-24)** for the full build
+history, deploy findings, and the verified end-to-end test.
 
 ## Architecture
 
@@ -46,7 +49,7 @@ diagram is the eagle-eye view.
 
 ## What's deployed (live)
 
-Four CDK-Go stacks are live in `367707589526` / `us-east-1`:
+Four CDK-Go stacks plus a Go terminal client are live in `367707589526` / `us-east-1`:
 
 **`FoundationStack` (SP-1)** — the public Route 53 hosted zone for `erickaldama.com`
 (`Z023932911KA6S98A6ZRW`, CAA pinned to Amazon), plus the `mail-readonly` managed policy that scopes
@@ -113,6 +116,43 @@ DynamoDB end-to-end. Full runbook — commands, real outputs, the post-deploy di
 "symptoms that weren't bugs" — is in **[`docs/SP-3-DEPLOY.md`](docs/SP-3-DEPLOY.md)**. The
 human-executed bootstrap/deploy steps per subproject are in **[`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)**;
 SP-1's first-deploy runbook is in **[`docs/SP-1-DEPLOY.md`](docs/SP-1-DEPLOY.md)**.
+
+**Go terminal client (SP-4)** — the consumer layer that closes the loop end-to-end. Two binaries over a
+shared domain core:
+
+```
+cmd/mail         CLI Cobra · ls / read / send / reply / ai
+cmd/mail-tui     TUI Bubble Tea · list / reader / composer · Vim-motions (j/k/gg/G)
+
+internal/message    MIME parse/build (enmime/v2) · threading RFC 5322 · html-to-markdown render (glamour)
+internal/mailbox    Reader  — Query DynamoDB mail-index + GetObject S3 erickaldama-mail-raw
+                    Sender  — SendRawEmail via SES v2 + SigV4
+internal/aiassist   LLMProvider interface + agent-loop (read-only tools, no send tool)
+  /ollama             Ollama local  (qwen3:32b)   — default, mail stays on-device
+  /claude             Claude API    (claude-opus-4-8, adaptive thinking) — opt-in with explicit warning
+internal/redact     Deterministic NDA mask (secret-shaped tokens + third-party emails) before any
+                    backend that crosses the network
+internal/awsconf    Credential loader for the two scoped IAM users
+internal/wire       Single instantiation point (DRY)
+```
+
+Two IAM users provisioned via CDK with least-privilege disjoint scopes:
+
+| User | Scope |
+|---|---|
+| `mail-client-read` | `dynamodb:Query` on `mail-index` + `s3:GetObject` on `erickaldama-mail-raw` |
+| `mail-sender` | `ses:SendRawEmail` on the identity ARN + `mail-config` configuration set |
+
+SES is still in sandbox (200/day). The client handles sandbox rejections via a typed
+`ErrSandboxRecipient` sentinel — no string-match error silencing.
+
+The **AI dual-backend** is the differentiating piece: Ollama local (`qwen3:32b`) is the safe default —
+the mail corpus never leaves the Mac; Claude API (`claude-opus-4-8`, adaptive thinking) is opt-in with
+an explicit on-screen warning. Both share the same agent-loop with read-only tools (summarize, draft,
+triage) — no send tool in the agent path.
+
+Full build and deploy history, including the 3 live-deploy incidents and the end-to-end verification, is
+in **[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)** and **[`CHANGELOG.md`](CHANGELOG.md)**.
 
 ### Why this is the interesting part
 

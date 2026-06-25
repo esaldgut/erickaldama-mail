@@ -87,6 +87,17 @@ func TestReputationAlarms(t *testing.T) {
 		}))
 }
 
+func TestSendingStackHasSenderUser(t *testing.T) {
+	app := awscdk.NewApp(nil)
+	stack := NewSendingStack(app, "SendingStack", &awscdk.StackProps{
+		Env: &awscdk.Environment{Account: jsii.String(Account), Region: jsii.String(Region)},
+	})
+	template := assertions.Template_FromStack(stack, nil)
+	template.HasResourceProperties(jsii.String("AWS::IAM::User"), map[string]any{
+		"UserName": SenderUserName,
+	})
+}
+
 func TestSendIam(t *testing.T) {
 	template := synthSending(t)
 
@@ -110,4 +121,9 @@ func TestSendIam(t *testing.T) {
 	template.ResourceCountIs(jsii.String("AWS::IAM::Role"), jsii.Number(1))
 	template.HasResourceProperties(jsii.String("AWS::IAM::Role"),
 		assertions.Match_ObjectLike(&map[string]interface{}{"RoleName": "mail-sender-role"}))
+
+	// Exactly one IAM user in SendingStack (mail-sender) — guard against accidental extra users (audit H2).
+	template.ResourceCountIs(jsii.String("AWS::IAM::User"), jsii.Number(1))
+	template.HasResourceProperties(jsii.String("AWS::IAM::User"),
+		assertions.Match_ObjectLike(&map[string]interface{}{"UserName": "mail-sender"}))
 }

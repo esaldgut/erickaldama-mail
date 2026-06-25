@@ -39,8 +39,9 @@ func TestReadonlyManagedPolicy(t *testing.T) {
 		"ManagedPolicyName": "mail-readonly-managed",
 		"Users":             []any{"mail-readonly"},
 	})
-	// Importing a user must NOT emit an AWS::IAM::User.
-	template.ResourceCountIs(jsii.String("AWS::IAM::User"), jsii.Number(0))
+	// Importing a user must NOT emit an AWS::IAM::User (mail-readonly is imported, not created).
+	// SP-4 adds mail-client-read as a new CFN user — count is now 1.
+	template.ResourceCountIs(jsii.String("AWS::IAM::User"), jsii.Number(1))
 	// Hard-deny statement present.
 	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]any{
 		"PolicyDocument": map[string]any{
@@ -93,14 +94,25 @@ func TestReadonlyManagedPolicy(t *testing.T) {
 func TestPermissionsBoundaryNotInStack(t *testing.T) {
 	template := synth(t)
 
-	// The stack owns exactly ONE managed policy: the readonly one.
 	// The permissions boundary (erickaldama-boundary) is a BOOTSTRAP artifact — it must
 	// pre-exist for `cdk bootstrap --custom-permissions-boundary`, so CFN does NOT own it
 	// (owning it caused a 409 AlreadyExists on first deploy). It lives only in
 	// iam/erickaldama-boundary.json, managed out-of-band like the exec-policy.
-	template.ResourceCountIs(jsii.String("AWS::IAM::ManagedPolicy"), jsii.Number(1))
+	// SP-4 adds mail-client-read policy — stack now owns TWO managed policies.
+	template.ResourceCountIs(jsii.String("AWS::IAM::ManagedPolicy"), jsii.Number(2))
 	template.HasResourceProperties(jsii.String("AWS::IAM::ManagedPolicy"), map[string]any{
 		"ManagedPolicyName": "mail-readonly-managed",
+	})
+}
+
+func TestFoundationStackHasClientReadUser(t *testing.T) {
+	app := awscdk.NewApp(nil)
+	stack := NewFoundationStack(app, "FoundationStack", &awscdk.StackProps{
+		Env: &awscdk.Environment{Account: jsii.String(Account), Region: jsii.String(Region)},
+	})
+	template := assertions.Template_FromStack(stack, nil)
+	template.HasResourceProperties(jsii.String("AWS::IAM::User"), map[string]any{
+		"UserName": ClientReadUserName,
 	})
 }
 
