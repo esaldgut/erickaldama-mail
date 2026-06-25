@@ -24,7 +24,6 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/jhillyerd/enmime/v2 v2.4.1
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 )
 
 require (
