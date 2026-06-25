@@ -15,7 +15,7 @@
       "Effect": "Deny",
       "Action": [
         "route53domains:*", "ec2:*", "rds:*", "organizations:*",
-        "iam:PutUserPermissionsBoundary", "iam:PutRolePermissionsBoundary",
+        "iam:PutUserPermissionsBoundary",
         "iam:DeleteUserPermissionsBoundary", "iam:DeleteRolePermissionsBoundary"
       ],
       "Resource": "*"
@@ -30,6 +30,17 @@
         "arn:aws:iam::367707589526:user/mail-client-read",
         "arn:aws:iam::367707589526:user/mail-sender"
       ]
+    },
+    {
+      "Sid": "DenyPutRoleBoundaryExceptErickaldamaBoundary",
+      "Effect": "Deny",
+      "Action": "iam:PutRolePermissionsBoundary",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "iam:PermissionsBoundary": "arn:aws:iam::367707589526:policy/erickaldama-boundary"
+        }
+      }
     }
   ]
 }
