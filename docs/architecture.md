@@ -5,9 +5,13 @@ provisioned entirely with **AWS CDK (Go)**, consumed by a terminal-native Go cli
 
 > Region: `us-east-1` · Account: ErickSA (367707589526) · All resources provisioned via AWS CDK Go.
 >
-> **Status (2026-06-24):** the SEND path (SP-2), the RECEIVE path (SP-3), and the Go terminal client
-> (SP-4) are **all live and verified** — send→receive→read exercised end-to-end against live AWS.
-> The full loop is closed.
+> **Status (2026-06-25):** the SEND path (SP-2), the RECEIVE path (SP-3), the Go terminal client
+> (SP-4, v0.2), and the CD pipeline (GitHub Actions → OIDC → AWS) are **all live and verified** —
+> send→receive→read exercised end-to-end against live AWS. The full loop is closed.
+>
+> **Client v0.2:** `config.toml` (XDG path) drives a multi-mailbox `mail ls` (merged, sorted by `SK`).
+> CC/BCC on send/reply + the TUI composer — the **BCC rides only the SES envelope, never the MIME header**
+> (privacy invariant, asserted at the core and TUI-end-to-end). Reply-all pre-fills the Cc with the originals.
 
 ```mermaid
 flowchart TB
