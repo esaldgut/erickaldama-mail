@@ -12,6 +12,106 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [CD] — Pipeline de CI/CD con OIDC — 2026-06-24
+
+Automatización del `cdk deploy` vía GitHub Actions con credenciales temporales OIDC — sin access keys de
+larga vida en el repo, con doble gate de aprobación humana independiente.
+
+### Added
+- **CdStack** (CDK Go, `internal/infra/cd_stack.go`) — 3 recursos desplegados en vivo en 48s, 7/7 CREATE_COMPLETE:
+  - `AWS::IAM::OIDCProvider` — `GithubOidc` (`token.actions.githubusercontent.com`), L1 `CfnOIDCProvider` nativo
+    (0 Lambda, 0 custom-resource — el L2 `NewOpenIdConnectProvider` añadiría un tercer rol sin boundary).
+  - `AWS::IAM::Role` `mail-cd-diff` — trust `sub=repo:esaldgut/erickaldama-mail:pull_request`, permisos solo
+    `sts:AssumeRole` sobre `cdk-hnb659fds-lookup-role` (read-only, preview de cambios en PRs).
+  - `AWS::IAM::Role` `mail-cd-deploy` — trust `StringEquals sub=repo:esaldgut/erickaldama-mail:environment:production`
+    (NUNCA wildcard), `sts:AssumeRole` sobre los 4 roles `cdk-hnb659fds-*`. Ambos roles con boundary
+    `erickaldama-boundary`. Stack ARN `arn:aws:cloudformation:us-east-1:367707589526:stack/CdStack/a8f59b10`.
+- **Workflow `.github/workflows/cd.yml`** — dos jobs:
+  - `diff` (on: pull_request): asume `mail-cd-diff` → `cdk diff --all` → comenta el resultado en el PR.
+    Fork-guard: `if: github.event.pull_request.head.repo.full_name == github.repository` (forks externos no
+    obtienen OIDC ni `pull-requests:write` en repos públicos — correcto por diseño, no un bug).
+  - `deploy` (on: push → main): PAUSA en estado "Waiting" por el Environment gate → tras aprobación humana,
+    asume `mail-cd-deploy` → `cdk deploy --all --require-approval never`.
+  - `concurrency: group: deploy-production, cancel-in-progress: false` — el deploy en curso termina; solo el
+    pending intermedio se cancela si llega un 3er push.
+- **Environment `production` configurado** — `required_reviewers: [esaldgut]`, branch policy `main`,
+  `can_admins_bypass: true` (single-dev; self-review habilitado). Verificado por API (`gh api`).
+- **Runbook** `docs/CD-DEPLOY.md` — pre-flight, canario, bootstrap out-of-band, gate CRÍTICO del environment,
+  verificación OIDC e2e, smoke de seguridad, kill-switch (4 opciones), notas de seguridad. 665 líneas.
+
+### Doble gate — diseño de seguridad
+
+El gate humano tiene dos capas independientes:
+
+1. **GitHub Environment `production`** — el job `deploy` queda en "Waiting" hasta aprobación en la UI de Actions.
+   **CRÍTICO:** GitHub auto-crea el environment cuando el workflow lo referencia por primera vez, pero lo crea
+   **vacío** — sin reviewers, sin branch rules — y el job corre inmediatamente. La configuración del environment
+   debe hacerse **antes** de cualquier push a main, no después.
+
+2. **Trust OIDC `StringEquals`** — AWS solo emite credenciales si `sub=environment:production` exacto. Un PR
+   (sub=`pull_request`) no puede asumir el rol de deploy, aunque alguien eludiera la capa 1.
+
+Si se desactiva la capa 1, la capa 2 sigue activa. Si se elimina el rol (kill-switch), la capa 1 ya no importa.
+
+### Deploy findings — los 2 hallazgos reales del boundary en este subproyecto
+
+El CdStack es el stack que más ha exigido del boundary `erickaldama-boundary` — 2 versiones nuevas (v5, v6)
+en un solo subproyecto. Son la 4ª y 5ª instancia del patrón "boundary intersecta" en el proyecto (SP-1 ssm,
+SP-2 events, SP-4 iam:CreateUser, CD v5, CD v6).
+
+**Finding B4 — boundary v5: `iam:PutRolePermissionsBoundary` (anticipado en la auditoría, confirmado en vivo)**
+
+El boundary tenía un `Deny iam:PutRolePermissionsBoundary` como anti-escalación (ningún rol bajo el boundary
+puede adjuntar boundaries arbitrarios a otros roles). El cfn-exec-role tiene `iam:*` en su exec-policy, pero el
+boundary INTERSECTA: el Deny explícito gana. Al crear `mail-cd-diff` y `mail-cd-deploy` con `PermissionsBoundary`
+adjunto, CloudFormation llama `CreateRole` + `PutRolePermissionsBoundary` → AccessDenied.
+
+Fix: boundary v5 con la excepción scoped `StringNotEqualsIfExists` — permite `PutRolePermissionsBoundary` SOLO
+cuando el boundary adjunto es `erickaldama-boundary` mismo. El anti-escalación se preserva para cualquier otro
+boundary. Confirmado: con v5 activo, el deploy creó los 2 roles con boundary sin error. Sin Task 0 (aplicar v5
+antes del deploy), el CdStack habría fallado con AccessDenied en el primer recurso.
+
+**Finding A1 — boundary v6: `sts:AssumeRole` (cazado por el smoke, NO anticipado)**
+
+El smoke de seguridad post-deploy (`simulate-principal-policy`) reveló que el boundary v5 no incluía
+`sts:AssumeRole`. Como effective perms = identity policy ∩ boundary, y el boundary no tenía `sts:AssumeRole`
+Allow, los roles OIDC no podían asumir los roles cdk-* en runtime — aunque la identity policy los permitiera.
+
+Síntoma sin el smoke: el CD habría fallado en el primer run real con `AccessDenied sts:AssumeRole` en el step
+`configure-aws-credentials` de GitHub Actions. Difícil de diagnosticar desde los logs de Actions porque el
+error vendría de AWS STS. El smoke lo cazó **antes del runtime** — `PermissionsBoundaryDecision.AllowedByPermissionsBoundary=false`.
+
+Fix: boundary v6 (commit `75c647d`) con `sts:AssumeRole` scoped exactamente a los 4 ARNs `cdk-hnb659fds-*`
+— no `sts:*`, no `Resource:*`. Menor privilegio: cualquier otro `sts:AssumeRole` sigue bloqueado. Smoke
+re-ejecutado post-v6: los 4 roles cdk-* → `allowed`; diff-role → deploy-role → `implicitDeny`. Pass.
+
+### Smoke de seguridad empírico (DoD #5 — PASS en vivo)
+
+Separación read/write verificada empíricamente via `aws iam simulate-principal-policy`:
+- `mail-cd-diff` → `cdk-hnb659fds-deploy-role`: **implicitDeny** (no puede escalar a deploy) ✓
+- `mail-cd-diff` → `cdk-hnb659fds-file-publishing-role`: **implicitDeny** ✓
+- `mail-cd-diff` → `cdk-hnb659fds-image-publishing-role`: **implicitDeny** ✓
+- `mail-cd-diff` → `cdk-hnb659fds-lookup-role`: **allowed** (solo lo que necesita) ✓
+- `mail-cd-deploy` → los 4 roles `cdk-hnb659fds-*`: **allowed** ✓
+
+Evidencia binaria: la separación no es solo en papel. El smoke es el gate que cierra el DoD antes de declarar
+el CD operativo — obligatorio en cualquier arquitectura con boundary estricto, donde los permisos efectivos
+(identity ∩ boundary) no son obvios al leer solo la identity policy.
+
+### Decisions
+- **L1 `CfnOIDCProvider` sobre el L2 `NewOpenIdConnectProvider`** — el L2 crea un custom resource (Lambda
+  nodejs22.x) que añade un tercer rol de ejecución sin boundary. Con un boundary estricto ese rol quedaría
+  fuera del control del boundary. El L1 es nativo de CloudFormation: 0 Lambda, 0 custom-resource.
+- **`can_admins_bypass: true`** — single-dev; con 1 reviewer y self-review habilitado, la única forma de
+  aprobar el deploy propio es que can_admins_bypass esté activo. Trade-off aceptado para el proyecto personal.
+- **Job `diff` NO marcado como required status check** — un PR de fork (sub=`pull_request`) hace skip por el
+  fork-guard; GitHub trata `skipped` distinto a `success` y bloquearía PRs de colaboradores externos. No es
+  un bug — es la barrera de seguridad funcionando. Solo no debe convertirse en un bloqueo de PR innecesario.
+- **`cancel-in-progress: false` en concurrency** — cancelar el deploy en curso deja el stack en rollback parcial;
+  con `false`, solo el pending intermedio se cancela; el deploy activo siempre termina limpio.
+
+---
+
 ## [SP-4] — Cliente TUI/CLI/AI Go — 2026-06-24
 
 El primer componente que **consume** la infra en vez de aprovisionarla: cierra el lazo end-to-end del producto.

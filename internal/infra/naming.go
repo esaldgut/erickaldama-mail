@@ -60,6 +60,18 @@ const (
 	// SP-4 — client principals (long-lived access keys generated out-of-band; never in CDK/git).
 	ClientReadUserName = "mail-client-read" // dynamodb:Query/GetItem on mail-index + s3:GetObject on inbound/*
 	SenderUserName     = "mail-sender"      // attaches mail-send policy directly (SendRawEmail)
+
+	// CD pipeline — OIDC + GitHub Actions roles (created by CdStack).
+	OidcProviderUrl = "https://token.actions.githubusercontent.com"
+	OidcAudience    = "sts.amazonaws.com"
+	GithubRepo      = "esaldgut/erickaldama-mail"
+	DiffRoleName    = "mail-cd-diff"
+	DeployRoleName  = "mail-cd-deploy"
+	// Bootstrap roles the CD roles may assume (verified to exist).
+	CdkLookupRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
+	CdkDeployRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1"
+	CdkFilePublishingRoleArn  = "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1"
+	CdkImagePublishingRoleArn = "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1"
 )
 
 // projectTags are applied to the stack so every resource is attributable.
