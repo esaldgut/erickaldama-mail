@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"erickaldama-mail/internal/mailbox"
+	"erickaldama-mail/internal/redact"
 )
 
 // ReadOnlyTools are the agent's tools — NO send tool (blast radius bounded by design).
@@ -52,7 +53,10 @@ func execTool(ctx context.Context, reader *mailbox.Reader, mb string, call ToolC
 		if err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
-		return string(body)
+		// Redact at the point the raw mail body leaves the mailbox, BEFORE it re-enters the agent loop and
+		// reaches any backend (incl. Claude, which crosses the network). Without this, an `ai agent --backend
+		// claude` would ship third-party PII unmasked — only `goal`/`summarize` redact at the call site (audit NUEVO-2).
+		return redact.Redact(string(body))
 	case "search_subject":
 		q, _ := call.Args["query"].(string)
 		hs, _, err := reader.List(ctx, mb, 100, nil)

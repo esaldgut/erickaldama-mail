@@ -40,16 +40,18 @@ type olTool struct {
 	Type     string   `json:"type"`
 	Function olToolFn `json:"function"`
 }
+type olToolCallFn struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"` // OBJECT, not string
+}
+type olToolCall struct {
+	Function olToolCallFn `json:"function"`
+}
 type olMsg struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	ToolName  string `json:"tool_name,omitempty"`
-	ToolCalls []struct {
-		Function struct {
-			Name      string         `json:"name"`
-			Arguments map[string]any `json:"arguments"` // OBJECT, not string
-		} `json:"function"`
-	} `json:"tool_calls,omitempty"`
+	Role      string       `json:"role"`
+	Content   string       `json:"content"`
+	ToolName  string       `json:"tool_name,omitempty"`
+	ToolCalls []olToolCall `json:"tool_calls,omitempty"`
 }
 type olReq struct {
 	Model    string   `json:"model"`
@@ -65,6 +67,11 @@ func (p *Provider) Chat(ctx context.Context, msgs []aiassist.Message, tools []ai
 	req := olReq{Model: p.model, Stream: false}
 	for _, m := range msgs {
 		om := olMsg{Role: m.Role, Content: m.Content, ToolName: m.ToolName}
+		// Re-serialize the assistant turn's tool calls back into Ollama's shape; without this the multi-turn
+		// agent loop sends an empty assistant message and the following tool_result loses its trigger (audit NUEVO-1).
+		for _, tc := range m.ToolCalls {
+			om.ToolCalls = append(om.ToolCalls, olToolCall{Function: olToolCallFn{Name: tc.Name, Arguments: tc.Args}})
+		}
 		req.Messages = append(req.Messages, om)
 	}
 	for _, ts := range tools {
