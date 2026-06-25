@@ -285,3 +285,109 @@ Notas:
 - El AI (`mail ai …`) requiere Ollama corriendo (`ollama serve` + `qwen3:32b`) para el backend on-device por
   defecto; `--backend claude` es opt-in (el cuerpo cruza la red, aviso explícito una vez).
 - El TUI v0.1 tiene stubs de AI (`s`/`a`) que NO llaman al AI real — esa función vive en el CLI (`mail ai`).
+
+---
+
+## 10. v0.2 — config.toml + CC/BCC + reply-all (2026-06-25)
+
+### 10.1 config.toml multi-mailbox
+
+El cliente lee `~/.config/erickaldama-mail/config.toml` en el arranque. La ruta es **XDG-explícita**: si
+`$XDG_CONFIG_HOME` está definida, la usa; de lo contrario, `~/.config/` (NOT `~/Library/Application Support/`,
+que es lo que retorna `os.UserConfigDir()` en macOS — el cliente lo ignora deliberadamente, auditoría B-1b).
+
+```toml
+# ~/.config/erickaldama-mail/config.toml
+mailboxes    = ["erick@erickaldama.com", "test@erickaldama.com"]
+default_from = "erick@erickaldama.com"
+read_profile = "mail-client-read"
+send_profile = "mail-sender"
+```
+
+| Campo | Uso |
+|---|---|
+| `mailboxes` | Lista de mailboxes que `mail ls` muestra cuando no se pasa `--mailbox`; ordenados por fecha desc según SK |
+| `default_from` | Dirección `From:` por defecto en `mail send` / `mail reply` (puede sobreescribirse con `--from`) |
+| `read_profile` | Perfil AWS (`~/.aws/credentials`) para queries DynamoDB + descargas S3 |
+| `send_profile` | Perfil AWS para `ses:SendRawEmail` |
+
+**`mail ls` sin `--mailbox`:** itera todos los mailboxes del config y los combina, ordenados por SK descendente
+(ISO-8601 — `ts#<RFC3339>#<MsgID>`). El orden por SK es correcto porque el SK es lexicográfico sobre el
+timestamp ISO; el campo `Date:` del header (RFC 1123Z) ordenaría incorrectamente.
+
+**Sin config y sin `--mailbox`:** el cliente imprime un error claro y termina:
+```
+no hay config; crea ~/.config/erickaldama-mail/config.toml con tus mailboxes, o usa --mailbox <dirección>
+```
+
+### 10.2 CC y BCC — CLI
+
+Los flags `--cc` y `--bcc` aceptan listas separadas por comas de **direcciones peladas** (`addr-spec`):
+
+```bash
+# enviar con Cc y Bcc
+mail send \
+  --from erick@erickaldama.com \
+  --to erick@erickaldama.com \
+  --cc test@erickaldama.com \
+  --bcc success@simulator.amazonses.com \
+  --subject "Prueba CC/BCC" \
+  --body "cuerpo"
+
+# reply con reply-all automático (--cc pre-llenado con To+Cc originales minus self)
+mail reply <s3Key> --cc extra@erickaldama.com
+
+# listas multi-valor
+mail send --to a@x.com,b@x.com --cc c@x.com,d@x.com --bcc e@x.com
+```
+
+**Formato de dirección soportado en v0.2:** solo `addr-spec` pura (`user@host`). La forma `"Nombre <user@host>"`
+**no está soportada** — el campo se pasa directamente a enmime como addr-spec; enviar una name-addr resultará
+en un MIME malformado o en un error de envío SES.
+
+### 10.3 Invariante de privacidad del BCC
+
+**El BCC viaja SOLO en el envelope SES (`Destinations`), nunca en el header MIME.**
+
+Detalle técnico: enmime expone un método `.BCC()` que, si se llama, **escribe** un header `Bcc:` en el raw
+MIME. El cliente NO llama ese método — construye los destinatarios del envelope (`To + Cc + Bcc`) por separado
+y pasa el BCC únicamente a `SES.SendRawEmail(Destinations: [...])`. El encabezado `Bcc:` nunca aparece en el
+mensaje que reciben los destinatarios To/Cc.
+
+Invariante verificado en dos capas:
+- **Núcleo** (`internal/message`): `TestBuildCcInHeaderBccNot` — construye un mensaje con Cc y Bcc, confirma
+  que el raw MIME contiene `Cc:` pero no `Bcc:` ni la dirección BCC, y que el slice de destinations incluye
+  los tres grupos (To + Cc + Bcc).
+- **TUI composer** (`cmd/mail-tui`): `TestComposerBccNotInRaw` — verifica el mismo invariante en el path de
+  envío del composer: el raw MIME no filtra el BCC aunque el campo Bcc esté relleno en la UI.
+
+### 10.4 Nota BCC-2: campo Bcc VISIBLE en el composer TUI
+
+El composer TUI muestra cuatro campos editables: `To`, `Cc`, `Bcc`, `Subject`. El campo `Bcc` **es visible
+en pantalla** mientras se escribe — es el comportamiento estándar de cualquier cliente de correo (el remitente
+ve sus propios campos antes de enviar). La privacidad del BCC aplica para los **destinatarios receptores**:
+el `Bcc` no aparece en el header del mensaje que reciben.
+
+Implicación operativa: si grabas la pantalla o compartes la sesión tmux mientras usas el composer (popup
+`prefix+e`), los destinatarios BCC son visibles en pantalla. Tener esto en cuenta al presentar o grabar.
+
+### 10.5 Smoke de CC/BCC — GATE HUMANO (no ejecutado por el agente)
+
+El agente NO ejecuta `mail send` (mutación SES — gate humano out-of-band). El comando que ejecuta el humano:
+
+```bash
+# GATE HUMANO — ejecutar manualmente:
+mail send \
+  --from erick@erickaldama.com \
+  --to erick@erickaldama.com \
+  --cc test@erickaldama.com \
+  --bcc success@simulator.amazonses.com \
+  --subject "v0.2 cc/bcc smoke" \
+  --body "test"
+
+# verificar que llegó; abrir y confirmar: el header tiene To+Cc, NO Bcc
+mail ls --mailbox erick@erickaldama.com
+```
+
+Verificación del invariante en vivo: abrir el correo recibido y confirmar que `success@simulator.amazonses.com`
+(el BCC) **no aparece en ningún header** del mensaje recibido.
