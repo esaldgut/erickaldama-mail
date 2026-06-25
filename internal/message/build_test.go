@@ -2,6 +2,7 @@ package message
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestNewMessageIDFormat(t *testing.T) {
 }
 
 func TestBuildRoundTrip(t *testing.T) {
-	raw, err := Build(BuildOpts{
+	raw, _, err := Build(BuildOpts{
 		From: "erick@erickaldama.com", To: "bob@example.com", Subject: "Re: Hola",
 		Body: "cuerpo de prueba", InReplyTo: "<html-001@example.com>",
 		References: "<thread-root@example.com> <html-001@example.com>", MessageID: "<own-1@erickaldama.com>",
@@ -68,5 +69,40 @@ func TestBuildRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(p.TextPlain, "cuerpo de prueba") {
 		t.Fatalf("body lost: %q", p.TextPlain)
+	}
+}
+
+func TestBuildCcInHeaderBccNot(t *testing.T) {
+	raw, dests, err := Build(BuildOpts{
+		From: "me@erickaldama.com", To: "to@x.com",
+		Cc: "cc1@x.com, cc2@x.com", Bcc: "secret@x.com",
+		Subject: "hi", Body: "body",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "cc1@x.com") || !strings.Contains(s, "Cc:") {
+		t.Fatalf("Cc must be in header:\n%s", s)
+	}
+	// PRIVACY INVARIANT: Bcc must NOT appear in the raw MIME — only in the SES envelope.
+	if strings.Contains(s, "Bcc:") || strings.Contains(s, "secret@x.com") {
+		t.Fatalf("BCC leaked into the raw MIME:\n%s", s)
+	}
+	// destinations = To + Cc + Bcc (the envelope SES delivers to)
+	want := []string{"to@x.com", "cc1@x.com", "cc2@x.com", "secret@x.com"}
+	if !slices.Equal(dests, want) {
+		t.Fatalf("destinations = %v, want %v", dests, want)
+	}
+}
+
+func TestSplitAddrs(t *testing.T) {
+	got := SplitAddrs(" a@x.com ,, b@y.com ")
+	want := []string{"a@x.com", "b@y.com"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("SplitAddrs = %v, want %v", got, want)
+	}
+	if len(SplitAddrs("")) != 0 {
+		t.Fatal("empty → empty slice")
 	}
 }
