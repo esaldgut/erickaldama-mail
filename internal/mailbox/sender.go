@@ -48,14 +48,17 @@ func (s *Sender) DetectSandbox(ctx context.Context) (bool, error) {
 // MaxRawBytes is the SES v1 SendRawEmail hard limit (10MB after base64; inadjustable in v1).
 const MaxRawBytes = 10 * 1024 * 1024
 
-// Send delivers raw MIME via SES v1 SendRawEmail (sesv2 has no SendRawEmail). On a typed MessageRejected, if
-// the account is in sandbox, wrap as ErrSandboxRecipient (the actionable cause) — no string-match.
-func (s *Sender) Send(ctx context.Context, raw []byte) (string, error) {
+// Send delivers raw MIME via SES v1 SendRawEmail (sesv2 has no SendRawEmail). destinations is the SES envelope
+// (To+Cc+Bcc addresses); SES delivers to all of them. Source is nil — SES uses the From header in raw.
+// On a typed MessageRejected, if the account is in sandbox, wrap as ErrSandboxRecipient (the actionable
+// cause) — no string-match.
+func (s *Sender) Send(ctx context.Context, raw []byte, destinations []string) (string, error) {
 	if len(raw) > MaxRawBytes {
 		return "", fmt.Errorf("message is %d bytes; SES v1 SendRawEmail caps at %d (10MB, inadjustable)", len(raw), MaxRawBytes)
 	}
 	out, err := s.raw.SendRawEmail(ctx, &ses.SendRawEmailInput{
-		RawMessage: &sestypes.RawMessage{Data: raw},
+		RawMessage:   &sestypes.RawMessage{Data: raw},
+		Destinations: destinations, // To+Cc+Bcc; SES delivers here. Source nil → uses From in the raw.
 	})
 	if err != nil {
 		var rejected *sestypes.MessageRejected
