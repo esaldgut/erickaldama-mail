@@ -42,9 +42,11 @@ func ReplyHeaders(orig *Parsed) (inReplyTo, references, subject string) {
 type FileAttach struct{ Path string }
 
 // BuildOpts holds all parameters for constructing an outbound MIME message.
+// All address fields (From, To, Cc, Bcc) accept plain addr-spec only (user@host),
+// not name-addr (Name <user@host>). To, Cc, and Bcc also accept comma-separated lists.
 type BuildOpts struct {
 	From, To, Subject, Body string
-	Cc, Bcc                 string // comma-separated, plain addresses (no "Name <addr>")
+	Cc, Bcc                 string
 	InReplyTo, References   string
 	MessageID               string
 	Attachments             []FileAttach
@@ -70,12 +72,15 @@ func Build(opt BuildOpts) (raw []byte, destinations []string, err error) {
 	if opt.MessageID == "" {
 		opt.MessageID = NewMessageID()
 	}
+	to := SplitAddrs(opt.To)
 	b := enmime.Builder().
 		From("", opt.From).
-		To("", opt.To).
 		Subject(opt.Subject).
 		Text([]byte(opt.Body)).
 		Header("Message-ID", opt.MessageID)
+	for _, addr := range to {
+		b = b.To("", addr)
+	}
 	cc := SplitAddrs(opt.Cc)
 	for _, addr := range cc {
 		b = b.CC("", addr)
@@ -98,7 +103,8 @@ func Build(opt BuildOpts) (raw []byte, destinations []string, err error) {
 		return nil, nil, err
 	}
 	// Envelope destinations: To + Cc + Bcc. The Bcc is here ONLY (never in the header above).
-	destinations = append([]string{opt.To}, cc...)
+	destinations = append([]string{}, to...)
+	destinations = append(destinations, cc...)
 	destinations = append(destinations, SplitAddrs(opt.Bcc)...)
 	return []byte(sb.String()), destinations, nil
 }

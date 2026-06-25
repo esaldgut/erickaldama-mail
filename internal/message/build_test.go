@@ -96,6 +96,20 @@ func TestBuildCcInHeaderBccNot(t *testing.T) {
 	}
 }
 
+func TestBuildMultiTo(t *testing.T) {
+	raw, dests, err := Build(BuildOpts{From: "me@x", To: "a@x.com, b@x.com", Subject: "s", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "a@x.com") || !strings.Contains(s, "b@x.com") {
+		t.Fatalf("both To addresses must be in header:\n%s", s)
+	}
+	if !slices.Contains(dests, "a@x.com") || !slices.Contains(dests, "b@x.com") {
+		t.Fatalf("both To addresses must be in destinations: %v", dests)
+	}
+}
+
 func TestSplitAddrs(t *testing.T) {
 	got := SplitAddrs(" a@x.com ,, b@y.com ")
 	want := []string{"a@x.com", "b@y.com"}
