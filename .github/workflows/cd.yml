@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+env:
+  NODE_VERSION: "22"        # CDK v2 requires Node 22+ (audit C5)
+  CDK_VERSION: "2.258.1"   # Must match awscdk/v2 in go.mod (audit C5; skew CLI<lib → "not bootstrapped")
+
 jobs:
   diff:
     # Only run on PRs from the same repo — fork PRs get no OIDC token / no write token (audit C2/C3).
@@ -23,8 +27,8 @@ jobs:
           cache: true
       - uses: actions/setup-node@v6
         with:
-          node-version: 22          # CDK v2 requires Node.js 22+ (audit C5)
-      - run: npm install -g aws-cdk@2.258.1
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install -g aws-cdk@${{ env.CDK_VERSION }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::367707589526:role/mail-cd-diff
@@ -75,8 +79,8 @@ jobs:
           cache: true
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
-      - run: npm install -g aws-cdk@2.258.1
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install -g aws-cdk@${{ env.CDK_VERSION }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::367707589526:role/mail-cd-deploy
