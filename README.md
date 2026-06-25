@@ -123,8 +123,9 @@ shared domain core:
 
 ```
 cmd/mail         CLI Cobra · ls / read / send / reply / ai / tmux (popup·status)
-cmd/mail-tui     TUI Bubble Tea · list / reader / composer · Vim-motions (j/k/gg/G)
+cmd/mail-tui     TUI Bubble Tea · list / reader / multi-field composer · Vim-motions (j/k/gg/G)
 
+internal/config     config.toml (~/.config/erickaldama-mail, XDG) — known mailboxes, default from/profiles
 internal/message    MIME parse/build (enmime/v2) · threading RFC 5322 · html-to-markdown render (glamour)
 internal/mailbox    Reader  — Query DynamoDB mail-index + GetObject S3 erickaldama-mail-raw
                     Sender  — SendRawEmail via SES v2 + SigV4
@@ -136,6 +137,11 @@ internal/redact     Deterministic NDA mask (secret-shaped tokens + third-party e
 internal/awsconf    Credential loader for the two scoped IAM users
 internal/wire       Single instantiation point (DRY)
 ```
+
+**v0.2** — `mail ls` (no `--mailbox`) lists every mailbox from `config.toml`, merged and sorted by `SK`
+(ISO8601) descending. CC/BCC on `send`/`reply` and in the TUI composer, with a hard privacy invariant: the
+**BCC travels only in the SES envelope, never in the MIME header** (asserted at the core and TUI-end-to-end).
+Reply-all pre-fills the Cc with the original recipients minus self. See [`docs/SP-4-DEPLOY.md` §10](docs/SP-4-DEPLOY.md).
 
 **Editor/multiplexer integration** — `mail tmux popup` opens the TUI in a floating tmux overlay; `mail tmux
 status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
