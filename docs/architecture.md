@@ -84,6 +84,65 @@ flowchart TB
     class ai ai;
 ```
 
+## CD pipeline — GitHub Actions → OIDC → AWS
+
+Automates `cdk deploy` without long-lived access keys in the repository.
+
+```
+GitHub Actions                       AWS (us-east-1 / 367707589526)
+─────────────────────────────────    ──────────────────────────────────────────────────────
+                                     IAM OIDCProvider
+                                     token.actions.githubusercontent.com
+                                            │
+on: pull_request                            │  StringEquals sub=…:pull_request
+  job: diff ──────────────────────────────► mail-cd-diff
+              configure-aws-credentials       └─► sts:AssumeRole ──► cdk-hnb659fds-lookup-role
+              cdk diff --all                                          (read-only, no mutations)
+              post comment to PR
+                                            │
+on: push → main                             │  StringEquals sub=…:environment:production
+  job: deploy  [GATE 1: Environment         │  (GATE 2: trust — no wildcard, no pull_request)
+               production pauses here       │
+               until human approves]        │
+               │                            │
+               └───────────────────────────► mail-cd-deploy
+                   configure-aws-credentials  └─► sts:AssumeRole ──► cdk-hnb659fds-deploy-role
+                   cdk deploy --all                                   cdk-hnb659fds-file-publishing-role
+                                                                      cdk-hnb659fds-image-publishing-role
+                                                                      cdk-hnb659fds-lookup-role
+```
+
+**Double gate — two independent layers:**
+
+1. **GitHub Environment `production`** — the `deploy` job waits in "Waiting" state until a human approves it
+   in the Actions UI. `required_reviewers: [esaldgut]`, branch policy: `main` only.
+   CRITICAL: GitHub auto-creates the environment when first referenced but creates it **empty** (no reviewers,
+   no branch rules) — the job would run immediately. Configure it before the first push to main.
+
+2. **OIDC trust `StringEquals`** — AWS only issues deploy credentials when the token carries exactly
+   `sub=repo:esaldgut/erickaldama-mail:environment:production`. A PR token (`sub=…:pull_request`) cannot
+   assume the deploy role even if layer 1 is bypassed.
+
+**IAM roles (both with boundary `erickaldama-boundary`):**
+
+| Role | OIDC sub | Permissions | Smoke result |
+|---|---|---|---|
+| `mail-cd-diff` | `…:pull_request` | `sts:AssumeRole` on lookup-role only | `implicitDeny` on deploy-role ✓ |
+| `mail-cd-deploy` | `…:environment:production` | `sts:AssumeRole` on 4 `cdk-hnb659fds-*` roles | `allowed` on all 4 ✓ |
+
+**Security smoke (DoD #5 — PASS in live AWS):** separation verified empirically via `simulate-principal-policy`
+before declaring the CD operational. Two boundary findings caught and fixed before runtime:
+
+- **Boundary v5** (`iam:PutRolePermissionsBoundary`): anti-escalation `Deny` in the boundary blocked CFN from
+  attaching a boundary to the new roles. Fixed with a scoped `StringNotEqualsIfExists` exception — only allows
+  attaching `erickaldama-boundary` itself. Stack deploy succeeded with v5 active.
+- **Boundary v6** (`sts:AssumeRole`, `commit 75c647d`): v5 did not allow `sts:AssumeRole` in the boundary.
+  Effective perms = identity ∩ boundary = implicit deny at runtime. Caught by the smoke
+  (`PermissionsBoundaryDecision.AllowedByPermissionsBoundary=false`) before any GitHub Actions run.
+  Fixed with `sts:AssumeRole` scoped to exactly the 4 `cdk-hnb659fds-*` ARNs (least privilege).
+
+CdStack live: `arn:aws:cloudformation:us-east-1:367707589526:stack/CdStack/a8f59b10` (7/7 CREATE_COMPLETE, 48s).
+
 ## Provisioning & governance
 
 Every resource above — the Route 53 hosted zone, SES identity + DKIM, the S3 bucket, the Lambda,
