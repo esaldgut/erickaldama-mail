@@ -12,6 +12,60 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.2] — config.toml multi-mailbox, CC/BCC con envelope privacy, reply-all, composer multi-campo — 2026-06-25
+
+El primer ciclo de features encima del lazo end-to-end de SP-4: configuración por archivo, destinatarios CC/BCC,
+reply-all completo, y el composer TUI con cuatro campos editables. El invariante de privacidad del BCC se verificó
+en dos capas (núcleo + TUI) antes del merge.
+
+### Added
+
+- **config.toml multi-mailbox** — `~/.config/erickaldama-mail/config.toml` (ruta XDG-explícita: `$XDG_CONFIG_HOME`
+  o `~/.config/`; NOT `~/Library/Application Support/` — en macOS `os.UserConfigDir()` retorna la ruta equivocada,
+  auditoría B-1b). Campos: `mailboxes`, `default_from`, `read_profile`, `send_profile`. La ruta es explícita en el
+  código (`internal/config.Path()`) — no hay sorpresa de plataforma.
+
+- **`mail ls` sin `--mailbox` itera todos los mailboxes del config**, combinados y ordenados por SK descendente
+  (ISO-8601: `ts#<RFC3339>#<MsgID>`). El orden por SK es correcto porque es lexicográfico sobre el timestamp ISO;
+  el campo `Date:` del header (RFC 1123Z) ordenaría incorrectamente — hallazgo de diseño documentado en el plan.
+  Sin config y sin `--mailbox`, error claro y accionable.
+
+- **CC/BCC en `mail send` y `mail reply`** — flags `--cc`/`--bcc` (listas separadas por comas, `addr-spec` pura).
+  El BCC viaja SOLO en el envelope SES (`Destinations: To+Cc+Bcc`) — nunca en el header MIME. enmime expone
+  `.BCC()` que escribiría un header `Bcc:` en el raw; el cliente NO lo llama (decisión explícita en `message.Build`).
+
+- **reply-all** — `mail reply <s3Key>` pre-llena `--cc` con `To+Cc` del original minus self (mismo algoritmo en CLI
+  y TUI: `replyAllCc()`). El usuario puede sobreescribir con `--cc` explícito.
+
+- **Composer TUI multi-campo** — cuatro campos editables (`To`, `Cc`, `Bcc`, `Subject`) con Tab para navegar,
+  Ctrl-S para enviar. El campo `Bcc` es VISIBLE en pantalla (UX estándar: el remitente ve lo que escribe, la
+  privacidad aplica al receptor). El envío usa `message.Build` — mismo invariante BCC que el CLI.
+
+### Hallazgos de auditoría que importaron
+
+**BCC-1 — invariante verificado en el núcleo y en la TUI:**
+enmime `.BCC()` escribe el header si se llama; la decisión de no llamarlo es intencional y no obvia. El invariante
+se verifica en dos tests independientes: `TestBuildCcInHeaderBccNot` (núcleo: Cc en header, Bcc NO, destinations
+completas) y `TestComposerBccNotInRaw` (TUI: mismo invariante en el path de envío del composer). Sin estos tests,
+una refactorización de enmime o del builder podría romper silenciosamente la privacidad del BCC.
+
+**XDG-explicit (B-1b) — `os.UserConfigDir()` no es XDG en macOS:**
+En macOS `os.UserConfigDir()` devuelve `~/Library/Application Support/`, no `~/.config/`. El cliente resuelve
+la ruta explícitamente: `$XDG_CONFIG_HOME` si existe, si no `~/.config/`. Cualquier futuro refactor que use
+`os.UserConfigDir()` rompería la ruta en macOS.
+
+**Sort-by-SK (no por `Date:`):**
+El campo `Date:` del header es RFC 1123Z, cuyo orden lexicográfico NO es cronológico. El SK de DynamoDB
+(`ts#<RFC3339>#<MsgID>`) sí es lexicográfico sobre el timestamp ISO-8601. La ordenación multi-mailbox usa
+`strings.Compare(b.SK, a.SK)` (descendente) — correcto y eficiente.
+
+**BCC-2 — campo Bcc visible en el composer TUI:**
+El campo Bcc es visible mientras el usuario lo escribe (comportamiento estándar de cualquier MUA). La privacidad
+del BCC aplica a los receptores, no al remitente. Documentado en el runbook (§10.4) para que sea una decisión
+consciente, no un malentendido.
+
+---
+
 ## [mail tmux] — Integración tmux del cliente (cierra deuda SP-4 §5.3) — 2026-06-25
 
 El spec de SP-4 (§5.3) diseñó una glue de tmux para el cliente que v0.1 dejó sin implementar. Se cierra esa deuda
