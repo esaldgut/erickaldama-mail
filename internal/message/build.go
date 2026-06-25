@@ -3,12 +3,17 @@ package message
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jhillyerd/enmime/v2"
 )
+
+// ErrMissingFrom is returned by Build when the From address is empty. It is a typed sentinel so
+// callers can use errors.Is instead of matching on error strings (avoid-string-match-error-silencing).
+var ErrMissingFrom = errors.New("from address not set")
 
 const Domain = "erickaldama.com"
 
@@ -69,6 +74,9 @@ func SplitAddrs(s string) []string {
 // calling .BCC() WOULD write a "Bcc:" header into the raw (enmime does NOT silence it). The BCC
 // travels ONLY in the SES Destinations envelope (see Sender.Send) → privacy invariant.
 func Build(opt BuildOpts) (raw []byte, destinations []string, err error) {
+	if opt.From == "" {
+		return nil, nil, ErrMissingFrom
+	}
 	if opt.MessageID == "" {
 		opt.MessageID = NewMessageID()
 	}

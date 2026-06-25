@@ -121,11 +121,6 @@ func main() {
 		Short: "List messages in the mailbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			r, err := wire.Reader(ctx, readProfile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				return err
-			}
 			cfg, hasCfg, _ := config.Load()
 			var mailboxes []string
 			if cmd.Flags().Changed("mailbox") { // cmd.Flags() includes PersistentFlags inherited from root
@@ -135,6 +130,15 @@ func main() {
 			} else {
 				fmt.Fprintln(os.Stderr, "no hay config; crea ~/.config/erickaldama-mail/config.toml con tus mailboxes, o usa --mailbox <dirección>")
 				return fmt.Errorf("no mailbox specified and no config") // exit≠0
+			}
+			// Apply read-profile fallback from config before wiring (GAP-1 / spec §3.5)
+			if !cmd.Root().PersistentFlags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
+				readProfile = cfg.ReadProfile
+			}
+			r, err := wire.Reader(ctx, readProfile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return err
 			}
 			var all []mailbox.Header
 			for _, mb := range mailboxes {
@@ -198,9 +202,6 @@ func main() {
 			cfg, hasCfg, _ := config.Load()
 			if !cmd.Flags().Changed("from") && hasCfg && cfg.DefaultFrom != "" {
 				sendFrom = cfg.DefaultFrom
-			}
-			if !cmd.Flags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
-				readProfile = cfg.ReadProfile
 			}
 			if !cmd.Flags().Changed("send-profile") && hasCfg && cfg.SendProfile != "" {
 				sendProfile = cfg.SendProfile

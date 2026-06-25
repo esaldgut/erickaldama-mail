@@ -2,6 +2,7 @@ package message
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -107,6 +108,13 @@ func TestBuildMultiTo(t *testing.T) {
 	}
 	if !slices.Contains(dests, "a@x.com") || !slices.Contains(dests, "b@x.com") {
 		t.Fatalf("both To addresses must be in destinations: %v", dests)
+	}
+}
+
+func TestBuildRequiresFrom(t *testing.T) {
+	_, _, err := Build(BuildOpts{To: "to@x", Subject: "s", Body: "b"})
+	if !errors.Is(err, ErrMissingFrom) {
+		t.Fatalf("expected ErrMissingFrom, got %v", err)
 	}
 }
 
