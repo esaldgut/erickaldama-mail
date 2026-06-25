@@ -3,6 +3,7 @@ module erickaldama-mail
 go 1.26.4
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/anthropics/anthropic-sdk-go v1.51.1
 	github.com/aws/aws-cdk-go/awscdk/v2 v2.258.1
@@ -17,8 +18,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.62.4
 	github.com/aws/constructs-go/constructs/v10 v10.6.0
 	github.com/aws/jsii-runtime-go v1.134.0
+	github.com/charmbracelet/bubbles v1.0.0
+	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v0.9.1
+	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/jhillyerd/enmime/v2 v2.4.1
+	github.com/spf13/cobra v1.10.2
 )
 
 require (
@@ -26,6 +31,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.9.2 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/andybalholm/cascadia v1.3.2 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
@@ -52,13 +58,9 @@ require (
 	github.com/cdklabs/cloud-assembly-schema-go/awscdkcloudassemblyschema/v54 v54.1.0 // indirect
 	github.com/cention-sany/utf7 v0.0.0-20170124080048-26cad61bd60a // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/charmbracelet/bubbles v1.0.0 // indirect
-	github.com/charmbracelet/bubbletea v1.3.10 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
-	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
-	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
@@ -88,7 +90,6 @@ require (
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
