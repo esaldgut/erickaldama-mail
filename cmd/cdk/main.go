@@ -29,6 +29,11 @@ func main() {
 		Env: env(),
 	}, rawBucket)
 
+	infra.NewCdStack(app, "CdStack", &awscdk.StackProps{
+		Env:                 env(),
+		PermissionsBoundary: awscdk.PermissionsBoundary_FromName(jsii.String(infra.BoundaryManagedPolicyName)),
+	})
+
 	app.Synth(nil)
 }
 
