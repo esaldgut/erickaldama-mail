@@ -12,6 +12,79 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.3] — Render rico HTML+imágenes sanitizado — 2026-06-26
+
+Render enriquecido de correo HTML directamente en el terminal: sanitización de seguridad con bluemonday
+(bloquea XSS + tracking pixels), imágenes `cid:` renderizadas vía chafa en el TUI, ancho dinámico de glamour,
+y el flag `--rich` en el CLI. El ciclo completo: el HTML se sanea primero (pass 1 + bluemonday como frontera de
+seguridad), luego se convierte a markdown con html-to-markdown, y finalmente glamour lo renderiza con estilo ANSI.
+
+### Added
+
+- **`SanitizeHTML(html, allowRemote bool) (SanitizeResult, error)`** (`internal/message/sanitize.go`) —
+  sanitización en dos pasadas: pass 1 con `x/net/html` para reemplazar imágenes remotas por placeholder de UX
+  (`[imagen remota bloqueada]`) y recolectar refs `cid:`; pass 2 con bluemonday como **frontera de seguridad**
+  (UGCPolicy + restricción `img.src` a `cid:` mediante regexp `^cid:` — SAN-2 HARD). `SanitizeResult` expone
+  `.CIDRefs` y `.BlockedRemotes` para la UI y telemetría interna.
+
+- **`InlineImages` en `Parsed`** (`internal/message/parse.go`) — enmime extrae `env.Inlines` y `env.OtherParts`
+  (imágenes referenciadas por `cid:` en el HTML); el parser los expone como `[]InlineImage{ContentID, ContentType, Data}`,
+  con los bytes ya decodificados (base64/QP) por enmime.
+
+- **Render en terminal vía chafa** (`internal/render/`) — wrapper de chafa (`-f symbols`, width dinámico) que
+  convierte `[]byte` de PNG/JPEG a arte de bloques Unicode para el TUI. La integración es async (`tea.Cmd`) para
+  no bloquear el event-loop de Bubble Tea.
+
+- **`RenderRich(p, width int)` actualizado** (`internal/message/render.go`) — la firma incluye `width` (P-7:
+  `termWidth` del TUI) para envolver glamour al ancho real del panel. `width<=0` cae a 80 (seguro). CRÍTICO
+  (P-1): html-to-markdown PRIMERO, glamour después — si glamour recibe HTML crudo, goldmark lo silencia sin error.
+
+- **TUI reader rico** (`cmd/mail-tui`) — al cargar un correo con `--rich`, el cuerpo se sanea y renderiza con
+  glamour. Tecla `i`: renderiza las imágenes `cid:` con chafa (on-demand, no bloquea). Tecla `R`: recarga el
+  cuerpo permitiendo imágenes remotas (`allowRemote=true`). El estado `rawHTML` se conserva para el toggle `R`
+  (P-5: sanitizar en body-load, no en render).
+
+- **CLI `--rich`** (`cmd/mail`, subcomando `read`) — `mail read <key> --rich` invoca `SanitizeHTML` +
+  `RenderRich` en lugar del render plano. `--load-remote` activa `allowRemote=true`.
+
+- **Fixture sintético + test SAN-5** (`internal/message/testdata/inline-image.eml`, `render_integration_test.go`) —
+  MIME `multipart/related` 100% sintético (sin material NDA) con un `<img src="cid:logo@test">` y un
+  `<img src="http://track.er/pixel.png">` (tracking pixel). `TestSAN5InlineImageFixture` verifica:
+  (a) `Parse(fixture).InlineImages` tiene 1 imagen con `ContentID="logo@test"` y `Data` no vacío (bytes reales del MIME);
+  (b) `SanitizeHTML(..., false)` bloqueó la URL remota (ningún `src=` apunta a `://`) y preservó el `cid:`.
+
+### Hallazgos de auditoría que importaron
+
+**SAN-2 bypass (P-2 + P-3) — majúsculas y protocol-relative silenciaban el bloqueo:**
+El primer borrador de `isRemoteURL` usaba `strings.HasPrefix(v, "http://")` — sensible a mayúsculas. Un
+`src="HTTP://track.er/p.png"` pasaba directamente. La auditoría identificó tres variantes de bypass:
+`HTTP://`, `HTTPS://`, y `//` (protocol-relative). Fix: `strings.ToLower(strings.TrimSpace(v))` antes de
+comparar (P-2), más un test `TestSanitizeBlocksRemoteImagesBypasses` (P-3) que cubre las cuatro formas.
+La frontera de seguridad real es bluemonday (pass 2), pero el placeholder UX de pass 1 también debía ser correcto.
+
+**P-1 CRÍTICO — htmltomd antes de glamour, sin excepción:**
+Si glamour recibe HTML directamente (sin conversión previa a markdown), goldmark lo procesa en modo "unsafe=false"
+y lo descarta silenciosamente — sin error, sin output visible. El test pasa en verde. El bug es invisible hasta
+que el usuario ve texto formateado que desaparece. `RenderRich` llama `htmltomd.NewConverter` PRIMERO, glamour
+DESPUÉS. La arquitectura es: `TextHTML → htmltomd → markdown → glamour → ANSI`.
+
+**P-5 — rawHTML para el toggle R (sanitize-on-load, no en render):**
+Si se sanitiza en cada render en vez de en body-load, el toggle `R` (cargar remotas) no puede funcionar —
+el HTML ya sería inmutable. La TUI conserva el `rawHTML` original y re-sanea con `allowRemote=true` cuando
+el usuario presiona `R`. Esta separación es también la que permite auditar qué fue bloqueado (`.BlockedRemotes`).
+
+**P-6 — imágenes async con `tea.Cmd`:**
+El render de chafa (llamada a proceso externo) no puede hacerse en el update loop síncrono de Bubble Tea —
+bloquearía la UI durante el decode+fork. Las imágenes se cargan como `tea.Cmd` y notifican con un `Msg`
+cuando terminan. Sin esto, el TUI se congela en correos con imágenes grandes.
+
+**P-9 — `<object>`, `<embed>`, `data:` (bluemonday UGCPolicy los bloquea — test lo asegura):**
+UGCPolicy ya bloquea `<object>` y `<embed>`. El test `TestSanitizeBlocksXSS` (SAN-1) verifica que
+la lista de vectores incluye esas etiquetas — sin el assert, una regresión de bluemonday o un cambio de policy
+los dejaría pasar desapercibidos.
+
+---
+
 ## [mail v0.2] — config.toml multi-mailbox, CC/BCC con envelope privacy, reply-all, composer multi-campo — 2026-06-25
 
 El primer ciclo de features encima del lazo end-to-end de SP-4: configuración por archivo, destinatarios CC/BCC,

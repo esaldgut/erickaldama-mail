@@ -143,6 +143,35 @@ internal/wire       Single instantiation point (DRY)
 **BCC travels only in the SES envelope, never in the MIME header** (asserted at the core and TUI-end-to-end).
 Reply-all pre-fills the Cc with the original recipients minus self. See [`docs/SP-4-DEPLOY.md` §10](docs/SP-4-DEPLOY.md).
 
+**v0.3 — Rich HTML render + inline images** — `mail read <key> --rich` and the TUI reader render HTML mail
+in full ANSI color via glamour. Remote images (tracking pixels, external URLs) are **blocked by default** —
+a `[imagen remota bloqueada]` placeholder replaces them. Inline `cid:` images (embedded in the MIME) can be
+rendered in the terminal via chafa (symbols mode) with the `i` key in the TUI, or loaded on demand with
+`--load-remote` (CLI) / `R` key (TUI) for remote images when you explicitly trust the sender.
+
+**Optional dependency — chafa** (for inline image rendering in the terminal):
+```bash
+brew install chafa   # macOS — renders cid: images as Unicode block art in the TUI
+```
+Without chafa, `i` gracefully degrades (no image render, no crash). The sanitized HTML and ANSI glamour
+render work independently of chafa.
+
+**Privacy policy — remote images are blocked by default:**
+- Tracking pixels (`<img src="http://...">`) are replaced by `[imagen remota bloqueada]` — they never load.
+- Protocol-relative URLs (`//host/...`) and any uppercase variant (`HTTP://`, `HTTPS://`) are also blocked
+  (the sanitizer is case-insensitive, defending against the SAN-2 bypasses found in the audit).
+- `cid:` inline images (embedded in the MIME body) are always available — they never hit the network.
+- To load remote images explicitly: `mail read <key> --rich --load-remote` (CLI) or press `R` in the TUI reader.
+
+**TUI rich-reader key bindings (reader panel):**
+| Key | Action |
+|-----|--------|
+| `i` | Render inline `cid:` images with chafa (symbols mode, on-demand) |
+| `R` | Reload body allowing remote images (`--load-remote` equivalent) |
+
+See [`docs/SP-4-DEPLOY.md` §11](docs/SP-4-DEPLOY.md) and [`CHANGELOG.md`](CHANGELOG.md#mail-v03) for the
+full v0.3 build history, audit findings, and the privacy invariant verification.
+
 **Editor/multiplexer integration** — `mail tmux popup` opens the TUI in a floating tmux overlay; `mail tmux
 status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
 [`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)): tmux `prefix+e` → popup; nvim `<leader>m{l,s,c,a}` → list/search/compose/AI.
