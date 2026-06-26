@@ -394,3 +394,108 @@ mail ls --mailbox erick@erickaldama.com
 
 Verificación del invariante en vivo: abrir el correo recibido y confirmar que `success@simulator.amazonses.com`
 (el BCC) **no aparece en ningún header** del mensaje recibido.
+
+---
+
+## 11. v0.3 — Render rico HTML + imágenes inline
+
+### 11.1 Dependencias opcionales
+
+El render rico en terminal requiere **chafa** para renderizar imágenes `cid:` embebidas como arte de bloques Unicode:
+
+```bash
+brew install chafa   # macOS — única dependencia opcional de v0.3
+chafa --version      # verifica instalación (cualquier versión >= 1.12 funciona)
+```
+
+Sin chafa: el CLI `--rich` y el TUI funcionan normalmente (HTML sanitizado + glamour); solo la tecla `i`
+(render de imagen inline) degrada graciosamente sin crash.
+
+Dependencias Go (ya en `go.mod`, sin instalación manual):
+- `github.com/microcosm-cc/bluemonday` — sanitización HTML (frontera de seguridad XSS + tracking pixels)
+- `github.com/charmbracelet/glamour` — render markdown→ANSI
+- `github.com/JohannesKaufmann/html-to-markdown` — conversión HTML→markdown (CRÍTICO: antes de glamour)
+- `golang.org/x/net/html` — parse HTML para pass 1 de sanitización
+
+### 11.2 Flujo del render rico
+
+```
+raw MIME (S3)
+    │
+    ▼
+Parse(r io.Reader)       → Parsed{TextHTML, InlineImages[]{ContentID, Data}}
+    │
+    ▼
+SanitizeHTML(html, false)
+    pass 1 (x/net/html)  → reemplaza <img src="http://..."> por [imagen remota bloqueada]
+                           → recolecta CIDRefs y BlockedRemotes
+    pass 2 (bluemonday)  → UGCPolicy + restricción img.src=^cid: (HARD SAN-2)
+    │
+    ▼
+htmltomd.Convert(sanitizedHTML)   → markdown (P-1 CRÍTICO: antes de glamour)
+    │
+    ▼
+glamour.Render(md, width=termWidth)  → ANSI (ancho dinámico del panel TUI)
+    │
+    ▼
+TUI reader / CLI stdout
+
+── tecla `i` (TUI) ──────────────────────────────────────────────────────────
+    InlineImages[i].Data  →  chafa -f symbols --size WxH  →  Unicode block art
+    (tea.Cmd async — no bloquea el event loop de Bubble Tea)
+
+── tecla `R` (TUI) / --load-remote (CLI) ────────────────────────────────────
+    SanitizeHTML(rawHTML, allowRemote=true)  →  re-render con remotas permitidas
+    (rawHTML se preserva en el modelo — no se descarta tras el primer render)
+```
+
+### 11.3 Política de privacidad — imágenes remotas bloqueadas por default
+
+La política del cliente es: **las imágenes remotas NO cargan a menos que el usuario lo pida explícitamente**.
+
+| Tipo de imagen | Comportamiento por default | Con `--load-remote` / tecla `R` |
+|---|---|---|
+| `cid:` (inline MIME) | Disponible — tecla `i` en TUI | Igual |
+| `http://` / `https://` | Reemplazada por `[imagen remota bloqueada]` | Carga |
+| `//host/...` (protocol-relative) | Bloqueada (tratada como remota) | Carga |
+| `HTTP://` / `HTTPS://` (mayúsculas) | Bloqueada (case-insensitive) | Carga |
+
+La frontera de seguridad es **bluemonday** (pass 2): aunque el DOM de pass 1 no reemplazara el nodo,
+bluemonday eliminaría cualquier `src` que no coincida con `^cid:` (regexp). Las dos capas son
+independientes — UX en pass 1, seguridad en pass 2.
+
+### 11.4 Teclas del TUI reader (v0.3)
+
+| Tecla | Acción |
+|-------|--------|
+| `i` | Renderiza imágenes `cid:` inline con chafa (on-demand, async) |
+| `R` | Recarga el cuerpo permitiendo imágenes remotas (`allowRemote=true`) |
+
+### 11.5 CLI — uso del flag `--rich`
+
+```bash
+# Render rico (HTML sanitizado + glamour + ANSI):
+mail read <s3Key> --rich
+
+# Render rico + imágenes remotas (solo si confías en el remitente):
+mail read <s3Key> --rich --load-remote
+
+# Render plano (default — sin glamour, texto puro):
+mail read <s3Key>
+```
+
+### 11.6 Gate humano — smoke con correo real (NO ejecutado por el agente)
+
+El smoke de render real requiere un correo con imagen en AWS (interactivo + NDA). El humano ejecuta:
+
+```bash
+# GATE HUMANO — ejecutar manualmente:
+mail read <key-de-correo-con-imagen> --rich
+# Abrir el TUI · confirmar glamour render
+# Tecla 'i' · confirmar chafa renderiza la imagen cid: como arte unicode
+# Confirmar que http://... remotas muestran [imagen remota bloqueada]
+# Tecla 'R' · confirmar que carga remotas al aceptar explícitamente
+```
+
+El agente NO ejecuta este smoke (gate humano out-of-band — correo real NDA + interactivo). La suite
+automatizada cubre el invariante de sanitización (SAN-5: `TestSAN5InlineImageFixture` con fixture sintético).
