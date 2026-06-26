@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"erickaldama-mail/internal/mailbox"
+	"erickaldama-mail/internal/message"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -165,5 +166,39 @@ func TestComposerTabNavigation(t *testing.T) {
 	mu := updated.(model)
 	if mu.compose.active != cCc {
 		t.Fatalf("Tab → Cc (%d), got %d", cCc, mu.compose.active)
+	}
+}
+
+func TestModelCapturesWindowSize(t *testing.T) {
+	m := model{}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if updated.(model).termWidth != 120 {
+		t.Errorf("termWidth not captured from WindowSizeMsg")
+	}
+}
+
+func TestReaderKeyIRendersImages(t *testing.T) {
+	// H-1 fix: showImages only becomes true when currentParsed has at least 1 InlineImage.
+	// The model must have a parsed message with inline images; otherwise the guard returns early
+	// without setting showImages (preventing stale imagesRenderedMsg from a prior message).
+	parsed := &message.Parsed{
+		InlineImages: []message.InlineImage{
+			{ContentID: "img1", ContentType: "image/png", Data: []byte{0x89, 0x50, 0x4e, 0x47}},
+		},
+	}
+	m := model{view: viewReader, termWidth: 80, currentParsed: parsed}
+	updated, _ := m.handleReaderKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if !updated.(model).showImages {
+		t.Errorf("'i' should set showImages=true when currentParsed has InlineImages")
+	}
+}
+
+func TestReaderKeyINoImagesNoShowImages(t *testing.T) {
+	// H-1 fix: when currentParsed has no InlineImages, pressing 'i' must NOT set showImages=true
+	// (prevents stale blobs from a prior message surfacing on a message with no images).
+	m := model{view: viewReader, termWidth: 80, currentParsed: &message.Parsed{}}
+	updated, _ := m.handleReaderKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if updated.(model).showImages {
+		t.Errorf("'i' should NOT set showImages=true when there are no InlineImages")
 	}
 }
