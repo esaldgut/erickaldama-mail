@@ -46,8 +46,8 @@ func Parse(r io.Reader) (*Parsed, error) {
 		return nil, err
 	}
 	// Soft parse errors (env.Errors, e.g. a truncated boundary) are intentionally ignored: ReadEnvelope still
-	// returns a usable envelope. env.Inlines (embedded images) and env.OtherParts are not surfaced in v0.1
-	// (deuda conocida — TODO v0.2: handle inline parts). The mail body + named attachments suffice for the TUI.
+	// returns a usable envelope. v0.3 surfaces env.Inlines + env.OtherParts as Parsed.InlineImages (cid: images,
+	// see below) for the rich renderer; the mail body + named attachments cover the rest.
 	p := &Parsed{
 		Subject:    env.GetHeader("Subject"),
 		From:       env.GetHeader("From"),
