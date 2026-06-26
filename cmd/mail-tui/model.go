@@ -75,6 +75,8 @@ type model struct {
 	compose composer
 	// status message shown at the bottom
 	statusMsg string
+	// termWidth holds the current terminal width for dynamic word-wrap in RenderRich (T5 wires WindowSizeMsg).
+	termWidth int
 }
 
 // Init satisfies tea.Model. Start the textinput blink timer.
@@ -272,7 +274,7 @@ func (m model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return errMsg{err}
 			}
-			body, err := message.RenderRich(parsed)
+			body, err := message.RenderRich(parsed, m.termWidth)
 			if err != nil {
 				body = message.RenderPlain(parsed)
 			}
