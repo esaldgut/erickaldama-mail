@@ -115,7 +115,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// P-5 (D4): sanitize the HTML FIRST before rendering. Store raw HTML for idempotent 'R' toggle.
 		m.rawHTML = msg.parsed.TextHTML
 		m.loadRemote = false
-		san, _ := message.SanitizeHTML(m.rawHTML, false)
+		san, err := message.SanitizeHTML(m.rawHTML, false)
+		if err != nil {
+			// H-5: do not silently use empty/unsanitized HTML; fall back to plain text.
+			m.statusMsg = "error sanitizando el correo: " + err.Error()
+			clean := *msg.parsed
+			clean.TextHTML = ""
+			m.currentParsed = &clean
+			if msg.parsed.TextPlain != "" {
+				body, _ := message.RenderRich(&clean, m.termWidth)
+				m.body = body
+			}
+			m.imageBlobs = nil
+			m.showImages = false
+			m.view = viewReader
+			m.scrollOffset = 0
+			return m, nil
+		}
 		clean := *msg.parsed
 		clean.TextHTML = san.HTML
 		m.currentParsed = &clean
@@ -377,15 +393,20 @@ func (m model) handleReaderKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case 'i':
 			// P-6: image render is ASYNC via tea.Cmd — never block the event loop (chafa can take up to 5s).
-			// showImages is set true immediately (so View shows the placeholder area); the actual blobs
-			// arrive via imagesRenderedMsg when the goroutine finishes.
-			m.showImages = true
+			// H-1: guard FIRST — only set showImages=true when there are images to render, so a stale
+			// imagesRenderedMsg from a prior message cannot surface on a message with no images.
 			if m.currentParsed == nil || len(m.currentParsed.InlineImages) == 0 {
 				m.statusMsg = "no hay imágenes inline en este correo"
 				return m, nil
 			}
+			m.showImages = true
 			imgs := m.currentParsed.InlineImages
-			w, h := m.termWidth, m.termWidth/2
+			// H-2: guard against termWidth==0 (WindowSizeMsg not yet received) so chafa never gets 0x0.
+			tw := m.termWidth
+			if tw == 0 {
+				tw = 80
+			}
+			w, h := tw, tw/2
 			return m, func() tea.Msg {
 				var blobs []string
 				for _, im := range imgs {
@@ -396,7 +417,19 @@ func (m model) handleReaderKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case 'R': // P-5: re-sanitize from ORIGINAL rawHTML (m.rawHTML) — idempotent N times.
 			m.loadRemote = !m.loadRemote
 			if m.currentParsed != nil && m.rawHTML != "" {
-				san, _ := message.SanitizeHTML(m.rawHTML, m.loadRemote)
+				san, err := message.SanitizeHTML(m.rawHTML, m.loadRemote)
+				if err != nil {
+					// H-5: sanitize failed; do not overwrite body with empty/unsafe HTML.
+					m.statusMsg = "error sanitizando el correo: " + err.Error()
+					if m.currentParsed.TextPlain != "" {
+						clean := *m.currentParsed
+						clean.TextHTML = ""
+						m.currentParsed = &clean
+						body, _ := message.RenderRich(&clean, m.termWidth)
+						m.body = body
+					}
+					return m, nil
+				}
 				clean := *m.currentParsed
 				clean.TextHTML = san.HTML
 				m.currentParsed = &clean

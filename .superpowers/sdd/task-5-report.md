@@ -1,157 +1,146 @@
-## Task 5 Report: CLI integration — ls multi-mailbox + --cc/--bcc + 4 call-sites + fallbacks
+## Task 5 Report: TUI Integration — termWidth/rawHTML/WindowSizeMsg + keys i/R
 
-**SHA:** f6a4e75  
-**Branch:** worktree-mail-v0.2  
-**File modified:** `cmd/mail/main.go`
-
----
-
-### 4 call-sites connected
-
-| Location | Before | After |
-|---|---|---|
-| send Build (~line 190) | `raw, _, err := message.Build(...)` without Cc/Bcc | `raw, dests, err := message.Build({..., Cc: sendCc, Bcc: sendBcc})` |
-| send Send (~line 213) | `s.Send(ctx, raw)` — missing dests arg | `s.Send(ctx, raw, dests)` |
-| reply Build (~line 283) | `raw, _, err := message.Build(...)` without Cc/Bcc | `raw, dests, err := message.Build({..., Cc: replyCc, Bcc: replyBcc})` |
-| reply Send (~line 303) | `s.Send(ctx, raw)` — missing dests arg | `s.Send(ctx, raw, dests)` |
+**SHA:** 1666d64
+**Branch:** worktree-mail-v0.3-richrender
+**Files modified:** `cmd/mail-tui/model.go`, `cmd/mail-tui/model_test.go`
 
 ---
 
-### Sort by SK (not Date)
+### P-5 (D4 seguridad) — SanitizeHTML en body load: CONFIRMED
+
+`bodyLoadedMsg` fue cambiado de `{body string}` a `{parsed *message.Parsed}`. El handler en `Update()` ahora:
 
 ```go
-slices.SortFunc(all, func(a, b mailbox.Header) int { return strings.Compare(b.SK, a.SK) })
+case bodyLoadedMsg:
+    m.rawHTML = msg.parsed.TextHTML          // HTML original sin sanitizar
+    m.loadRemote = false
+    san, _ := message.SanitizeHTML(m.rawHTML, false)
+    clean := *msg.parsed
+    clean.TextHTML = san.HTML
+    m.currentParsed = &clean
+    body, _ := message.RenderRich(&clean, m.termWidth)
+    m.body = body
+    m.imageBlobs = nil
+    m.showImages = false
+    m.view = viewReader
+    m.scrollOffset = 0
+    return m, nil
 ```
 
-SK is ISO8601 so lexicographic descending sort is correct. Date is RFC1123Z which sorts incorrectly.
+El HTML nunca llega a RenderRich sin pasar por SanitizeHTML primero.
 
 ---
 
-### replyAllCc guard (REPLY-1)
+### P-6 (no congelar el TUI) — imágenes async via tea.Cmd: CONFIRMED
+
+La tecla 'i' en `handleReaderKey` retorna un `func() tea.Msg` goroutine:
 
 ```go
-func replyAllCc(parsedTo, parsedCc, self string) string {
-    seen := map[string]bool{}
-    if self != "" {  // GUARD: if self="" do NOT seed seen[""] — would filter nothing, own addr enters Cc
-        seen[strings.ToLower(self)] = true
+case 'i':
+    m.showImages = true
+    // ...
+    return m, func() tea.Msg {
+        var blobs []string
+        for _, im := range imgs {
+            blobs = append(blobs, render.RenderImage(context.Background(), im.Data, w, h))
+        }
+        return imagesRenderedMsg{blobs: blobs}
     }
-    ...
-}
 ```
 
-Guard verified: `self=""` skips seeding to avoid the empty-string filter-nothing bug.
+`render.RenderImage` (que llama chafa, hasta 5s) corre en goroutine separado. El event loop nunca se bloquea.
 
 ---
 
-### 3 profile fallbacks (GAP-1 / spec §3.5)
-
-Applied in both `sendCmd.RunE` and `replyCmd.RunE`:
+### P-7 — guard por currentParsed != nil: CONFIRMED
 
 ```go
-if !cmd.Flags().Changed("from")         && hasCfg && cfg.DefaultFrom != "" { sendFrom    = cfg.DefaultFrom }
-if !cmd.Flags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" { readProfile = cfg.ReadProfile }
-if !cmd.Flags().Changed("send-profile") && hasCfg && cfg.SendProfile != "" { sendProfile = cfg.SendProfile }
-```
-
-`--from` flag removed from `MarkFlagRequired` on sendCmd since it can now come from config.
-
----
-
-### Smoke output
-
-```
-# go run ./cmd/mail ls --mailbox erick@erickaldama.com
-Thu, 25 Jun 2026 01:23:35 -0600  Erick Aldama <esaldgut@gmail.com>  Fwd: ¡Recibiste una transferencia!
-
-# go run ./cmd/mail ls   (no config, no --mailbox)
-no hay config; crea ~/.config/erickaldama-mail/config.toml con tus mailboxes, o usa --mailbox <dirección>
-Error: no mailbox specified and no config
-exit status 1
+case tea.WindowSizeMsg:
+    m.termWidth = msg.Width
+    if m.view == viewReader && m.currentParsed != nil {
+        body, _ := message.RenderRich(m.currentParsed, m.termWidth)
+        m.body = body
+    }
+    return m, nil
 ```
 
 ---
 
-### Validation results
+### Campos añadidos al struct model
 
-| Check | Result |
-|---|---|
-| `go build ./cmd/mail/` | GREEN |
-| `go vet ./cmd/mail/` | PASS (no issues) |
-| `gofmt -l cmd/mail/` | PASS (empty output) |
-| `go test -count=1 ./cmd/mail/` | PASS (0.569s) |
-| Smoke: ls --mailbox | 1 real message listed |
-| Smoke: ls no config | error + exit 1 |
-| `cmd/mail-tui` | STILL BROKEN (expected — Task 6) |
+| Campo | Tipo | Propósito |
+|---|---|---|
+| `showImages` | `bool` | true cuando el usuario presiona 'i' |
+| `loadRemote` | `bool` | toggle de imágenes remotas ('R'), default false |
+| `currentParsed` | `*message.Parsed` | parsed actual, para resize y render de imágenes |
+| `rawHTML` | `string` | HTML original sin sanitizar (para re-sanitizar en 'R') |
+| `imageBlobs` | `[]string` | blobs ANSI de render.RenderImage, uno por InlineImage |
+
+### Nuevos tipos de mensaje
+
+- `imagesRenderedMsg struct{ blobs []string }` — enviado por el goroutine de 'i'
+- `bodyLoadedMsg` cambiado de `{body string}` a `{parsed *message.Parsed}`
+
+### Call-sites afectados por el cambio de bodyLoadedMsg
+
+Solo hay un call-site que construye `bodyLoadedMsg`: el async loader en `handleListKey` (línea ~314).
+Fue actualizado de `return bodyLoadedMsg{body: body}` a `return bodyLoadedMsg{parsed: parsed}`.
+La conversión RenderRich ahora ocurre en el Update handler (después de sanitizar), no en el goroutine.
 
 ---
 
-### cmd/mail-tui status
+### Output de los 2 nuevos tests
 
-`cmd/mail-tui/model.go:254` still calls `s.Send(ctx, raw)` with 2 args; Task 6 will fix it.  
-`go build ./...` remains red only for `cmd/mail-tui`. All other packages including `cmd/mail` build clean.
+```
+=== RUN   TestModelCapturesWindowSize
+--- PASS: TestModelCapturesWindowSize (0.00s)
+=== RUN   TestReaderKeyIRendersImages
+--- PASS: TestReaderKeyIRendersImages (0.00s)
+```
+
+Full run (10/10):
+
+```
+=== RUN   TestJMovesDown
+--- PASS: TestJMovesDown (0.00s)
+=== RUN   TestGGoesToTop
+--- PASS: TestGGoesToTop (0.00s)
+=== RUN   TestEnterOpensReader
+--- PASS: TestEnterOpensReader (0.00s)
+=== RUN   TestComposerSendRequiresConfirmation
+--- PASS: TestComposerSendRequiresConfirmation (0.00s)
+=== RUN   TestSentMsgClearsConfirmState
+--- PASS: TestSentMsgClearsConfirmState (0.00s)
+=== RUN   TestReplyDraftPrePopulates
+--- PASS: TestReplyDraftPrePopulates (0.00s)
+=== RUN   TestComposerBccNotInRaw
+--- PASS: TestComposerBccNotInRaw (0.00s)
+=== RUN   TestComposerTabNavigation
+--- PASS: TestComposerTabNavigation (0.00s)
+=== RUN   TestModelCapturesWindowSize
+--- PASS: TestModelCapturesWindowSize (0.00s)
+=== RUN   TestReaderKeyIRendersImages
+--- PASS: TestReaderKeyIRendersImages (0.00s)
+PASS
+ok  	erickaldama-mail/cmd/mail-tui	0.677s
+```
 
 ---
-
-## Fix H-1/H-2/H-3
-
-**SHA:** 0e3a17a  
-**Branch:** worktree-mail-v0.2  
-**Files modified:** `cmd/mail/main.go`, `internal/message/build.go`, `internal/message/build_test.go`
-
-### H-1 — Onboarding error before AWS load (cmd/mail/main.go lsCmd.RunE)
-
-Moved `wire.Reader(ctx, readProfile)` call to AFTER config/mailbox resolution. Order is now:
-1. `config.Load()` → resolve mailboxes
-2. If no mailbox is available → print onboarding message + return error (user never hits AWS)
-3. Apply `readProfile` fallback from cfg (previously only done in send/reply RunE)
-4. `wire.Reader(ctx, readProfile)` — only reached when config is valid
-
-**Code proof (lines 124–142):** `config.Load()` is now the first call; `wire.Reader` is called only after the mailboxes block succeeds. The onboarding `return fmt.Errorf("no mailbox specified and no config")` at line 132 short-circuits before any AWS call.
-
-### H-3 — Dead `readProfile` fallback removed from sendCmd.RunE (cmd/mail/main.go)
-
-Deleted the line `readProfile = cfg.ReadProfile` from `sendCmd.RunE`. `send` only calls `wire.Sender`, never `wire.Reader`, so the fallback was unreachable dead code. The same fallback in `replyCmd.RunE` and the new one in `lsCmd.RunE` (added as part of H-1) were left intact — they both use `wire.Reader`.
-
-### H-2 — Typed ErrMissingFrom sentinel (internal/message/build.go + build_test.go)
-
-Added `var ErrMissingFrom = errors.New("from address not set")` at package level in `build.go`. At the top of `Build()`, added guard:
-
-```go
-if opt.From == "" {
-    return nil, nil, ErrMissingFrom
-}
-```
-
-This replaces the previous behavior where enmime would produce an untyped string error for an empty From, violating avoid-string-match-error-silencing. Callers can now use `errors.Is(err, message.ErrMissingFrom)` for structured handling.
-
-### Test output
-
-```
-=== RUN   TestBuildCcInHeaderBccNot
---- PASS: TestBuildCcInHeaderBccNot (0.00s)
-=== RUN   TestBuildRequiresFrom
---- PASS: TestBuildRequiresFrom (0.00s)
-ok  	erickaldama-mail/internal/message	1.129s
-```
-
-Full run: `go test -count=1 -v ./cmd/mail/ ./internal/message/` — **16 tests, all PASS**.
-
-- BCC invariant `TestBuildCcInHeaderBccNot`: PASS (not broken by H-2)
-- New sentinel test `TestBuildRequiresFrom`: PASS (`errors.Is(err, ErrMissingFrom)` works)
-
-### Onboarding error ordering (smoke by code inspection)
-
-`lsCmd.RunE` now returns `fmt.Errorf("no mailbox specified and no config")` at line 132, **before** `wire.Reader` is called at line 138. A user with no config.toml and no `--mailbox` flag will see the onboarding message and never trigger an AWS credential error.
 
 ### Validation
 
 | Check | Result |
 |---|---|
-| `go build ./cmd/mail/ ./internal/...` | GREEN |
-| `go vet ./cmd/mail/ ./internal/message/` | PASS (no output) |
-| `gofmt -l cmd/mail/ internal/message/` | PASS (no output) |
-| `go test -count=1 ./cmd/mail/ ./internal/message/` | PASS — 16/16 |
-| `TestBuildCcInHeaderBccNot` (BCC invariant) | PASS |
-| `TestBuildRequiresFrom` (new ErrMissingFrom) | PASS |
-| Onboarding error before AWS | CONFIRMED by code order |
-| `cmd/mail-tui` | STILL BROKEN (expected — Task 6) |
+| `go build ./...` | GREEN |
+| `go vet ./cmd/mail-tui/` | PASS (no output) |
+| `gofmt -l cmd/mail-tui/` | PASS (no output) |
+| `go test -count=1 ./cmd/mail-tui/` | PASS — 10/10 |
+| P-5: SanitizeHTML en bodyLoadedMsg | CONFIRMED |
+| P-6: key 'i' retorna tea.Cmd async | CONFIRMED |
+| P-7: guard currentParsed != nil | CONFIRMED |
+
+---
+
+### Concerns
+
+Ninguno. El TUI interactivo (gate humano) no fue abierto — está fuera del scope de esta tarea.
