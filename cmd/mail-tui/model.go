@@ -122,6 +122,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			clean := *msg.parsed
 			clean.TextHTML = ""
 			m.currentParsed = &clean
+			m.body = "" // WB-3: no dejar el body del correo anterior si falla la sanitización
 			if msg.parsed.TextPlain != "" {
 				body, _ := message.RenderRich(&clean, m.termWidth)
 				m.body = body
