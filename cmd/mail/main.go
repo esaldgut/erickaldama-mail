@@ -17,6 +17,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"erickaldama-mail/internal/aiassist"
 	"erickaldama-mail/internal/config"
@@ -164,6 +165,7 @@ func main() {
 	}
 
 	// ── read ─────────────────────────────────────────────────────────────
+	var rich, loadRemote bool
 	readCmd := &cobra.Command{
 		Use:   "read <s3Key>",
 		Short: "Read one message by its S3 key",
@@ -186,10 +188,34 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error parsing message: %v\n", err)
 				return err
 			}
-			fmt.Print(message.RenderPlain(parsed))
+			if !rich {
+				// Default: pipe-friendly plain text — DO NOT change this behaviour.
+				fmt.Print(message.RenderPlain(parsed))
+				return nil
+			}
+			// --rich: get terminal width → sanitize HTML → render to ANSI.
+			width, _, err := term.GetSize(int(os.Stdout.Fd()))
+			if err != nil || width <= 0 {
+				width = 80 // degrade gracefully for non-TTY / pipes
+			}
+			san, err := message.SanitizeHTML(parsed.TextHTML, loadRemote)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error sanitizing HTML: %v\n", err)
+				return err
+			}
+			clean := *parsed
+			clean.TextHTML = san.HTML
+			out, err := message.RenderRich(&clean, width)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error rendering rich: %v\n", err)
+				return err
+			}
+			fmt.Print(out)
 			return nil
 		},
 	}
+	readCmd.Flags().BoolVar(&rich, "rich", false, "Render HTML body as rich ANSI text (sanitized; terminal-width aware)")
+	readCmd.Flags().BoolVar(&loadRemote, "load-remote", false, "Allow remote images when --rich (default: blocked, placeholder shown)")
 
 	// ── send ─────────────────────────────────────────────────────────────
 	var sendFrom, sendTo, sendSubject, sendBody, sendCc, sendBcc string
