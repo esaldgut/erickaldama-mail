@@ -167,3 +167,21 @@ func TestComposerTabNavigation(t *testing.T) {
 		t.Fatalf("Tab → Cc (%d), got %d", cCc, mu.compose.active)
 	}
 }
+
+func TestModelCapturesWindowSize(t *testing.T) {
+	m := model{}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if updated.(model).termWidth != 120 {
+		t.Errorf("termWidth not captured from WindowSizeMsg")
+	}
+}
+
+func TestReaderKeyIRendersImages(t *testing.T) {
+	// con un Parsed que tiene InlineImages y view==viewReader, la tecla 'i' marca showImages=true
+	// (test del estado, no del render real de chafa)
+	m := model{view: viewReader, termWidth: 80}
+	updated, _ := m.handleReaderKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if !updated.(model).showImages {
+		t.Errorf("'i' should toggle showImages")
+	}
+}
