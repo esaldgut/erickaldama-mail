@@ -42,9 +42,9 @@ func TestSanitizeBlocksRemoteImages(t *testing.T) { // SAN-2 (forma canónica)
 
 func TestSanitizeBlocksRemoteImagesBypasses(t *testing.T) { // P-3: los bypasses que el test canónico no veía
 	cases := []string{
-		`<img src="HTTP://track.er/p.png">`,  // mayúsculas
-		`<img src="HTTPS://track.er/p.png">`, // mayúsculas
-		`<img src="//track.er/p.png">`,       // protocol-relative
+		`<img src="HTTP://track.er/p.png">`,   // mayúsculas
+		`<img src="HTTPS://track.er/p.png">`,  // mayúsculas
+		`<img src="//track.er/p.png">`,        // protocol-relative
 		`<img src="  http://track.er/p.png">`, // espacios al inicio
 	}
 	reScheme := regexp.MustCompile(`src=["'][^"']*://`)
