@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"time"
 
 	"erickaldama-mail/internal/mailbox"
 	"github.com/charmbracelet/bubbles/list"
@@ -30,10 +31,15 @@ func (it messageItem) FilterValue() string { return it.h.From + " " + it.h.Subje
 // S3Key is the stable identity used as the loadBody trigger (audit B-1) and reply source (B-7).
 func (it messageItem) S3Key() string { return it.h.S3Key }
 
-// shortDate trims an RFC1123Z date to a compact form; returns the raw string if unparseable.
+// shortDate parses common email Date header formats and returns "DD Mon YYYY".
+// The Date comes from env.GetHeader("Date") unnormalized, so try several layouts;
+// fall back to the raw string if none parse (audit A-shortDate — no fixed-index slice).
 func shortDate(d string) string {
-	if len(d) >= 16 {
-		return d[5:16] // "Mon, 23 Jun 2026 ..." → "23 Jun 2026" region; tolerant slice
+	d = strings.TrimSpace(d)
+	for _, layout := range []string{time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822, "2 Jan 2006 15:04:05 -0700", time.RFC3339} {
+		if t, err := time.Parse(layout, d); err == nil {
+			return t.Format("2 Jan 2006")
+		}
 	}
 	return d
 }

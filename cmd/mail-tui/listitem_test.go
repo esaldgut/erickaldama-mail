@@ -36,3 +36,20 @@ func TestNewMessageListPopulates(t *testing.T) {
 		t.Errorf("list has %d items, want 2", len(l.Items()))
 	}
 }
+
+func TestShortDateRobust(t *testing.T) {
+	cases := map[string]string{
+		"Mon, 23 Jun 2026 10:00:00 +0000": "23 Jun 2026", // RFC1123Z
+		"23 Jun 2026 10:00:00 +0000":      "23 Jun 2026", // RFC822-ish sin día de semana
+		"2026-06-23T10:00:00Z":            "23 Jun 2026", // ISO8601 (algunos ingest)
+	}
+	for in, want := range cases {
+		if got := shortDate(in); got != want {
+			t.Errorf("shortDate(%q)=%q want %q", in, got, want)
+		}
+	}
+	// Unparseable → return the raw string (no garbage slice).
+	if got := shortDate("garbage"); got != "garbage" {
+		t.Errorf("shortDate(garbage)=%q want raw passthrough", got)
+	}
+}
