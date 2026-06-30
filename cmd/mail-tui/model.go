@@ -34,7 +34,6 @@ type mode int
 const (
 	modeBrowse mode = iota
 	modeComposer
-	modeConfirm
 )
 
 type model struct {
@@ -101,7 +100,10 @@ type loadDebounceMsg struct {
 }
 
 // imagesRenderedMsg is sent when async image rendering via render.RenderImage completes.
-type imagesRenderedMsg struct{ blobs []string }
+type imagesRenderedMsg struct {
+	blobs []string
+	gen   int
+}
 
 // sentMsg signals a successful live SES send.
 type sentMsg struct{ messageID string }
@@ -133,6 +135,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, cmd = m.viewport.Update(msg) // A-1b
 		return m, cmd
 	case spinner.TickMsg:
+		if m.inflight == 0 {
+			return m, nil // no work in flight → let the tick loop die (M-1: no perpetual wakeup)
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg) // A-3: only here
 		return m, cmd
@@ -175,6 +180,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inflight > 0 {
 			m.inflight--
 		}
+		if msg.gen != m.loadGen {
+			return m, nil // M-2: stale render (user navigated away) — discard, don't paint old images on the new body
+		}
 		m.imageBlobs = msg.blobs
 		m.viewport.SetContent(m.sanitizedBody + "\n" + strings.Join(msg.blobs, "\n")) // SAN: base is sanitizedBody
 		return m, nil
@@ -208,7 +216,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.mode == modeComposer || m.mode == modeConfirm {
+	if m.mode == modeComposer {
 		return m.handleComposerKey(key)
 	}
 	if m.list.SettingFilter() { // D3: all keys to the list; Tab here applies the filter (B-2)
@@ -275,12 +283,13 @@ func (m model) handleReaderRune(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			w, h := readerW, readerW/2
 			startSpinner := m.inflight == 0
 			m.inflight++
+			gen := m.loadGen // M-2: tag the render with the current message's generation
 			renderImgs := func() tea.Msg {
 				var blobs []string
 				for _, im := range imgs {
 					blobs = append(blobs, render.RenderImage(context.Background(), im.Data, w, h))
 				}
-				return imagesRenderedMsg{blobs: blobs}
+				return imagesRenderedMsg{blobs: blobs, gen: gen}
 			}
 			if startSpinner {
 				return m, tea.Batch(renderImgs, m.spinner.Tick)
@@ -444,7 +453,7 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	switch m.mode {
-	case modeComposer, modeConfirm:
+	case modeComposer:
 		return m.viewComposer()
 	default:
 		if !m.vpReady {

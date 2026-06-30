@@ -162,6 +162,32 @@ func TestImagesRenderedMsg(t *testing.T) {
 	}
 }
 
+// M-1: a spinner tick with no work in flight stops the loop (returns nil cmd).
+func TestSpinnerTickStopsWhenIdle(t *testing.T) {
+	m := testList()
+	m.inflight = 0
+	_, cmd := m.Update(m.spinner.Tick()) // a TickMsg
+	if cmd != nil {
+		t.Error("spinner kept ticking with inflight==0 (M-1: perpetual wakeup)")
+	}
+}
+
+// M-2: a stale imagesRenderedMsg (gen != loadGen) does not paint old images on the new body.
+func TestStaleImagesDiscarded(t *testing.T) {
+	m := testList()
+	m.loadGen = 5
+	m.sanitizedBody = "new body"
+	m.inflight = 1
+	got, _ := m.Update(imagesRenderedMsg{blobs: []string{"[old-img]"}, gen: 3})
+	mm := got.(model)
+	if strings.Contains(mm.viewport.View(), "old-img") {
+		t.Error("stale images painted onto the new message body (M-2 race)")
+	}
+	if mm.inflight != 0 {
+		t.Errorf("inflight=%d, want 0 (stale image render must still decrement)", mm.inflight)
+	}
+}
+
 // B-3: empty mailbox → SelectedItem() nil → selectedKey comma-ok returns "" (no panic).
 func TestEmptyMailboxNoCrash(t *testing.T) {
 	m := testList() // no headers
