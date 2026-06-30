@@ -248,6 +248,15 @@ func TestSentMsgClearsConfirmState(t *testing.T) {
 	}
 }
 
+// ROB-1: the first WindowSizeMsg auto-loads the selected message so the reader isn't blank.
+func TestFirstResizeAutoLoadsSelected(t *testing.T) {
+	m := model{mode: modeBrowse, focus: focusList, list: newMessageList([]mailbox.Header{{Subject: "a", S3Key: "k1"}}, 10, 10)}
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	if cmd == nil {
+		t.Error("first resize with a selected message produced no load cmd (ROB-1: reader would start blank)")
+	}
+}
+
 func TestReplyDraftPrePopulates(t *testing.T) {
 	// audit H-4: pressing 'r' on a list item pre-populates To/Subject without a live reader.
 	m := model{

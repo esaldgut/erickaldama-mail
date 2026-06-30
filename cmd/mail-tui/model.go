@@ -78,7 +78,9 @@ var (
 	normalStyle  = lipgloss.NewStyle()
 )
 
-func (m model) Init() tea.Cmd { return tea.Batch(textinput.Blink, m.spinner.Tick) }
+// EFI-1: remove spinner.Tick from Init; the tick is started on the first inflight 0→1 transition
+// (in loadDebounceMsg and 'i' handlers). Running it always wasted CPU and conflicted with A-3.
+func (m model) Init() tea.Cmd { return textinput.Blink }
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -296,7 +298,12 @@ func (m model) handleReaderRune(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				clean := *m.currentParsed
 				clean.TextHTML = san.HTML
 				m.currentParsed = &clean
-				body, _ := message.RenderRich(&clean, readerW)
+				// BPR-1: surface RenderRich errors as status message + fallback to TextPlain.
+				body, rerr := message.RenderRich(&clean, readerW)
+				if rerr != nil {
+					m.statusMsg = "error al renderizar: " + rerr.Error()
+					body = clean.TextPlain
+				}
 				m.sanitizedBody = body
 				m.viewport.SetContent(body) // SAN: re-sanitized, never raw
 			}
@@ -336,7 +343,12 @@ func (m model) applyBody(parsed *message.Parsed) (tea.Model, tea.Cmd) {
 	clean := *parsed
 	clean.TextHTML = san.HTML
 	m.currentParsed = &clean
-	body, _ := message.RenderRich(&clean, readerW)
+	// BPR-1: surface RenderRich errors as status message + fallback to TextPlain.
+	body, rerr := message.RenderRich(&clean, readerW)
+	if rerr != nil {
+		m.statusMsg = "error al renderizar: " + rerr.Error()
+		body = clean.TextPlain
+	}
 	m.sanitizedBody = body
 	m.viewport.SetContent(body) // SAN: POST-RenderRich sanitized, never rawHTML
 	m.viewport.GotoTop()
@@ -388,6 +400,7 @@ func (m model) startReply() (tea.Model, tea.Cmd) {
 // ── handleResize ──────────────────────────────────────────────────────────────
 
 func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	firstResize := !m.vpReady
 	m.termWidth = msg.Width
 	m.termHeight = msg.Height
 	m.vpReady = true
@@ -396,9 +409,33 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.viewport.Width = readerW
 	m.viewport.Height = panelH
 	if m.currentParsed != nil {
-		body, _ := message.RenderRich(m.currentParsed, readerW)
+		// BPR-1: surface RenderRich errors + fallback to TextPlain.
+		body, rerr := message.RenderRich(m.currentParsed, readerW)
+		if rerr != nil {
+			m.statusMsg = "error al renderizar: " + rerr.Error()
+			body = m.currentParsed.TextPlain
+		}
 		m.sanitizedBody = body
-		m.viewport.SetContent(body)
+		// DEU-2: re-attach image blobs on resize so showImages mode doesn't go blank.
+		// SAN: body is the sanitized RenderRich output; blobs are cid: local references, never rawHTML.
+		content := body
+		if m.showImages && len(m.imageBlobs) > 0 {
+			content = body + "\n" + strings.Join(m.imageBlobs, "\n")
+		}
+		m.viewport.SetContent(content)
+	}
+	// ROB-1: on the first resize, auto-load the currently-selected message so the reader
+	// pane isn't blank at startup. Uses the same debounce path (no special-casing the load).
+	if firstResize && m.currentParsed == nil {
+		if key := selectedKey(m); key != "" {
+			m.loadDebounceGen++
+			m.loadPendingKey = key
+			gen := m.loadDebounceGen
+			k := key
+			return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+				return loadDebounceMsg{key: k, gen: gen}
+			})
+		}
 	}
 	return m, nil
 }
