@@ -77,7 +77,7 @@ func (m model) handleComposerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// No live sender in tests — just mark sent.
 				m.sent = true
 				m.confirming = false
-				m.view = viewList
+				m.mode = modeBrowse
 				m.statusMsg = "sent (no live sender configured)"
 				return m, nil
 			case 'n':
@@ -129,7 +129,7 @@ func (m model) handleComposerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.compose.active = prev
 		return m, nil
 	case tea.KeyEsc:
-		m.view = viewList
+		m.mode = modeBrowse
 		return m, nil
 	}
 

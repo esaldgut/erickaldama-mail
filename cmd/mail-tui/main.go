@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"erickaldama-mail/internal/config"
@@ -86,15 +87,18 @@ func main() {
 		}
 	}
 
+	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	m := model{
-		view:    viewList,
-		headers: headers,
+		mode:    modeBrowse,
+		focus:   focusList,
+		list:    newMessageList(headers, 30, 20),
+		spinner: sp,
+		from:    from,
 		reader:  r,
 		sender:  s,
-		from:    from,
+		compose: newComposer(),
 	}
-
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
