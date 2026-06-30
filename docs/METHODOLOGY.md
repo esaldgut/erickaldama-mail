@@ -52,10 +52,18 @@ humano out-of-band (SSO Admin); el agente verifica post-deploy con menor privile
 end-to-end real** contra el sistema desplegado es donde aparecen los **deploy findings** — los hallazgos que ningún
 code review puede cazar porque viven en el boundary/la cuenta/el config real.
 
-### F6 — Evidencia en repo + PR
+### F6 — Evidencia en repo + PR + review final consolidado
 Runbook con los deploy findings (causa raíz + fix), CHANGELOG orgánico, los JSON de IAM auditables en `iam/`,
 memoria de patrones canónicos, y el PR a develop con CI verde (Git Flow). Los artefactos revisables van al PR como
 comentarios.
+
+Tras abrir el PR, una **pasada de auditoría 6-ejes final sobre el PR ya en GitHub, con un revisor independiente**
+(agente fresco, modelo más capaz, que NO construyó el código). Es distinta del review de F5: F5 mira la rama en el
+worktree *durante* la construcción y caza lo cross-package; este mira el `gh pr diff` *terminado* como lo vería un
+revisor externo, y elimina el **sesgo de constructor** — la última red antes del merge la pone alguien sin el contexto
+de haberlo escrito. Las cinco capas de auditoría del flujo (spec-audit, plan-audit, 6-ejes por tarea, whole-branch F5,
+y este review final sobre el PR) no son redundantes: cada una caza una clase distinta de defecto — una API inventada,
+un bug en el código del plan, un defecto por tarea, una incoherencia cross-package, y el sesgo de quien lo construyó.
 
 ---
 
