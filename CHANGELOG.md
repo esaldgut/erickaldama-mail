@@ -12,6 +12,75 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.4] — TUI estética (2 paneles) — 2026-06-30
+
+Layout fluido de dos paneles vivos (lista izquierda + reader derecha) con focus alternador por **Tab**, reemplazando
+la arquitectura de 3 pantallas alternadas de v0.3. El reader es un viewport real de bubbles/viewport.Model con scroll
+pixel-perfect. La lista incorpora bubbles/list nativa con filtro fuzzy (`/`) y DefaultDelegate de renderizado. Spinner
+async (bubbles/spinner) durante cargas de S3. Tipografía: bordes AdaptiveColor de lipgloss, foco resaltado con color
+de acento, ancho real del terminal respetado (auditoría C1/C2 evitó overflow).
+
+### Added
+
+- **Layout 2-paneles LTR** — lipgloss.JoinHorizontal con bordes Ascii (AdaptiveColor), distancia proporcional
+  (33/67 del ancho del terminal). El foco visible alterna entre lista y reader sin redraw costoso — solo un flag
+  booleano `m.focused`.
+
+- **Viewport pager** — bubbles/viewport.Model con scroll suave (línea por línea, en el reader) y goto-top (`Home`).
+  Constructor personalizado `NewViewportReader` calibra alto como `height - 3` (input + separador + status).
+
+- **Filtro fuzzy nativo** (`sahilm/fuzzy`) — integración en bubbles/list — al presionar `/`, la lista entra en
+  modo filter. El FilterValue de messageItem es `From + Subject` (búsqueda por remitente o tema). La lista regenera
+  el índice al cambiar los items (audit B-1 trigger-stale: `Index()` se envenenaba si se abría el filtro con
+  headers[] viejo — FIJO: ahora la lista se regenera con `SetItems()` tras cargar).
+
+- **Spinner async** — bubbles/spinner durante `loadingBody` (`m.inflight > 0`). Cuando el user navega la lista,
+  la carga del correo es async (S3), y el spinner gira sin bloquear. Al llegar el body, el mensaje de tipo
+  `bodyLoadedMsg` dispara el render.
+
+- **Row state + debounce de nav** — auditoría C-debounce reveló un N+1 contra S3: navegar rápidamente por la lista
+  disparaba una carga por *cada* posición. Fix: debounce de 150ms (`tea.Tick`) antes de disparar el loadBody CMD.
+  El invariante es: solo UN loadBody en vuelo a la vez (`m.inflight == 1`).
+
+### Hallazgos de auditoría (portfolio evidence)
+
+**Spec-Audit (A-4 race, B-1 trigger, C1/C2 layout):**
+
+- **A-4 race stale-async** — Un body viejo (S3 key anterior) llegaba 50ms después de que el user saltaba a un
+  correo nuevo. El reader se sobrescribía con contenido stale. Caso: tabletop carga inbound/ABC, navega a inbound/DEF,
+  y 50ms después llega la respuesta de /ABC. Fix: la carga ahora incluye el `s3key` en el `bodyLoadedMsg`; el
+  update() descarta si no coincide con `m.currentKey`. Audit verificó con goroutine sleeper.
+
+- **B-1 trigger stale-index** — El index de bubbles/list se envenenaba al abrir el filtro. Problema: si el usuario
+  presionaba `/`, el FilterValue era correcto, pero `Index()` internamente retornaba la posición del item en la lista
+  original (no filtrante) — de ahí que al presionar Enter se seleccionase el correo equivocado. Fix: `SetItems()`
+  regenera el índice; ahora la lista siempre se reconstruye tras `envScanned`.
+
+- **C1/C2 layout overflow** — El ancho `left := w / 3; right := w - left` NO contaba los bordes (4 chars: `│`, 2×espacios,
+  `│`). Con 80 cols de terminal, 53+53 = 106, overflow. Fix: `left := w / 3 - 2; right := w - left - 2`, donde 2 es el
+  ancho de los bordes.
+
+**Plan-Audit (A-T4-panic refactor, C-debounce N+1):**
+
+- **A-T4-panic refactor atómico** — Task 4 refactor obligó a mover el state de model (del `Index` al `currentKey` + `currentHdr`).
+  Sin parar en medio, fue un commit atómico — no se podía partir (si se divide, CI falla). Auditoría declaró esto como
+  evidence de que el refactor fue integral, no patch-based.
+
+- **C-debounce N+1 contra S3** — Navegación rápida por la lista (j/k, Page Down) disparaba loadBody para CADA posición.
+  Con 100 correos, 100 GETs a S3 en 2 segundos. Fix: debounce de 150ms (`time.Tick`); solo la ÚLTIMA posición
+  en esos 150ms carga el body.
+
+**Invariante SAN-1..5 preservado:** Todos los `SetContent()` reciben HTML sanitizado (`m.sanitizedBody` o `body` post-`RenderRich`),
+nunca crudo (`m.rawHTML` solo se guarda, nunca se renderiza directamente).
+
+### ROB-1 resolved
+
+El reader arrancaba vacío en la primera apertura de la app (sin seleccionar un correo primero). Auditoría 6-ejes
+identificó esto como "ROB-1: startup context vacío". Fix: en `WindowSizeMsg`, si `m.inflight == 0` y el reader es
+vacío, auto-carga el correo actualmente seleccionado (línea 429).
+
+---
+
 ## [mail v0.3] — Render rico HTML+imágenes sanitizado — 2026-06-26
 
 Render enriquecido de correo HTML directamente en el terminal: sanitización de seguridad con bluemonday

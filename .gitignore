@@ -32,3 +32,6 @@ cdk.context.json
 /mail
 /mail-tui
 /mail-smoke
+
+# Subproject worktrees (git-worktree linked; never tracked by the main repo)
+.claude/worktrees/
