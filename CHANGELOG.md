@@ -43,7 +43,9 @@ necesita). DynamoDB sigue siendo la fuente de verdad — el cache se reconstruye
 - **`EscapeFTS(q string) string`** (`internal/cache/escape.go`) — envuelve el query del usuario en comillas
   dobles y duplica cualquier `"` interna, neutralizando `AND`/`OR`/`NOT`/`NEAR` como operadores FTS5 y
   caracteres especiales. Compartida por el CLI (`mail search`) y la TUI (filtro `/`) — una sola función, un
-  solo test, cero duplicación.
+  solo test, cero duplicación. Añade un `*` **fuera** de la comilla de cierre (`"transfer"*`, sqlite.org/fts5.html
+  §3.3) para habilitar **prefix match del último token** — `transfer` matchea `transferencia` — sin sacrificar la
+  neutralización de operadores. El string vacío se devuelve como `""` sin `*` (el filtro TUI al limpiarse).
 
 - **`FormatDate(raw string) string`** (`internal/cache/format.go`) — reemplaza a `shortDate` de v0.4:
   `"2006-01-02 15:04"` (ISO-like, ordenable, 24h, hora local) en vez de `"2 Jan 2006"`. Misma tolerancia
