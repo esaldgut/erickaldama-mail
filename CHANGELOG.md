@@ -12,6 +12,106 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.5] — Cache local SQLite+FTS5, búsqueda, hora+s3Key — 2026-07-02
+
+Tercera capa de la serie de cliente (v0.3 render → v0.4 TUI → **v0.5 cache**): un cache local descartable que
+acelera `mail ls` sirviendo headers desde SQLite en vez de golpear DynamoDB en cada invocación, habilita búsqueda
+full-text local (`mail search` + el filtro `/` de la TUI), y resuelve dos puntos de dolor de display arrastrados
+desde v0.2: el listado solo mostraba fecha (no hora → correos del mismo día indistinguibles) y nunca mostraba el
+s3Key (había que re-listar con `--json` o inspeccionar para conseguir el identificador que `mail read <s3Key>`
+necesita). DynamoDB sigue siendo la fuente de verdad — el cache se reconstruye borrándolo, sin pérdida de datos.
+
+### Added
+
+- **`internal/cache`** — paquete nuevo, decorador de `mailbox.Reader`: `Open`/`Close` (SQLite en
+  `~/.cache/erickaldama-mail/index.sqlite`, respeta `$XDG_CACHE_HOME`), `Sync` (DynamoDB → SQLite, upsert +
+  FTS explícito), `List`/`Search` (newest-first / FTS5 `MATCH ... ORDER BY rank`). Los call-sites (`mail ls`,
+  `mail-tui`) abren el cache y sincronizan antes de leer; si `Open`/`Sync` fallan, caen de vuelta a
+  `reader.List` directo — el cache nunca bloquea el flujo, es puramente una optimización.
+
+- **Esquema contentless sin triggers** (`internal/cache/schema.go`) — tabla `headers` (rowid INTEGER PK
+  explícito, `s3Key UNIQUE` como clave de conflicto del upsert, `pk`/`sk`/`messageId`/`sender`/`subject`/`date`)
+  + `headers_fts` FTS5 `content=''` (contentless) + `sync_state` (mailbox → `last_sk`/`synced_at`, preparado
+  para un incremental futuro). El índice `idx_headers_mailbox(pk, sk DESC)` sirve el `List` newest-first sin scan.
+
+- **`mail search <query>`** (subcomando nuevo, no un flag de `ls` — más descubrible, espacio propio para
+  `--mailbox`/`--limit`/`--json`) — full-text sobre `sender`+`subject` vía `headers_fts MATCH`, reusa
+  `renderList` así que la salida trae hora+s3Key igual que `ls`. A diferencia de `ls`, `search` no tiene
+  equivalente "vivo": el FTS solo existe en el cache local, así que un fallo de `cache.Open` aborta el comando
+  en vez de degradar.
+
+- **`EscapeFTS(q string) string`** (`internal/cache/escape.go`) — envuelve el query del usuario en comillas
+  dobles y duplica cualquier `"` interna, neutralizando `AND`/`OR`/`NOT`/`NEAR` como operadores FTS5 y
+  caracteres especiales. Compartida por el CLI (`mail search`) y la TUI (filtro `/`) — una sola función, un
+  solo test, cero duplicación.
+
+- **`FormatDate(raw string) string`** (`internal/cache/format.go`) — reemplaza a `shortDate` de v0.4:
+  `"2006-01-02 15:04"` (ISO-like, ordenable, 24h, hora local) en vez de `"2 Jan 2006"`. Misma tolerancia
+  multi-layout (RFC1123Z/RFC1123/RFC822Z/RFC822/RFC3339), mismo fallback al string crudo si no parsea.
+  Compartida por `cmd/mail` y `cmd/mail-tui` — un único punto de formato de fecha en todo el cliente.
+
+- **`mail ls` con hora+s3Key** (`cmd/mail/main.go renderList`) — la columna `Date` pasa de fecha-sola a
+  `FormatDate` (fecha+hora); se añade el `s3Key` como columna final (para copiar directo a `mail read <s3Key>`,
+  vía el copy-mode de tmux — el cliente no añade clipboard propio). `--json` ya serializaba el struct completo;
+  el cambio es solo en la salida tabular humana.
+
+- **TUI: ítem de 3 líneas + filtro FTS5** (`cmd/mail-tui/listitem.go`, `model.go`) — el `DefaultDelegate` de
+  bubbles/list solo da 2 líneas (Title/Description); se escribió un `itemDelegate` propio (`Height()==3`) que
+  añade una 3ª línea con el s3Key en estilo faint (tenue, menor énfasis, visible pero no protagonista). La
+  Description pasa a usar `FormatDate` (fecha+hora, la misma función del CLI). El filtro `/` deja de ser fuzzy
+  en memoria (`sahilm/fuzzy` sobre los items ya cargados) y pasa a consultar `cache.Search` — mismo ranking que
+  `mail search`, sobre el histórico completo del cache, no solo la página cargada en memoria.
+
+### Decisión de diseño que distingue esta versión: contentless sin triggers
+
+El research previo (F0) había dejado NO VERIFICADO si un `INSERT ... ON CONFLICT DO UPDATE` dispara los
+triggers `AFTER INSERT`/`AFTER UPDATE` que un esquema *external-content* necesitaría para mantener el FTS5
+sincronizado automáticamente. En vez de apostar a ese comportamiento no verificado (y arriesgar corrupción
+silenciosa del índice si no dispara), el spec invirtió la elección del research hacia **contentless sin
+triggers**: Go sincroniza el índice FTS explícitamente, dentro de la misma transacción del upsert.
+
+Esa inversión destapó un segundo hallazgo, verificado empíricamente en la auditoría del plan: una tabla FTS5
+contentless **rechaza `DELETE FROM ... WHERE rowid`** (`cannot DELETE from contentless fts5 table`). Reemplazar
+la entrada de un s3Key existente exige el comando especial `'delete'`, y ese comando **requiere los valores
+VIEJOS** actualmente indexados (`sqlite.org/fts5.html` §6.3: los valores insertados en las demás columnas deben
+coincidir con lo que FTS5 tiene almacenado). El flujo de `Sync` quedó así: leer `sender`/`subject` VIEJOS del
+s3Key (si existía) → `INSERT INTO headers_fts(headers_fts, rowid, sender, subject) VALUES('delete', ...)` con
+esos valores viejos → upsert de `headers` con `RETURNING rowid` → `INSERT INTO headers_fts(rowid, sender,
+subject)` con los valores nuevos. El test `TestSyncMutationDoesNotLeaveStaleFTS` es el guardián de este
+invariante — una regresión que reintroduzca un `DELETE FROM headers_fts` directo rompe el build en CI, no en
+producción.
+
+`SyncPageLimit = 500` es un tope fijo, deliberadamente independiente del flag `--count` del CLI: `Sync` siempre
+puebla con las últimas 500 filas de DynamoDB; `--count`/`--limit` solo acotan cuántas filas se **muestran**
+(`List`/`Search LIMIT`). Pasar `count` a `Sync` habría hecho que `mail search` solo buscara en el subconjunto
+reciente que el usuario pidió ver la última vez — un bug de superficie de búsqueda silenciosamente incompleta.
+
+### Dependencia
+
+`modernc.org/sqlite v1.53.0` (SQLite embebido 3.53.2, FTS5 out-of-the-box sin build tag, CGO-free) — la primera
+dependencia de persistencia local del cliente. Trae 7 indirectas nuevas: `modernc.org/libc`, `modernc.org/mathutil`,
+`modernc.org/memory`, `github.com/ncruces/go-strftime`, `github.com/dustin/go-humanize`, `github.com/google/uuid`,
+`github.com/remyoudompheng/bigfft`. Total del módulo tras `go mod tidy`: ~45 dependencias. Driver registrado como
+`"sqlite"` (NO `"sqlite3"`) — `sql.Open("sqlite", dsn)`.
+
+### Hallazgos de auditoría que importaron
+
+**Permisos del archivo + sidecars WAL:** SQLite no controla permisos de archivo — los hereda del umask del
+proceso al crearlo. El cache guarda datos de correo (sender/subject), así que `Open` crea el archivo con
+`os.OpenFile(..., 0o600)` **antes** de que SQLite lo abra, y refuerza con `os.Chmod` por si el archivo ya
+existía con permisos más laxos. El modo WAL crea sidecars `-wal`/`-shm` que también contienen páginas de
+headers sin checkpoint — se les aplica el mismo `0o600` (best-effort, tolerando `ENOENT` si aún no existen).
+El directorio contenedor es `0700`.
+
+**`SetMaxOpenConns(1)` + `busy_timeout=5000` + `synchronous=NORMAL`:** el cache es de un solo proceso pero
+puede abrirse desde el CLI y la TUI casi simultáneamente (o dos invocaciones de CLI en paralelo). En vez de
+confiar en el silencio de la documentación del driver sobre concurrencia, se fuerza una sola conexión —
+serializa el acceso dentro del proceso — y `busy_timeout=5000` hace que cualquier lock de otro proceso se
+resuelva con espera-y-reintento (hasta 5s) en vez de un `SQLITE_BUSY` inmediato. `synchronous=NORMAL` acepta
+una pérdida de durabilidad ante corte de energía — irrelevante porque el cache es descartable por diseño.
+
+---
+
 ## [mail v0.4] — TUI estética (2 paneles) — 2026-06-30
 
 Layout fluido de dos paneles vivos (lista izquierda + reader derecha) con focus alternador por **Tab**, reemplazando
