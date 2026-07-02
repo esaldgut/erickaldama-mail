@@ -59,7 +59,7 @@ func renderTwoPane(m model) string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	var foot string
 	if m.focus == focusList {
-		foot = "/ filtrar · enter abrir · tab→reader · q salir"
+		foot = "/ filtrar · enter abrir · g refrescar · tab→reader · q salir"
 	} else {
 		foot = fmt.Sprintf("j/k scroll · i img · R remote · tab→lista · [%d%%]", int(m.viewport.ScrollPercent()*100))
 	}

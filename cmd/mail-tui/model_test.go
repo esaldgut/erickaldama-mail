@@ -422,6 +422,68 @@ func TestApplyFilterLoadsSelectedBody(t *testing.T) {
 	}
 }
 
+// TestCanRefreshPauseRules: the background auto-refresh must pause (not run) while composing, while
+// the filter is open, and while a body load is in flight — the v0.5.1 pause rules.
+func TestCanRefreshPauseRules(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	base := model{cache: c, reader: &mailbox.Reader{}, mailbox: "inbox", list: newMessageList(nil, 30, 20)}
+	if !base.canRefresh() {
+		t.Error("canRefresh should be true in the idle browse state")
+	}
+	if m := base; func() bool { m.mode = modeComposer; return m.canRefresh() }() {
+		t.Error("canRefresh must be false while composing")
+	}
+	if m := base; func() bool { m.inflight = 1; return m.canRefresh() }() {
+		t.Error("canRefresh must be false with a load in flight")
+	}
+	// nil cache → cannot refresh (nothing to sync into).
+	if m := base; func() bool { m.cache = nil; return m.canRefresh() }() {
+		t.Error("canRefresh must be false without a cache")
+	}
+}
+
+// TestRefreshTickAlwaysRearms: a refreshTickMsg must always schedule the next tick (self-perpetuating
+// loop), whether or not this round actually syncs — pausing skips the round, never kills the loop.
+func TestRefreshTickAlwaysRearms(t *testing.T) {
+	// Paused state (filter open) — still must return a non-nil Cmd (the re-armed tick).
+	m := model{list: newMessageList(nil, 30, 20)} // nil cache → canRefresh false
+	_, cmd := m.Update(refreshTickMsg{})
+	if cmd == nil {
+		t.Error("refreshTickMsg must re-arm the tick even when the refresh is paused")
+	}
+}
+
+// TestRefreshDonePreservesSelectionByS3Key: when a refresh brings fresh headers (e.g. a new mail at
+// the top), the previously-selected message must stay selected by S3Key — a new mail must not yank
+// the user off what they were reading (B-1 applied to refresh).
+func TestRefreshDonePreservesSelectionByS3Key(t *testing.T) {
+	old := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", Subject: "Report"},
+	}
+	m := model{mailbox: "inbox", list: newMessageList(old, 30, 20)}
+	m.list.Select(0)
+	if selectedKey(m) != "inbound/bbb" {
+		t.Fatalf("precondition: selected %q, want inbound/bbb", selectedKey(m))
+	}
+	// Fresh headers: a NEW mail arrives at the top, the old one is still present.
+	fresh := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-07-02T13:38:00Z#a", S3Key: "inbound/new", Subject: "re:Invent"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", Subject: "Report"},
+	}
+	m2mod, _ := m.Update(refreshDoneMsg{headers: fresh})
+	m2 := m2mod.(model)
+	if len(m2.list.Items()) != 2 {
+		t.Fatalf("refresh should show 2 items, got %d", len(m2.list.Items()))
+	}
+	if got := selectedKey(m2); got != "inbound/bbb" {
+		t.Errorf("refresh must keep the selection on inbound/bbb (not jump to the new mail); got %q", got)
+	}
+}
+
 // TestApplyFilterNilCacheDegradesGracefully: without a cache, applyFilter must not panic and
 // must leave the model's list untouched (graceful degradation to native filtering).
 func TestApplyFilterNilCacheDegradesGracefully(t *testing.T) {

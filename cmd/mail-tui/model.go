@@ -81,9 +81,20 @@ var (
 	normalStyle  = lipgloss.NewStyle()
 )
 
+// refreshInterval is how often the TUI auto-syncs the cache with DynamoDB in the background (v0.5.1).
+const refreshInterval = 30 * time.Second
+
 // EFI-1: remove spinner.Tick from Init; the tick is started on the first inflight 0→1 transition
 // (in loadDebounceMsg and 'i' handlers). Running it always wasted CPU and conflicted with A-3.
-func (m model) Init() tea.Cmd { return textinput.Blink }
+// v0.5.1: Init also starts the auto-refresh tick loop (paused, not killed, when it can't run).
+func (m model) Init() tea.Cmd { return tea.Batch(textinput.Blink, refreshTick()) }
+
+// refreshTick returns a Cmd that fires a refreshTickMsg after refreshInterval. The tick loop is
+// self-perpetuating: each refreshTickMsg schedules the next one (so pausing a refresh — during
+// filter/composer/in-flight load — never kills the loop, it just skips that round).
+func refreshTick() tea.Cmd {
+	return tea.Tick(refreshInterval, func(time.Time) tea.Msg { return refreshTickMsg{} })
+}
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -101,6 +112,19 @@ type bodyLoadedMsg struct {
 type loadDebounceMsg struct {
 	key string
 	gen int
+}
+
+// refreshTickMsg fires every refreshInterval to trigger a background cache sync (v0.5.1 auto-refresh).
+type refreshTickMsg struct{}
+
+// refreshDoneMsg carries the freshly-synced headers back into the model after a background refresh
+// (manual 'g' or auto tick). A nil headers slice means the refresh failed (kept the existing list).
+// manual distinguishes the 'g' path (which incremented inflight and must decrement) from the auto
+// path (which never touches inflight), so the two can't corrupt each other's counter.
+type refreshDoneMsg struct {
+	headers []mailbox.Header
+	err     error
+	manual  bool
 }
 
 // imagesRenderedMsg is sent when async image rendering via render.RenderImage completes.
@@ -180,6 +204,28 @@ func (m model) applyFilter(query string) (model, tea.Cmd) {
 	return m, nil
 }
 
+// canRefresh reports whether a background refresh may run right now. It is paused (skipped, not
+// cancelled) while composing, while the filter is open, and while a body load is in flight — so the
+// refresh never yanks the list out from under an active interaction (v0.5.1 pause rules).
+func (m model) canRefresh() bool {
+	return m.cache != nil && m.reader != nil &&
+		m.mode != modeComposer && !m.list.SettingFilter() && m.inflight == 0
+}
+
+// doRefresh syncs the cache with DynamoDB in the background and returns the fresh headers. Runs off
+// the UI goroutine (returned as a tea.Cmd); the result comes back as a refreshDoneMsg. manual marks
+// the 'g' path so the handler knows to decrement the inflight counter it incremented.
+func (m model) doRefresh(manual bool) tea.Cmd {
+	c, r, mb := m.cache, m.reader, m.mailbox
+	return func() tea.Msg {
+		if _, err := c.Sync(context.Background(), r, mb, cache.SyncPageLimit); err != nil {
+			return refreshDoneMsg{err: err, manual: manual}
+		}
+		hs, lerr := c.List(mb, 200)
+		return refreshDoneMsg{headers: hs, err: lerr, manual: manual}
+	}
+}
+
 // ── Update ────────────────────────────────────────────────────────────────────
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -232,6 +278,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // A-4
 		}
 		return m.applyBody(msg.parsed)
+	case refreshTickMsg:
+		// Auto-refresh: always re-arm the tick (self-perpetuating loop), but only actually sync when
+		// no interaction would be disturbed (canRefresh). Pausing skips the round, never kills the loop.
+		if !m.canRefresh() {
+			return m, refreshTick()
+		}
+		return m, tea.Batch(m.doRefresh(false), refreshTick())
+	case refreshDoneMsg:
+		if msg.manual && m.inflight > 0 {
+			m.inflight-- // balances the manual-refresh ('g') increment; auto-refresh never increments
+		}
+		if msg.err != nil || msg.headers == nil {
+			if msg.err != nil {
+				m.statusMsg = "refresh: " + msg.err.Error()
+			}
+			return m, nil // keep the existing list on failure
+		}
+		m.statusMsg = "" // clear "refreshing…"
+		// Rebuild the list with fresh headers, preserving the selected message by S3Key (B-1) so a
+		// new mail arriving at the top never yanks the user off what they were reading.
+		prevKey := selectedKey(m)
+		m.list = newMessageList(msg.headers, m.list.Width(), m.list.Height())
+		for i, it := range m.list.Items() {
+			if mi, ok := it.(messageItem); ok && mi.h.S3Key == prevKey {
+				m.list.Select(i)
+				break
+			}
+		}
+		return m, nil
 	case imagesRenderedMsg:
 		if m.inflight > 0 {
 			m.inflight--
@@ -310,6 +385,18 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case 'a':
 			m.statusMsg = "agent: not connected (run with --backend)"
 			return m, nil
+		case 'g':
+			// Manual refresh: sync now (unless a load is in flight or we can't reach the backend).
+			if m.cache == nil || m.reader == nil {
+				return m, nil
+			}
+			if m.inflight > 0 {
+				m.statusMsg = "refresh: busy…"
+				return m, nil
+			}
+			m.statusMsg = "refreshing…"
+			m.inflight++ // was 0 (guarded above), so this is the 0→1 transition: start the spinner
+			return m, tea.Batch(m.doRefresh(true), m.spinner.Tick)
 		}
 		// reader-only keys i/R handled in the focusReader branch below.
 	}
