@@ -52,10 +52,11 @@ type model struct {
 	loadPendingKey  string // the S3Key the latest debounce tick is waiting to load
 	vpReady         bool
 
-	from   string
-	reader *mailbox.Reader
-	sender mailSender
-	cache  *cache.Cache // v0.5: filter (/) queries FTS5 via this cache; nil-safe (degrades to native filter)
+	from    string // sending identity (cfg.DefaultFrom) — used for reply-all self-strip, NOT for cache keys
+	mailbox string // mailbox being browsed (cfg.Mailboxes[0]) — the cache write-path key; applyFilter MUST read with this, not from
+	reader  *mailbox.Reader
+	sender  mailSender
+	cache   *cache.Cache // v0.5: filter (/) queries FTS5 via this cache; nil-safe (degrades to native filter)
 
 	compose    composer
 	confirming bool
@@ -137,9 +138,9 @@ func (m model) applyFilter(query string) (model, tea.Cmd) {
 	var hs []mailbox.Header
 	var err error
 	if strings.TrimSpace(query) == "" {
-		hs, err = m.cache.List(m.from, 200)
+		hs, err = m.cache.List(m.mailbox, 200)
 	} else {
-		hs, err = m.cache.Search(m.from, query, 200)
+		hs, err = m.cache.Search(m.mailbox, query, 200)
 	}
 	if err != nil {
 		m.statusMsg = "search error: " + err.Error()

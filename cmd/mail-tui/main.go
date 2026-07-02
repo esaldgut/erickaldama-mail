@@ -117,6 +117,7 @@ func main() {
 		list:    newMessageList(headers, 30, 20),
 		spinner: sp,
 		from:    from,
+		mailbox: mailboxName, // same key used to Sync/pre-load the cache above — applyFilter reads under this
 		reader:  r,
 		sender:  s,
 		cache:   ca,
