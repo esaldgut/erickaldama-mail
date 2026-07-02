@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,8 +48,10 @@ func (c *Cache) Sync(ctx context.Context, r HeaderLister, mailbox string, limit 
 		//    FTS entry with the exact values FTS5 has stored (contentless 'delete' requires this).
 		var oldRowid sql.NullInt64
 		var oldSender, oldSubject sql.NullString
-		_ = tx.QueryRowContext(ctx, `SELECT rowid, sender, subject FROM headers WHERE s3Key=?`, h.S3Key).
-			Scan(&oldRowid, &oldSender, &oldSubject) // ErrNoRows → oldRowid.Valid=false (new row)
+		if err := tx.QueryRowContext(ctx, `SELECT rowid, sender, subject FROM headers WHERE s3Key=?`, h.S3Key).
+			Scan(&oldRowid, &oldSender, &oldSubject); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("cache sync read old %s: %w", h.S3Key, err)
+		} // ErrNoRows → oldRowid.Valid=false (new row); any other error aborts the tx
 
 		// 2. Remove the stale FTS entry via the special 'delete' command (contentless-safe).
 		if oldRowid.Valid {
