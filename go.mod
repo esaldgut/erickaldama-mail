@@ -24,6 +24,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/jhillyerd/enmime/v2 v2.4.1
 	github.com/microcosm-cc/bluemonday v1.0.27
+	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/net v0.54.0
 	golang.org/x/term v0.43.0
@@ -87,7 +88,6 @@ require (
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
-	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/olekukonko/cat v0.0.0-20250911104152-50322a0618f6 // indirect
 	github.com/olekukonko/errors v1.3.0 // indirect
