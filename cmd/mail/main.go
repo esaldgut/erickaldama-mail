@@ -487,6 +487,58 @@ func main() {
 		},
 	}
 
+	// ── search ───────────────────────────────────────────────────────────
+	searchCmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Full-text search over cached headers (sender + subject)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg, hasCfg, _ := config.Load()
+			var mailboxes []string
+			if cmd.Flags().Changed("mailbox") {
+				mailboxes = []string{mailboxName}
+			} else if hasCfg && len(cfg.Mailboxes) > 0 {
+				mailboxes = cfg.Mailboxes
+			} else {
+				return fmt.Errorf("no mailbox specified and no config")
+			}
+			if !cmd.Root().PersistentFlags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
+				readProfile = cfg.ReadProfile
+			}
+			query := strings.Join(args, " ")
+
+			cachePath, err := cache.DefaultPath()
+			if err != nil {
+				return fmt.Errorf("cache path: %w", err)
+			}
+			ca, err := cache.Open(cachePath)
+			if err != nil {
+				return fmt.Errorf("cache open: %w", err)
+			}
+			defer ca.Close()
+			// Refresh the cache first so search reflects recent mail (best-effort). Populate with the
+			// FIXED cap (not count) — search must see the full history, not just --count rows (M-2).
+			if r, rerr := wire.Reader(ctx, readProfile); rerr == nil {
+				for _, mb := range mailboxes {
+					if _, serr := ca.Sync(ctx, r, mb, cache.SyncPageLimit); serr != nil {
+						fmt.Fprintf(os.Stderr, "warning: cache sync %s failed (%v)\n", mb, serr)
+					}
+				}
+			}
+			var all []mailbox.Header
+			for _, mb := range mailboxes {
+				hs, serr := ca.Search(mb, query, count)
+				if serr != nil {
+					fmt.Fprintf(os.Stderr, "error searching %s: %v\n", mb, serr)
+					continue
+				}
+				all = append(all, hs...)
+			}
+			return renderList(os.Stdout, all, jsonFlag)
+		},
+	}
+
 	// ── tmux ─────────────────────────────────────────────────────────────
 	// Glue for the tmux integration documented in the SP-4 spec §5.3. Two subcommands:
 	//   popup  → open the full-screen TUI in a tmux display-popup (floating overlay)
@@ -550,7 +602,7 @@ func main() {
 		},
 	}
 
-	root.AddCommand(lsCmd, readCmd, sendCmd, replyCmd, aiCmd, tmuxCmd)
+	root.AddCommand(lsCmd, readCmd, sendCmd, replyCmd, aiCmd, tmuxCmd, searchCmd)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
