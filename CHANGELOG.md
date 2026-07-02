@@ -12,6 +12,38 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.5.1] — Fix del reader vacío + refresh de la TUI — 2026-07-02
+
+Dos mejoras de la TUI que el smoke E2E de v0.5 destapó al usarla contra correo real.
+
+### Fixed
+
+- **Reader pane vacío tras filtrar (regresión de v0.5).** Al aplicar/limpiar el filtro `/` — o cuando un
+  re-sync traía un correo nuevo que quedaba seleccionado — el panel derecho se quedaba en blanco. Causa:
+  `applyFilter` reconstruye la lista y restaura la selección por S3Key, pero **no disparaba la carga del
+  body** del elemento recién seleccionado; solo el cambio de selección por tecla y el primer resize lo hacían.
+  El filtro nativo de v0.4 no reconstruía la lista, así que este camino no existía antes. Fix: se extrajo el
+  tick de debounce a un helper `scheduleLoad(key)` (elimina la triplicación en los 3 call-sites) y `applyFilter`
+  lo llama tras restaurar la selección. Test de regresión `TestApplyFilterLoadsSelectedBody` (search + clear).
+
+### Added
+
+- **Refresh de la TUI — manual (`g`) + automático (30 s).** La TUI solo sincronizaba con DynamoDB al arrancar;
+  para ver correo nuevo había que salir y re-entrar. Ahora:
+  - Tecla **`g`**: refresh manual inmediato (Sync + recarga) con spinner.
+  - **Auto-refresh cada 30 s** vía `tea.Tick`. El loop se auto-perpetúa — cada tick re-arma el siguiente, así
+    que pausar un refresh nunca mata el loop, solo salta ese round.
+  - **Pausas** (skip del round): mientras filtras (`/`), mientras compones, y con una carga de body en vuelo
+    (`inflight > 0`) — el refresh nunca arranca la lista de debajo de una interacción activa (`canRefresh`).
+  - **Selección preservada por S3Key (B-1):** el correo nuevo aparece arriba pero no te mueve ni cambia el
+    reader — no interrumpe la lectura.
+  - El contador `inflight` se balancea con un flag `manual` en `refreshDoneMsg`: solo el path manual
+    incrementa/decrementa, así que auto y manual no corrompen el contador mutuamente.
+  - El footer de la lista anuncia `g refrescar`.
+  - Tests: `TestCanRefreshPauseRules`, `TestRefreshTickAlwaysRearms`, `TestRefreshDonePreservesSelectionByS3Key`.
+
+---
+
 ## [mail v0.5] — Cache local SQLite+FTS5, búsqueda, hora+s3Key — 2026-07-02
 
 Tercera capa de la serie de cliente (v0.3 render → v0.4 TUI → **v0.5 cache**): un cache local descartable que
