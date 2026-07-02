@@ -81,19 +81,19 @@ func TestSyncMutationDoesNotLeaveStaleFTS(t *testing.T) {
 	if _, err := c.Sync(context.Background(), fakeLister{hs: []mailbox.Header{h}}, "inbox", 50); err != nil {
 		t.Fatalf("Sync 2 (mutation): %v", err) // this is where `DELETE FROM contentless` blows up
 	}
-	var oldCount int
-	if err := c.db.QueryRow(`SELECT COUNT(*) FROM headers_fts WHERE headers_fts MATCH 'OldSubject'`).Scan(&oldCount); err != nil {
+	oldResults, err := c.Search("inbox", "OldSubject", 10)
+	if err != nil {
 		t.Fatalf("Search old: %v", err)
 	}
-	if oldCount != 0 {
-		t.Errorf("stale FTS term: OldSubject still matches %d rows, want 0", oldCount)
+	if len(oldResults) != 0 {
+		t.Errorf("stale FTS term: OldSubject still matches %d rows, want 0", len(oldResults))
 	}
-	var newCount int
-	if err := c.db.QueryRow(`SELECT COUNT(*) FROM headers_fts WHERE headers_fts MATCH 'NewSubject'`).Scan(&newCount); err != nil {
+	newResults, err := c.Search("inbox", "NewSubject", 10)
+	if err != nil {
 		t.Fatalf("Search new: %v", err)
 	}
-	if newCount != 1 {
-		t.Errorf("NewSubject matches %d rows, want 1", newCount)
+	if len(newResults) != 1 {
+		t.Errorf("NewSubject matches %d rows, want 1", len(newResults))
 	}
 	// FTS5 integrity-check must pass (no orphaned/duplicate index entries).
 	if _, err := c.db.Exec(`INSERT INTO headers_fts(headers_fts) VALUES('integrity-check')`); err != nil {
