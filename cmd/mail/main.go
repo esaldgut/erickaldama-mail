@@ -488,6 +488,7 @@ func main() {
 	}
 
 	// ── search ───────────────────────────────────────────────────────────
+	var searchLimit int
 	searchCmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Full-text search over cached headers (sender + subject)",
@@ -529,9 +530,14 @@ func main() {
 					}
 				}
 			}
+			// --limit overrides the display cap; falls back to the global --count when not set.
+			limit := searchLimit
+			if !cmd.Flags().Changed("limit") {
+				limit = count
+			}
 			var all []mailbox.Header
 			for _, mb := range mailboxes {
-				hs, serr := ca.Search(mb, query, count)
+				hs, serr := ca.Search(mb, query, limit)
 				if serr != nil {
 					fmt.Fprintf(os.Stderr, "error searching %s: %v\n", mb, serr)
 					continue
@@ -541,6 +547,7 @@ func main() {
 			return renderList(os.Stdout, all, jsonFlag)
 		},
 	}
+	searchCmd.Flags().IntVar(&searchLimit, "limit", 50, "Max results to display (overrides --count for search)")
 
 	// ── tmux ─────────────────────────────────────────────────────────────
 	// Glue for the tmux integration documented in the SP-4 spec §5.3. Two subcommands:
