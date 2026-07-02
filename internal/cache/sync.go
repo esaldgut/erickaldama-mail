@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"erickaldama-mail/internal/mailbox"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // SyncPageLimit is the FIXED number of rows Sync pulls from DynamoDB to populate the cache. It is

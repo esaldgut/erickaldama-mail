@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"erickaldama-mail/internal/mailbox"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // fakeLister returns a fixed page, ignoring the cursor (v0.5 fetches the full page).

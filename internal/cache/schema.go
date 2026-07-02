@@ -1,6 +1,6 @@
 package cache
 
-// schemaSQL is idempotent: safe to run on every Open. Contentless FTS5 (content='')
+// schemaSQL is idempotent: safe to run on every Open. Contentless FTS5 (content=”)
 // means the index stores no column copy; Go syncs it explicitly (no triggers).
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS headers (
