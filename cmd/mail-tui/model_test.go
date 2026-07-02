@@ -379,6 +379,49 @@ func TestApplyFilterSearchesAndRestoresSelectionByS3Key(t *testing.T) {
 	}
 }
 
+// TestApplyFilterLoadsSelectedBody: v0.5.1 regression — after applyFilter rebuilds the list, the
+// reader pane went blank because no body load was triggered for the (possibly new) selected message.
+// applyFilter must return a non-nil Cmd that, when run, produces a loadDebounceMsg for the selected
+// S3Key. Covers both the search path and the clear path (query="").
+func TestApplyFilterLoadsSelectedBody(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "Hello"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "Report"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", mailbox: "inbox", list: newMessageList(hs, 30, 20)}
+
+	// Search path: applyFilter must schedule a load for the selected result.
+	m2, cmd := m.applyFilter("Report")
+	if cmd == nil {
+		t.Fatal("applyFilter(Report) returned nil Cmd — the reader pane would stay blank (v0.5.1 bug)")
+	}
+	msg := cmd() // run the tick's function to get the loadDebounceMsg
+	ld, ok := msg.(loadDebounceMsg)
+	if !ok {
+		t.Fatalf("applyFilter Cmd produced %T, want loadDebounceMsg", msg)
+	}
+	if ld.key != selectedKey(m2) || ld.key == "" {
+		t.Errorf("loadDebounceMsg.key = %q, want the selected key %q", ld.key, selectedKey(m2))
+	}
+
+	// Clear path (query=""): restoring the full list must also load the now-selected body.
+	m3, cmd3 := m.applyFilter("")
+	if cmd3 == nil {
+		t.Fatal("applyFilter(\"\") returned nil Cmd — reader blank after clearing the filter")
+	}
+	if ld3, ok := cmd3().(loadDebounceMsg); !ok || ld3.key != selectedKey(m3) {
+		t.Errorf("applyFilter(\"\") did not schedule a load for the selected key")
+	}
+}
+
 // TestApplyFilterNilCacheDegradesGracefully: without a cache, applyFilter must not panic and
 // must leave the model's list untouched (graceful degradation to native filtering).
 func TestApplyFilterNilCacheDegradesGracefully(t *testing.T) {

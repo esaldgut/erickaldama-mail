@@ -128,8 +128,24 @@ func selectedKey(m model) string {
 	return it.S3Key()
 }
 
+// scheduleLoad bumps the debounce generation and returns a Cmd that, after the debounce interval,
+// fires a loadDebounceMsg for the given S3Key. Only the tick whose gen still matches will actually
+// load (C-debounce). Shared by the three places a body load is triggered: selection change,
+// first-resize auto-load, and filter/list rebuild (applyFilter).
+func (m *model) scheduleLoad(key string) tea.Cmd {
+	m.loadDebounceGen++
+	m.loadPendingKey = key
+	gen := m.loadDebounceGen
+	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return loadDebounceMsg{key: key, gen: gen}
+	})
+}
+
 // applyFilter rebuilds the list from the cache: Search(query) when non-empty, List otherwise.
-// Preserves the current selection by S3Key (B-1) when the selected message survives the filter.
+// Preserves the current selection by S3Key (B-1) when the selected message survives the filter,
+// and loads the body of the (possibly new) selected message — otherwise the reader pane goes blank
+// after a filter apply/clear (v0.5.1 regression fix: the list is rebuilt so the selection can land
+// on a different message than before, but no key event fires to trigger the load).
 // nil-safe: without a cache, this is a no-op — leaves native filtering as-is (graceful degradation).
 func (m model) applyFilter(query string) (model, tea.Cmd) {
 	if m.cache == nil {
@@ -154,6 +170,12 @@ func (m model) applyFilter(query string) (model, tea.Cmd) {
 			m.list.Select(i)
 			break
 		}
+	}
+	// Load the body of whatever is now selected (the restored message, or item 0 if the previous
+	// selection didn't survive the filter). Without this the reader pane stays blank until the user
+	// moves the selection manually.
+	if key := selectedKey(m); key != "" {
+		return m, m.scheduleLoad(key)
 	}
 	return m, nil
 }
@@ -300,15 +322,7 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.list, cmd = m.list.Update(key)
 	next := selectedKey(m)
 	if next != prev && next != "" && !m.list.SettingFilter() {
-		m.loadDebounceGen++
-		m.loadPendingKey = next
-		gen := m.loadDebounceGen
-		pendingKey := next
-		// 150ms debounce: only the tick whose gen still matches will fire startLoad (C-debounce).
-		tick := tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
-			return loadDebounceMsg{key: pendingKey, gen: gen}
-		})
-		return m, tea.Batch(cmd, tick)
+		return m, tea.Batch(cmd, m.scheduleLoad(next))
 	}
 	return m, cmd
 }
@@ -481,13 +495,7 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	// pane isn't blank at startup. Uses the same debounce path (no special-casing the load).
 	if firstResize && m.currentParsed == nil {
 		if key := selectedKey(m); key != "" {
-			m.loadDebounceGen++
-			m.loadPendingKey = key
-			gen := m.loadDebounceGen
-			k := key
-			return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
-				return loadDebounceMsg{key: k, gen: gen}
-			})
+			return m, m.scheduleLoad(key)
 		}
 	}
 	return m, nil
