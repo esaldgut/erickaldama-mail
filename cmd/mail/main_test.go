@@ -49,9 +49,9 @@ func TestRenderListShowsDateTimeAndS3Key(t *testing.T) {
 	}
 }
 
-func TestSearchCmdFindsSeeded(t *testing.T) {
-	// Build a temp cache seeded with one matching header, then run Search directly
-	// (the command wraps this; here we assert the query path end-to-end at cache level).
+func TestCacheSearchEmptyNoError(t *testing.T) {
+	// Verify that Search on an empty cache returns 0 results without error.
+	// (This test exercises the cache.Search contract, not the full command wiring.)
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dir)
 	path, _ := cache.DefaultPath()
@@ -60,9 +60,7 @@ func TestSearchCmdFindsSeeded(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer c.Close()
-	// Seed via Sync with a fake lister living in the cache test helpers is not visible here;
-	// insert directly through Search's contract by syncing a fake through the exported API.
-	// Simplest: assert Search returns empty (no seed) without error — the command wiring is the unit.
+	// No seeding: cache starts empty. Search should return 0 results, no error.
 	got, err := c.Search("inbox", "anything", 10)
 	if err != nil {
 		t.Fatalf("Search on empty cache: %v", err)

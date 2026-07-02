@@ -512,6 +512,9 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("cache path: %w", err)
 			}
+			// Unlike `mail ls` (which degrades to a live DynamoDB read when the cache fails),
+			// search has no live equivalent — FTS lives only in the local cache. A cache
+			// failure aborts the command.
 			ca, err := cache.Open(cachePath)
 			if err != nil {
 				return fmt.Errorf("cache open: %w", err)
