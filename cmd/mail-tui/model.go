@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	bkey "github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -252,11 +253,16 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleComposerKey(key)
 	}
 	if m.list.SettingFilter() { // D3: all keys to the list; Tab here applies the filter (B-2)
-		prevQuery := m.list.FilterValue() // == m.list.FilterInput.Value(); capture BEFORE delegating
+		prevQuery := m.list.FilterValue()                               // == m.list.FilterInput.Value(); capture BEFORE delegating
+		cancel := bkey.Matches(key, m.list.KeyMap.CancelWhileFiltering) // Esc: cancel, don't apply the stale query
 		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(key) // bubbles may transition Filtering→FilterApplied HERE (B-2: Tab/Enter)
-		if !m.list.SettingFilter() {     // user confirmed (Enter/Tab/arrow) or cleared the filter
-			m2, c2 := m.applyFilter(prevQuery) // reload via cache.Search (or List if empty)
+		m.list, cmd = m.list.Update(key) // bubbles may transition Filtering→(FilterApplied|Unfiltered) HERE (B-2: Tab/Enter confirm; Esc cancels)
+		if !m.list.SettingFilter() {     // transition Filtering→(Applied|Unfiltered): user confirmed or cancelled
+			q := prevQuery
+			if cancel {
+				q = "" // Esc restores the full list, NOT the typed-but-cancelled query
+			}
+			m2, c2 := m.applyFilter(q) // reload via cache.Search (or List if empty)
 			return m2, tea.Batch(cmd, c2)
 		}
 		return m, cmd // still typing the filter query

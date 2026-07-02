@@ -391,3 +391,96 @@ func TestApplyFilterNilCacheDegradesGracefully(t *testing.T) {
 		t.Errorf("applyFilter with nil cache must not alter the list; got %d items", len(m2.list.Items()))
 	}
 }
+
+// TestFilterEscRestoresFullList: CRITICAL regression (Task 10 review) — Esc while filtering must
+// cancel to the FULL list, not re-apply the stale (typed-but-cancelled) query. Seeds a real cache
+// via Sync (2 headers), opens the filter with '/', types a query that narrows the native filter to
+// 1 match, then sends Esc. Asserts the restored list has both items back — NOT the 1-item filtered
+// state that the CRITICAL bug produced (both Esc-cancel and Enter-confirm called
+// applyFilter(prevQuery), so cancelling after typing "alpha" left the list filtered to 1 item).
+func TestFilterEscRestoresFullList(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "alpha report"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "beta memo"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", list: newMessageList(hs, 30, 20)}
+
+	// Open the filter.
+	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm := got.(model)
+	if !mm.list.SettingFilter() {
+		t.Fatal("filter did not open — cannot exercise the Esc-cancel path")
+	}
+
+	// Type "alpha": the native list filter narrows to the 1 matching item while still filtering.
+	for _, r := range "alpha" {
+		got, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		mm = got.(model)
+	}
+	if !mm.list.SettingFilter() {
+		t.Fatal("typing into the filter exited SettingFilter early — precondition broken")
+	}
+
+	// Cancel with Esc.
+	got, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mm = got.(model)
+
+	if mm.list.SettingFilter() {
+		t.Fatal("Esc did not exit filtering mode")
+	}
+	items := mm.list.Items()
+	if len(items) != 2 {
+		t.Fatalf("Esc must restore the FULL list (2 items), got %d — stale query was re-applied (CRITICAL regression)", len(items))
+	}
+}
+
+// TestHandleKeyFilterCancelAppliesEmptyQuery: unit-level guard on the intercept itself (not
+// dependent on bubbles' native filter narrowing in headless mode). Directly simulates the
+// Filtering→Unfiltered transition that bubbles performs internally on CancelWhileFiltering (Esc)
+// by pre-seeding a query into the filter input, then confirms handleKey's cancel-detection routes
+// through applyFilter("") rather than applyFilter(prevQuery).
+func TestHandleKeyFilterCancelAppliesEmptyQuery(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "alpha report"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "beta memo"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", list: newMessageList(hs, 30, 20)}
+
+	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm := got.(model)
+	if !mm.list.SettingFilter() {
+		t.Fatal("filter did not open — cannot exercise the Esc-cancel path")
+	}
+	for _, r := range "alpha" {
+		got, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		mm = got.(model)
+	}
+	if got := mm.list.FilterValue(); got != "alpha" {
+		t.Fatalf("precondition: FilterValue() = %q, want %q", got, "alpha")
+	}
+
+	m2, _ := mm.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	res := m2.(model)
+	if res.list.SettingFilter() {
+		t.Fatal("Esc did not exit filtering mode via handleKey")
+	}
+	if got := len(res.list.Items()); got != 2 {
+		t.Fatalf("handleKey(Esc) must apply an empty query (full list = 2 items), got %d items", got)
+	}
+}
