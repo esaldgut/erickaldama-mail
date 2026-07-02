@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/message"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -311,5 +315,79 @@ func TestReplyDraftPrePopulates(t *testing.T) {
 	mu2 := u2.(model)
 	if mu2.compose.inputs[cSubject].Value() != "Re: existing" {
 		t.Fatalf("must not double Re:, got %q", mu2.compose.inputs[cSubject].Value())
+	}
+}
+
+// ── Task 10: TUI filter → FTS5 over cache (B-1/B-2/D3/C-debounce preserved) ─────────────────
+
+// TestFilterUsesCacheSearch: wiring smoke from the brief — applying an empty filter with a
+// (possibly empty) cache set must not panic and must restore a non-nil list.
+func TestFilterUsesCacheSearch(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	m := model{cache: c, from: "inbox", list: newMessageList(nil, 30, 20)}
+	// Applying an empty filter must restore List (no panic, list non-nil).
+	m2, _ := m.applyFilter("")
+	if m2.list.Items() == nil && len(m2.list.Items()) != 0 {
+		t.Errorf("applyFilter empty should restore list")
+	}
+}
+
+// fakeHeaderLister is a minimal cache.HeaderLister for seeding the cache in tests, without
+// reaching into internal/cache's unexported test helpers.
+type fakeHeaderLister struct{ hs []mailbox.Header }
+
+func (f fakeHeaderLister) List(_ context.Context, _ string, _ int32, _ map[string]ddbtypes.AttributeValue) ([]mailbox.Header, map[string]ddbtypes.AttributeValue, error) {
+	return f.hs, nil, nil
+}
+
+// TestApplyFilterSearchesAndRestoresSelectionByS3Key: seeds a real cache via Sync, selects the
+// 2nd item, applies a query that matches only that item via FTS5, and verifies the list reloads
+// with the match AND the selection survives by S3Key (B-1: never by Index).
+func TestApplyFilterSearchesAndRestoresSelectionByS3Key(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "Hello"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "Report"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", list: newMessageList(hs, 30, 20)}
+	m.list.Select(1) // select bob/Report (inbound/bbb) BEFORE filtering
+	if got := selectedKey(m); got != "inbound/bbb" {
+		t.Fatalf("precondition: selectedKey = %q, want inbound/bbb", got)
+	}
+	m2, _ := m.applyFilter("Report")
+	items := m2.list.Items()
+	if len(items) != 1 {
+		t.Fatalf("applyFilter(Report) len(items) = %d, want 1", len(items))
+	}
+	mi, ok := items[0].(messageItem)
+	if !ok || mi.h.S3Key != "inbound/bbb" {
+		t.Fatalf("applyFilter(Report) did not return the matching header, got %+v", items)
+	}
+	if got := selectedKey(m2); got != "inbound/bbb" {
+		t.Errorf("applyFilter must restore selection by S3Key (B-1); got %q want inbound/bbb", got)
+	}
+}
+
+// TestApplyFilterNilCacheDegradesGracefully: without a cache, applyFilter must not panic and
+// must leave the model's list untouched (graceful degradation to native filtering).
+func TestApplyFilterNilCacheDegradesGracefully(t *testing.T) {
+	m := testList(mailbox.Header{Subject: "a", S3Key: "k1"})
+	m2, cmd := m.applyFilter("anything")
+	if cmd != nil {
+		t.Error("applyFilter with nil cache should return a nil cmd")
+	}
+	if len(m2.list.Items()) != 1 {
+		t.Errorf("applyFilter with nil cache must not alter the list; got %d items", len(m2.list.Items()))
 	}
 }

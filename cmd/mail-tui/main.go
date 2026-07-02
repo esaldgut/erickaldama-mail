@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/config"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/wire"
@@ -76,9 +77,31 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: sender not available (%v)\n", err)
 	}
 
-	// Pre-load headers for the initial list view (first page, 50 messages).
+	// v0.5: open the cache and sync it (best-effort, non-fatal) so the '/' filter can query FTS5
+	// instead of the native in-memory fuzzy filter. A cache/sync failure degrades gracefully —
+	// ca stays nil, applyFilter no-ops, and browsing falls back to the live reader below.
+	var ca *cache.Cache
+	if cachePath, perr := cache.DefaultPath(); perr == nil {
+		if opened, cerr := cache.Open(cachePath); cerr == nil {
+			ca = opened
+			defer ca.Close()
+			if r != nil {
+				if _, serr := ca.Sync(ctx, r, mailboxName, cache.SyncPageLimit); serr != nil { // fixed cap, not 50 (M-2)
+					fmt.Fprintf(os.Stderr, "warning: cache sync failed (%v)\n", serr)
+				}
+			}
+		}
+	}
+
+	// Pre-load headers for the initial list view (first page, 50 messages): prefer the cache,
+	// fall back to a live List when the cache is unavailable or empty.
 	var headers []mailbox.Header
-	if r != nil {
+	if ca != nil {
+		if hs, lerr := ca.List(mailboxName, 50); lerr == nil {
+			headers = hs
+		}
+	}
+	if headers == nil && r != nil {
 		hs, _, lerr := r.List(ctx, mailboxName, 50, nil)
 		if lerr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not load headers (%v)\n", lerr)
@@ -96,6 +119,7 @@ func main() {
 		from:    from,
 		reader:  r,
 		sender:  s,
+		cache:   ca,
 		compose: newComposer(),
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
