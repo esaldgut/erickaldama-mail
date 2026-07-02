@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	bkey "github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/message"
 	render "erickaldama-mail/internal/render"
@@ -50,9 +52,11 @@ type model struct {
 	loadPendingKey  string // the S3Key the latest debounce tick is waiting to load
 	vpReady         bool
 
-	from   string
-	reader *mailbox.Reader
-	sender mailSender
+	from    string // sending identity (cfg.DefaultFrom) — used for reply-all self-strip, NOT for cache keys
+	mailbox string // mailbox being browsed (cfg.Mailboxes[0]) — the cache write-path key; applyFilter MUST read with this, not from
+	reader  *mailbox.Reader
+	sender  mailSender
+	cache   *cache.Cache // v0.5: filter (/) queries FTS5 via this cache; nil-safe (degrades to native filter)
 
 	compose    composer
 	confirming bool
@@ -122,6 +126,36 @@ func selectedKey(m model) string {
 		return ""
 	}
 	return it.S3Key()
+}
+
+// applyFilter rebuilds the list from the cache: Search(query) when non-empty, List otherwise.
+// Preserves the current selection by S3Key (B-1) when the selected message survives the filter.
+// nil-safe: without a cache, this is a no-op — leaves native filtering as-is (graceful degradation).
+func (m model) applyFilter(query string) (model, tea.Cmd) {
+	if m.cache == nil {
+		return m, nil
+	}
+	var hs []mailbox.Header
+	var err error
+	if strings.TrimSpace(query) == "" {
+		hs, err = m.cache.List(m.mailbox, 200)
+	} else {
+		hs, err = m.cache.Search(m.mailbox, query, 200)
+	}
+	if err != nil {
+		m.statusMsg = "search error: " + err.Error()
+		return m, nil
+	}
+	prevKey := selectedKey(m)
+	m.list = newMessageList(hs, m.list.Width(), m.list.Height())
+	// Restore selection by S3Key if still present (B-1: never by Index).
+	for i, it := range m.list.Items() {
+		if mi, ok := it.(messageItem); ok && mi.h.S3Key == prevKey {
+			m.list.Select(i)
+			break
+		}
+	}
+	return m, nil
 }
 
 // ── Update ────────────────────────────────────────────────────────────────────
@@ -220,9 +254,19 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleComposerKey(key)
 	}
 	if m.list.SettingFilter() { // D3: all keys to the list; Tab here applies the filter (B-2)
+		prevQuery := m.list.FilterValue()                               // == m.list.FilterInput.Value(); capture BEFORE delegating
+		cancel := bkey.Matches(key, m.list.KeyMap.CancelWhileFiltering) // Esc: cancel, don't apply the stale query
 		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(key)
-		return m, cmd
+		m.list, cmd = m.list.Update(key) // bubbles may transition Filtering→(FilterApplied|Unfiltered) HERE (B-2: Tab/Enter confirm; Esc cancels)
+		if !m.list.SettingFilter() {     // transition Filtering→(Applied|Unfiltered): user confirmed or cancelled
+			q := prevQuery
+			if cancel {
+				q = "" // Esc restores the full list, NOT the typed-but-cancelled query
+			}
+			m2, c2 := m.applyFilter(q) // reload via cache.Search (or List if empty)
+			return m2, tea.Batch(cmd, c2)
+		}
+		return m, cmd // still typing the filter query
 	}
 	if key.Type == tea.KeyTab { // B-2: only toggles when NOT filtering
 		if m.focus == focusList {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 )
 
@@ -28,6 +29,44 @@ func TestRenderListTable(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Hola") {
 		t.Fatalf("table output: %s", buf.String())
+	}
+}
+
+func TestRenderListShowsDateTimeAndS3Key(t *testing.T) {
+	hs := []mailbox.Header{
+		{S3Key: "inbound/aaa-000000", From: "alice@example.com", Subject: "Hello", Date: "Wed, 25 Jun 2026 14:32:00 +0000"},
+	}
+	var buf bytes.Buffer
+	if err := renderList(&buf, hs, false); err != nil {
+		t.Fatalf("renderList: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "inbound/aaa-000000") {
+		t.Errorf("output missing s3Key:\n%s", out)
+	}
+	if !strings.Contains(out, "2026-06-25") { // date part (time is TZ-local, only assert the date)
+		t.Errorf("output missing formatted date:\n%s", out)
+	}
+}
+
+func TestCacheSearchEmptyNoError(t *testing.T) {
+	// Verify that Search on an empty cache returns 0 results without error.
+	// (This test exercises the cache.Search contract, not the full command wiring.)
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	path, _ := cache.DefaultPath()
+	c, err := cache.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	// No seeding: cache starts empty. Search should return 0 results, no error.
+	got, err := c.Search("inbox", "anything", 10)
+	if err != nil {
+		t.Fatalf("Search on empty cache: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("empty cache search len = %d, want 0", len(got))
 	}
 }
 

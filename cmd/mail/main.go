@@ -20,6 +20,7 @@ import (
 	"golang.org/x/term"
 
 	"erickaldama-mail/internal/aiassist"
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/config"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/message"
@@ -35,7 +36,8 @@ func renderList(w io.Writer, hs []mailbox.Header, asJSON bool) error {
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	for _, h := range hs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", h.Date, h.From, h.Subject)
+		// date+time, sender, subject, s3Key — s3Key last so the user can copy it (tmux copy-mode)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", cache.FormatDate(h.Date), h.From, h.Subject, h.S3Key)
 	}
 	return tw.Flush()
 }
@@ -142,13 +144,42 @@ func main() {
 				return err
 			}
 			var all []mailbox.Header
-			for _, mb := range mailboxes {
-				hs, _, err := r.List(ctx, mb, int32(count), nil) // full limit per mailbox
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error listing %s: %v\n", mb, err)
-					continue // don't abort all mailboxes on one error
+			// Try the cache: open, sync each mailbox, read from SQLite. On ANY cache failure,
+			// fall back transparently to the live Reader (the cache is a discardable optimization).
+			cachePath, perr := cache.DefaultPath()
+			var ca *cache.Cache
+			var cerr error
+			if perr == nil {
+				ca, cerr = cache.Open(cachePath)
+			}
+			if perr == nil && cerr == nil {
+				defer ca.Close()
+				for _, mb := range mailboxes {
+					// Populate with a FIXED cap (not count) so search sees the full history (M-2).
+					if _, serr := ca.Sync(ctx, r, mb, cache.SyncPageLimit); serr != nil {
+						fmt.Fprintf(os.Stderr, "warning: cache sync %s failed (%v); using live\n", mb, serr)
+					}
+					hs, lerr := ca.List(mb, count) // display limit = count
+					if lerr != nil {
+						// m-1: cache List failed → fall back to live for THIS mailbox, don't drop it.
+						fmt.Fprintf(os.Stderr, "warning: cache list %s failed (%v); using live\n", mb, lerr)
+						if live, _, le := r.List(ctx, mb, int32(count), nil); le == nil {
+							all = append(all, live...)
+						}
+						continue
+					}
+					all = append(all, hs...)
 				}
-				all = append(all, hs...)
+			} else {
+				// Cache unavailable → live path (original behaviour).
+				for _, mb := range mailboxes {
+					hs, _, lerr := r.List(ctx, mb, int32(count), nil)
+					if lerr != nil {
+						fmt.Fprintf(os.Stderr, "error listing %s: %v\n", mb, lerr)
+						continue
+					}
+					all = append(all, hs...)
+				}
 			}
 			// sort by SK descending (ISO8601, NOT by Date which is RFC1123Z and sorts incorrectly)
 			slices.SortFunc(all, func(a, b mailbox.Header) int { return strings.Compare(b.SK, a.SK) })
@@ -456,6 +487,68 @@ func main() {
 		},
 	}
 
+	// ── search ───────────────────────────────────────────────────────────
+	var searchLimit int
+	searchCmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Full-text search over cached headers (sender + subject)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg, hasCfg, _ := config.Load()
+			var mailboxes []string
+			if cmd.Flags().Changed("mailbox") {
+				mailboxes = []string{mailboxName}
+			} else if hasCfg && len(cfg.Mailboxes) > 0 {
+				mailboxes = cfg.Mailboxes
+			} else {
+				return fmt.Errorf("no mailbox specified and no config")
+			}
+			if !cmd.Root().PersistentFlags().Changed("read-profile") && hasCfg && cfg.ReadProfile != "" {
+				readProfile = cfg.ReadProfile
+			}
+			query := strings.Join(args, " ")
+
+			cachePath, err := cache.DefaultPath()
+			if err != nil {
+				return fmt.Errorf("cache path: %w", err)
+			}
+			// Unlike `mail ls` (which degrades to a live DynamoDB read when the cache fails),
+			// search has no live equivalent — FTS lives only in the local cache. A cache
+			// failure aborts the command.
+			ca, err := cache.Open(cachePath)
+			if err != nil {
+				return fmt.Errorf("cache open: %w", err)
+			}
+			defer ca.Close()
+			// Refresh the cache first so search reflects recent mail (best-effort). Populate with the
+			// FIXED cap (not count) — search must see the full history, not just --count rows (M-2).
+			if r, rerr := wire.Reader(ctx, readProfile); rerr == nil {
+				for _, mb := range mailboxes {
+					if _, serr := ca.Sync(ctx, r, mb, cache.SyncPageLimit); serr != nil {
+						fmt.Fprintf(os.Stderr, "warning: cache sync %s failed (%v)\n", mb, serr)
+					}
+				}
+			}
+			// --limit overrides the display cap; falls back to the global --count when not set.
+			limit := searchLimit
+			if !cmd.Flags().Changed("limit") {
+				limit = count
+			}
+			var all []mailbox.Header
+			for _, mb := range mailboxes {
+				hs, serr := ca.Search(mb, query, limit)
+				if serr != nil {
+					fmt.Fprintf(os.Stderr, "error searching %s: %v\n", mb, serr)
+					continue
+				}
+				all = append(all, hs...)
+			}
+			return renderList(os.Stdout, all, jsonFlag)
+		},
+	}
+	searchCmd.Flags().IntVar(&searchLimit, "limit", 50, "Max results to display (overrides --count for search)")
+
 	// ── tmux ─────────────────────────────────────────────────────────────
 	// Glue for the tmux integration documented in the SP-4 spec §5.3. Two subcommands:
 	//   popup  → open the full-screen TUI in a tmux display-popup (floating overlay)
@@ -519,7 +612,7 @@ func main() {
 		},
 	}
 
-	root.AddCommand(lsCmd, readCmd, sendCmd, replyCmd, aiCmd, tmuxCmd)
+	root.AddCommand(lsCmd, readCmd, sendCmd, replyCmd, aiCmd, tmuxCmd, searchCmd)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

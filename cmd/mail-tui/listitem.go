@@ -1,11 +1,16 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"strings"
 	"time"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // messageItem adapts a mailbox.Header to bubbles/list. It wraps the WHOLE Header (not
@@ -20,9 +25,9 @@ func (it messageItem) Title() string {
 	return it.h.Subject
 }
 
-// Description is the second line: sender + short date.
+// Description is the second line: sender + date+time (v0.5: FormatDate, shared with the CLI).
 func (it messageItem) Description() string {
-	return it.h.From + " · " + shortDate(it.h.Date)
+	return it.h.From + " · " + cache.FormatDate(it.h.Date)
 }
 
 // FilterValue is what the fuzzy filter ('/') searches: sender OR subject.
@@ -44,14 +49,45 @@ func shortDate(d string) string {
 	return d
 }
 
-// newMessageList builds the list.Model with the DefaultDelegate (verified in Fase 0),
-// title/status bar hidden so it embeds cleanly in the narrow left pane.
+// itemDelegate renders each message as three lines: subject (title), sender·datetime (description),
+// and the S3 key in faint style. DefaultDelegate can't style the third line independently, so this
+// is a minimal custom list.ItemDelegate (audit C-2).
+type itemDelegate struct{}
+
+func newItemDelegate() itemDelegate { return itemDelegate{} }
+
+func (d itemDelegate) Height() int                             { return 3 }
+func (d itemDelegate) Spacing() int                            { return 1 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+var (
+	titleStyle    = lipgloss.NewStyle().Bold(true)
+	descStyle     = lipgloss.NewStyle().Faint(true)
+	s3KeyStyle    = lipgloss.NewStyle().Faint(true)
+	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+)
+
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	it, ok := item.(messageItem)
+	if !ok {
+		return
+	}
+	title := it.Title()
+	if index == m.Index() {
+		title = selectedStyle.Render(title)
+	} else {
+		title = titleStyle.Render(title)
+	}
+	fmt.Fprintf(w, "%s\n%s\n%s", title, descStyle.Render(it.Description()), s3KeyStyle.Render(it.h.S3Key))
+}
+
+// newMessageList builds the list.Model with the 3-line itemDelegate.
 func newMessageList(headers []mailbox.Header, width, height int) list.Model {
 	items := make([]list.Item, len(headers))
 	for i, h := range headers {
 		items[i] = messageItem{h: h}
 	}
-	l := list.New(items, list.NewDefaultDelegate(), width, height)
+	l := list.New(items, newItemDelegate(), width, height)
 	l.Title = "Inbox"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)

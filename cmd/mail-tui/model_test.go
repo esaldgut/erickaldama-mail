@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/message"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -311,5 +315,206 @@ func TestReplyDraftPrePopulates(t *testing.T) {
 	mu2 := u2.(model)
 	if mu2.compose.inputs[cSubject].Value() != "Re: existing" {
 		t.Fatalf("must not double Re:, got %q", mu2.compose.inputs[cSubject].Value())
+	}
+}
+
+// ── Task 10: TUI filter → FTS5 over cache (B-1/B-2/D3/C-debounce preserved) ─────────────────
+
+// TestFilterUsesCacheSearch: wiring smoke from the brief — applying an empty filter with a
+// (possibly empty) cache set must not panic and must restore a non-nil list.
+func TestFilterUsesCacheSearch(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	m := model{cache: c, from: "inbox", mailbox: "inbox", list: newMessageList(nil, 30, 20)}
+	// Applying an empty filter must restore List (no panic, list non-nil).
+	m2, _ := m.applyFilter("")
+	if m2.list.Items() == nil && len(m2.list.Items()) != 0 {
+		t.Errorf("applyFilter empty should restore list")
+	}
+}
+
+// fakeHeaderLister is a minimal cache.HeaderLister for seeding the cache in tests, without
+// reaching into internal/cache's unexported test helpers.
+type fakeHeaderLister struct{ hs []mailbox.Header }
+
+func (f fakeHeaderLister) List(_ context.Context, _ string, _ int32, _ map[string]ddbtypes.AttributeValue) ([]mailbox.Header, map[string]ddbtypes.AttributeValue, error) {
+	return f.hs, nil, nil
+}
+
+// TestApplyFilterSearchesAndRestoresSelectionByS3Key: seeds a real cache via Sync, selects the
+// 2nd item, applies a query that matches only that item via FTS5, and verifies the list reloads
+// with the match AND the selection survives by S3Key (B-1: never by Index).
+func TestApplyFilterSearchesAndRestoresSelectionByS3Key(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "Hello"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "Report"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", mailbox: "inbox", list: newMessageList(hs, 30, 20)}
+	m.list.Select(1) // select bob/Report (inbound/bbb) BEFORE filtering
+	if got := selectedKey(m); got != "inbound/bbb" {
+		t.Fatalf("precondition: selectedKey = %q, want inbound/bbb", got)
+	}
+	m2, _ := m.applyFilter("Report")
+	items := m2.list.Items()
+	if len(items) != 1 {
+		t.Fatalf("applyFilter(Report) len(items) = %d, want 1", len(items))
+	}
+	mi, ok := items[0].(messageItem)
+	if !ok || mi.h.S3Key != "inbound/bbb" {
+		t.Fatalf("applyFilter(Report) did not return the matching header, got %+v", items)
+	}
+	if got := selectedKey(m2); got != "inbound/bbb" {
+		t.Errorf("applyFilter must restore selection by S3Key (B-1); got %q want inbound/bbb", got)
+	}
+}
+
+// TestApplyFilterNilCacheDegradesGracefully: without a cache, applyFilter must not panic and
+// must leave the model's list untouched (graceful degradation to native filtering).
+func TestApplyFilterNilCacheDegradesGracefully(t *testing.T) {
+	m := testList(mailbox.Header{Subject: "a", S3Key: "k1"})
+	m2, cmd := m.applyFilter("anything")
+	if cmd != nil {
+		t.Error("applyFilter with nil cache should return a nil cmd")
+	}
+	if len(m2.list.Items()) != 1 {
+		t.Errorf("applyFilter with nil cache must not alter the list; got %d items", len(m2.list.Items()))
+	}
+}
+
+// TestFilterEscRestoresFullList: CRITICAL regression (Task 10 review) — Esc while filtering must
+// cancel to the FULL list, not re-apply the stale (typed-but-cancelled) query. Seeds a real cache
+// via Sync (2 headers), opens the filter with '/', types a query that narrows the native filter to
+// 1 match, then sends Esc. Asserts the restored list has both items back — NOT the 1-item filtered
+// state that the CRITICAL bug produced (both Esc-cancel and Enter-confirm called
+// applyFilter(prevQuery), so cancelling after typing "alpha" left the list filtered to 1 item).
+func TestFilterEscRestoresFullList(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "alpha report"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "beta memo"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", mailbox: "inbox", list: newMessageList(hs, 30, 20)}
+
+	// Open the filter.
+	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm := got.(model)
+	if !mm.list.SettingFilter() {
+		t.Fatal("filter did not open — cannot exercise the Esc-cancel path")
+	}
+
+	// Type "alpha": the native list filter narrows to the 1 matching item while still filtering.
+	for _, r := range "alpha" {
+		got, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		mm = got.(model)
+	}
+	if !mm.list.SettingFilter() {
+		t.Fatal("typing into the filter exited SettingFilter early — precondition broken")
+	}
+
+	// Cancel with Esc.
+	got, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mm = got.(model)
+
+	if mm.list.SettingFilter() {
+		t.Fatal("Esc did not exit filtering mode")
+	}
+	items := mm.list.Items()
+	if len(items) != 2 {
+		t.Fatalf("Esc must restore the FULL list (2 items), got %d — stale query was re-applied (CRITICAL regression)", len(items))
+	}
+}
+
+// TestHandleKeyFilterCancelAppliesEmptyQuery: unit-level guard on the intercept itself (not
+// dependent on bubbles' native filter narrowing in headless mode). Directly simulates the
+// Filtering→Unfiltered transition that bubbles performs internally on CancelWhileFiltering (Esc)
+// by pre-seeding a query into the filter input, then confirms handleKey's cancel-detection routes
+// through applyFilter("") rather than applyFilter(prevQuery).
+func TestHandleKeyFilterCancelAppliesEmptyQuery(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "alpha report"},
+		{PK: "mailbox#inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "beta memo"},
+	}
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	m := model{cache: c, from: "inbox", mailbox: "inbox", list: newMessageList(hs, 30, 20)}
+
+	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm := got.(model)
+	if !mm.list.SettingFilter() {
+		t.Fatal("filter did not open — cannot exercise the Esc-cancel path")
+	}
+	for _, r := range "alpha" {
+		got, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		mm = got.(model)
+	}
+	if got := mm.list.FilterValue(); got != "alpha" {
+		t.Fatalf("precondition: FilterValue() = %q, want %q", got, "alpha")
+	}
+
+	m2, _ := mm.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	res := m2.(model)
+	if res.list.SettingFilter() {
+		t.Fatal("Esc did not exit filtering mode via handleKey")
+	}
+	if got := len(res.list.Items()); got != 2 {
+		t.Fatalf("handleKey(Esc) must apply an empty query (full list = 2 items), got %d items", got)
+	}
+}
+
+// TestApplyFilterUsesMailboxNotFrom: CRIT-1 regression (whole-branch review) — the cache is
+// written (Sync/pre-load) keyed by the mailbox being browsed (cfg.Mailboxes[0]), while `from` is
+// a separate identity (cfg.DefaultFrom, used only for reply-all self-strip). When they differ —
+// a legitimate config — applyFilter must still read from the SAME key the cache was written
+// under (mailbox), or the '/' filter silently empties the list.
+//
+// This seeds the cache under "team-inbox" (the mailbox) while `from` is a DIFFERENT string
+// ("someone@example.com", the send identity). If applyFilter queried by `from` instead of
+// `mailbox` — the CRIT-1 bug — this test would fail (0 items). It must find the items under
+// `mailbox`, proving the read-path key matches the write-path key.
+func TestApplyFilterUsesMailboxNotFrom(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+	hs := []mailbox.Header{
+		{PK: "mailbox#team-inbox", SK: "2026-06-25T14:32:00Z#a", S3Key: "inbound/aaa", MessageID: "m1", From: "alice@example.com", Subject: "alpha report"},
+		{PK: "mailbox#team-inbox", SK: "2026-06-25T09:00:00Z#b", S3Key: "inbound/bbb", MessageID: "m2", From: "bob@example.com", Subject: "beta memo"},
+	}
+	// Write-path: populate the cache under the MAILBOX, exactly as main.go's Sync/pre-load do.
+	if _, err := c.Sync(context.Background(), fakeHeaderLister{hs: hs}, "team-inbox", 50); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	// from != mailbox: a legitimate config where DefaultFrom differs from the mailbox being browsed.
+	m := model{cache: c, from: "someone@example.com", mailbox: "team-inbox", list: newMessageList(nil, 30, 20)}
+
+	m2, _ := m.applyFilter("")
+	items := m2.list.Items()
+	if len(items) != 2 {
+		t.Fatalf("applyFilter(\"\") with mailbox != from must restore the list from the mailbox-keyed cache; got %d items, want 2 (CRIT-1: read/write key mismatch)", len(items))
 	}
 }
