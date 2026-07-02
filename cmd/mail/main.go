@@ -20,6 +20,7 @@ import (
 	"golang.org/x/term"
 
 	"erickaldama-mail/internal/aiassist"
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/config"
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/message"
@@ -35,7 +36,8 @@ func renderList(w io.Writer, hs []mailbox.Header, asJSON bool) error {
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	for _, h := range hs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", h.Date, h.From, h.Subject)
+		// date+time, sender, subject, s3Key — s3Key last so the user can copy it (tmux copy-mode)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", cache.FormatDate(h.Date), h.From, h.Subject, h.S3Key)
 	}
 	return tw.Flush()
 }
@@ -142,13 +144,42 @@ func main() {
 				return err
 			}
 			var all []mailbox.Header
-			for _, mb := range mailboxes {
-				hs, _, err := r.List(ctx, mb, int32(count), nil) // full limit per mailbox
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error listing %s: %v\n", mb, err)
-					continue // don't abort all mailboxes on one error
+			// Try the cache: open, sync each mailbox, read from SQLite. On ANY cache failure,
+			// fall back transparently to the live Reader (the cache is a discardable optimization).
+			cachePath, perr := cache.DefaultPath()
+			var ca *cache.Cache
+			var cerr error
+			if perr == nil {
+				ca, cerr = cache.Open(cachePath)
+			}
+			if perr == nil && cerr == nil {
+				defer ca.Close()
+				for _, mb := range mailboxes {
+					// Populate with a FIXED cap (not count) so search sees the full history (M-2).
+					if _, serr := ca.Sync(ctx, r, mb, cache.SyncPageLimit); serr != nil {
+						fmt.Fprintf(os.Stderr, "warning: cache sync %s failed (%v); using live\n", mb, serr)
+					}
+					hs, lerr := ca.List(mb, count) // display limit = count
+					if lerr != nil {
+						// m-1: cache List failed → fall back to live for THIS mailbox, don't drop it.
+						fmt.Fprintf(os.Stderr, "warning: cache list %s failed (%v); using live\n", mb, lerr)
+						if live, _, le := r.List(ctx, mb, int32(count), nil); le == nil {
+							all = append(all, live...)
+						}
+						continue
+					}
+					all = append(all, hs...)
 				}
-				all = append(all, hs...)
+			} else {
+				// Cache unavailable → live path (original behaviour).
+				for _, mb := range mailboxes {
+					hs, _, lerr := r.List(ctx, mb, int32(count), nil)
+					if lerr != nil {
+						fmt.Fprintf(os.Stderr, "error listing %s: %v\n", mb, lerr)
+						continue
+					}
+					all = append(all, hs...)
+				}
 			}
 			// sort by SK descending (ISO8601, NOT by Date which is RFC1123Z and sorts incorrectly)
 			slices.SortFunc(all, func(a, b mailbox.Header) int { return strings.Compare(b.SK, a.SK) })
