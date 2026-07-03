@@ -14,7 +14,9 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ## [mail v0.5.1] — Fix del reader vacío + refresh de la TUI — 2026-07-02
 
-Dos mejoras de la TUI que el smoke E2E de v0.5 destapó al usarla contra correo real.
+Mejoras de la TUI que el smoke E2E de v0.5 destapó al usarla contra correo real. Antes de cerrar, una auditoría
+exhaustiva de 3 agentes (diagnóstico de bug + robustez + elegancia) cazó un CRITICAL adicional (C-1) que ningún
+smoke corto revelaba.
 
 ### Fixed
 
@@ -25,6 +27,30 @@ Dos mejoras de la TUI que el smoke E2E de v0.5 destapó al usarla contra correo 
   El filtro nativo de v0.4 no reconstruía la lista, así que este camino no existía antes. Fix: se extrajo el
   tick de debounce a un helper `scheduleLoad(key)` (elimina la triplicación en los 3 call-sites) y `applyFilter`
   lo llama tras restaurar la selección. Test de regresión `TestApplyFilterLoadsSelectedBody` (search + clear).
+
+- **[CRITICAL C-1] Fuga de `inflight` → refresh muerto para toda la sesión.** El handler de `bodyLoadedMsg`
+  descartaba un load con generación obsoleta (`return m, nil`) **sin decrementar el contador `inflight`**. Dos
+  cargas de body superpuestas — trivial de provocar navegando rápido entre correos cuando la latencia de S3
+  excede el intervalo entre teclas — dejaban `inflight` sin volver a 0. Como `canRefresh()` exige `inflight==0`,
+  el refresh (manual y automático) quedaba **permanentemente inhabilitado** el resto de la sesión, con el spinner
+  atascado. La auditoría lo cazó comparando con `imagesRenderedMsg`, que ya hacía lo correcto (decrementar
+  ANTES de chequear la generación) y tenía test; `bodyLoadedMsg` era la anomalía sin cobertura. Fix: replicar
+  ese patrón. Test guardián `TestStaleBodyLoadReleasesInflight` (habría fallado sin el fix). Nota: v0.5.1 elevó
+  este defecto de cosmético (spinner) a funcional (refresh muerto) al introducir la dependencia `inflight==0`.
+
+- **Carga inicial del body resiliente al timing.** El auto-load del reader al arrancar dependía de un gate
+  `firstResize` de un solo disparo; un timing async podía perderlo, dejando el reader vacío hasta que el usuario
+  movía la selección (síntoma reportado). Un diagnóstico exhaustivo descartó las 5 hipótesis de causa raíz con
+  tests (la lógica del flujo de mensajes es correcta en cada capa verificable), así que el fix no persigue la
+  causa exacta sino que hace el load robusto: se re-agenda en **cualquier** resize mientras el reader siga vacío
+  y no haya carga en vuelo, y un refresh también recupera un load perdido. Auto-cura sin recarga perpetua.
+
+### Refactored
+
+- **`rebuildList(hs)` extraído.** El patrón "reconstruir la lista + restaurar selección por S3Key" estaba
+  duplicado letra por letra entre `applyFilter` y el handler de `refreshDoneMsg` — un solo punto de verdad ahora.
+- El handler de la tecla `g` reusa `canRefresh()` en vez de duplicar el guard, para que las dos comprobaciones
+  de "¿puedo refrescar?" no diverjan.
 
 ### Added
 
