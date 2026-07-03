@@ -172,6 +172,27 @@ render work independently of chafa.
 See [`docs/SP-4-DEPLOY.md` §11](docs/SP-4-DEPLOY.md) and [`CHANGELOG.md`](CHANGELOG.md#mail-v03) for the
 full v0.3 build history, audit findings, and the privacy invariant verification.
 
+**v0.4 — TUI two-pane layout** — the TUI browses in a proper two-pane layout: a `bubbles/list` on the left
+(fuzzy filter with `/`, `Tab` to move focus) and a `viewport` reader on the right. Selecting a message loads
+its body with a 150 ms debounce; selection is tracked by S3 key (never by list index, which the filter
+reorders).
+
+**v0.5 — Local SQLite+FTS5 cache** — a discardable local cache (`~/.cache/erickaldama-mail/index.sqlite`,
+`0600`) built on `modernc.org/sqlite` (CGO-free, SQLite 3.53.2, FTS5 built in). It decorates the reader:
+- **`mail ls`** shows **date+time** and the **s3Key** on each row (copy it with tmux copy-mode → `mail read
+  <s3Key>` without re-listing). In the TUI, each item is three lines: subject / sender·datetime / s3Key (faint).
+- **`mail search <query>`** — full-text search over `sender`+`subject`, bm25-ranked, with **prefix match** on
+  the last token (`transfer` finds `transferencia`). `--limit` caps the results (default 50).
+- The TUI filter (`/`) now queries FTS5 over the full cached history instead of fuzzy-matching only the loaded
+  page. The cache is never the source of truth — any failure falls back transparently to a live DynamoDB read.
+- **Refresh (v0.5.1):** press **`g`** to sync now, or let the TUI **auto-refresh every 30 s** in the background.
+  New mail appears at the top, but your selection is preserved by S3 key — it never yanks you off what you're
+  reading. Auto-refresh pauses while you filter, compose, or a body load is in flight.
+
+Design note: the FTS5 index is **contentless without triggers** — synced explicitly in Go, because `DELETE
+FROM` a contentless FTS5 table is illegal (the special `'delete'` command with the old values is used instead).
+See [`docs/v0.5-CACHE.md`](docs/v0.5-CACHE.md) for the cache runbook and known limitations.
+
 **Editor/multiplexer integration** — `mail tmux popup` opens the TUI in a floating tmux overlay; `mail tmux
 status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
 [`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)): tmux `prefix+e` → popup; nvim `<leader>m{l,s,c,a}` → list/search/compose/AI.
