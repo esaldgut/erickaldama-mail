@@ -422,6 +422,48 @@ func TestApplyFilterLoadsSelectedBody(t *testing.T) {
 	}
 }
 
+// TestStaleBodyLoadReleasesInflight: C-1 regression — a bodyLoadedMsg discarded for a stale gen must
+// STILL decrement inflight (it consumed a slot when the load started). Without this, overlapping loads
+// leak the counter → canRefresh stays false forever (refresh dead) + spinner stuck. Mirrors the
+// established imagesRenderedMsg behaviour (TestStaleImagesDiscarded).
+func TestStaleBodyLoadReleasesInflight(t *testing.T) {
+	m := model{list: newMessageList(nil, 30, 20), inflight: 2, loadGen: 5}
+	// A stale body (gen 4 != current 5) must release its slot: inflight 2 → 1.
+	got, _ := m.Update(bodyLoadedMsg{parsed: &message.Parsed{TextPlain: "stale"}, gen: 4})
+	if got.(model).inflight != 1 {
+		t.Errorf("stale bodyLoadedMsg must decrement inflight; got %d want 1", got.(model).inflight)
+	}
+	if got.(model).currentParsed != nil {
+		t.Error("stale bodyLoadedMsg must NOT paint its body")
+	}
+}
+
+// TestRefreshDoneManualBalancesInflight: the manual 'g' path increments inflight before doRefresh
+// runs; refreshDoneMsg{manual:true} must decrement it back. The auto path never increments, so
+// refreshDoneMsg{manual:false} must NOT touch a counter it didn't raise.
+func TestRefreshDoneManualBalancesInflight(t *testing.T) {
+	mm := model{mailbox: "inbox", list: newMessageList(nil, 30, 20), inflight: 1}
+	got, _ := mm.Update(refreshDoneMsg{headers: []mailbox.Header{}, manual: true})
+	if got.(model).inflight != 0 {
+		t.Errorf("manual refreshDoneMsg must decrement inflight; got %d want 0", got.(model).inflight)
+	}
+	// Auto path: inflight left untouched (here 1 simulates an unrelated in-flight op).
+	ma := model{mailbox: "inbox", list: newMessageList(nil, 30, 20), inflight: 1}
+	got2, _ := ma.Update(refreshDoneMsg{headers: []mailbox.Header{}, manual: false})
+	if got2.(model).inflight != 1 {
+		t.Errorf("auto refreshDoneMsg must not touch inflight; got %d want 1", got2.(model).inflight)
+	}
+}
+
+// TestRefreshDoneKeepsListOnError: a failed refresh (err set) must keep the existing list and not crash.
+func TestRefreshDoneKeepsListOnError(t *testing.T) {
+	m := testList(mailbox.Header{Subject: "keep", S3Key: "k1"})
+	got, _ := m.Update(refreshDoneMsg{err: context.DeadlineExceeded, manual: false})
+	if len(got.(model).list.Items()) != 1 {
+		t.Errorf("failed refresh must keep the existing list; got %d items", len(got.(model).list.Items()))
+	}
+}
+
 // TestCanRefreshPauseRules: the background auto-refresh must pause (not run) while composing, while
 // the filter is open, and while a body load is in flight — the v0.5.1 pause rules.
 func TestCanRefreshPauseRules(t *testing.T) {
