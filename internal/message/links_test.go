@@ -372,3 +372,109 @@ func TestPreWrapShortTokensUntouched(t *testing.T) {
 		t.Errorf("short tokens changed: %q → %q", in, out)
 	}
 }
+
+func TestRenderRichE2ELinkNoInlineURLHasFooter(t *testing.T) {
+	longURL := "https://example.com/CL0/" + strings.Repeat("track", 40) // ~200+ chars
+	p := &Parsed{TextHTML: `<p>Mira <a href="` + longURL + `">la oferta especial</a> por tiempo limitado.</p>`}
+	out, err := RenderRich(p, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	// LNK-3: the URL is NOT inline in the body render (only in the OSC 8 escape + footer).
+	// Body region = everything before the footer header.
+	footerAt := strings.Index(out, footerHeader)
+	if footerAt < 0 {
+		t.Fatal("footer missing from render")
+	}
+	// LNK-4: no BODY line exceeds width 80 visible cols.
+	body := out[:footerAt]
+	for _, line := range strings.Split(body, "\n") {
+		if ansi.StringWidth(line) > 80 {
+			t.Errorf("body line exceeds width 80: %d cols — %q", ansi.StringWidth(line), line)
+		}
+	}
+	// LNK-2: footer carries the full URL.
+	if !strings.Contains(out, longURL[:40]) {
+		t.Errorf("footer does not carry the URL")
+	}
+	// The clickable text is present with its marker.
+	if !strings.Contains(out, "la oferta especial") {
+		t.Error("link text lost")
+	}
+	if !strings.Contains(out, "(1)") {
+		t.Error("link marker (1) missing")
+	}
+}
+
+func TestRenderRichNoLinksNoFooter(t *testing.T) {
+	p := &Parsed{TextHTML: "<p>Hola mundo sin enlaces</p>"}
+	out, err := RenderRich(p, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	if strings.Contains(out, footerHeader) {
+		t.Errorf("footer emitted with no links: %q", out)
+	}
+}
+
+// AUDIT FIX H2: at narrow reader-pane widths (30/45) a link whose text fills the line must NOT
+// overflow width — the " (n)" marker is counted by glamour because it lives inside the sentinel text.
+func TestRenderRichE2ENarrowWidthNoOverflow(t *testing.T) {
+	longText := "oferta especial de la semana con envio totalmente gratis para ti"
+	p := &Parsed{TextHTML: `<p>Texto previo <a href="https://example.com/track">` + longText + `</a> fin.</p>`}
+	for _, w := range []int{30, 45} {
+		out, err := RenderRich(p, w)
+		if err != nil {
+			t.Fatalf("RenderRich(w=%d): %v", w, err)
+		}
+		footerAt := strings.Index(out, footerHeader)
+		body := out
+		if footerAt >= 0 {
+			body = out[:footerAt]
+		}
+		for _, line := range strings.Split(body, "\n") {
+			if ansi.StringWidth(line) > w {
+				t.Errorf("width=%d: body line exceeds width: %d cols — %q", w, ansi.StringWidth(line), line)
+			}
+		}
+	}
+}
+
+// AUDIT FIX SEC-CRIT: a forged sentinel planted via HTML entity in body text OUTSIDE any <a>, with a
+// VALID index (a real link exists), must NOT produce a spoofed OSC 8 hyperlink around the fake URL.
+func TestRenderRichSentinelForgeViaEntityNoSpoof(t *testing.T) {
+	// One legit link (index 1 exists) + a forged sentinel via entity pointing text at a fake URL.
+	attack := `<p><a href="https://example.com/real">legit</a>. ` +
+		`Verify at &#xE000;1&#xE001;https://your-bank.example/login&#xE002; now.</p>`
+	p := &Parsed{TextHTML: attack}
+	out, err := RenderRich(p, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	// The fake bank URL must never become the visible text of an OSC 8 hyperlink.
+	spoof := ansi.SetHyperlink("https://example.com/real") + "https://your-bank.example/login"
+	if strings.Contains(out, spoof) {
+		t.Fatal("SEC-CRIT: forged-entity sentinel produced a spoofed hyperlink")
+	}
+	// It also must not appear in the footer as a legit destination.
+	if strings.Contains(out, "your-bank.example") && strings.Contains(out, footerHeader) &&
+		strings.Contains(out[strings.Index(out, footerHeader):], "your-bank.example") {
+		t.Fatal("SEC-CRIT: forged URL leaked into the footer")
+	}
+}
+
+// AUDIT FIX H-4 (LNK-8 idempotency): materializing an already-materialized render injects no new
+// OSC 8 (no sentinels remain to act on).
+func TestRenderRichMaterializeIdempotent(t *testing.T) {
+	p := &Parsed{TextHTML: `<p><a href="https://example.com/x">clic</a></p>`}
+	out, err := RenderRich(p, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	// A second materialize pass over the finished ANSI must be a no-op (no sentinels left).
+	acc2 := &linkAccumulator{}
+	again := materializeSentinels(out, acc2)
+	if again != out {
+		t.Errorf("materializeSentinels not idempotent on rendered output")
+	}
+}

@@ -1,12 +1,14 @@
 package message
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/net/html"
 )
 
 // Sentinel code points (Unicode Private Use Area) that carry a link through glamour untouched.
@@ -67,6 +69,39 @@ func (a *linkAccumulator) links() []string {
 // materializer would misread into an injected hyperlink.
 func stripSentinels(s string) string {
 	return strings.NewReplacer(sentinelOpen, "", sentinelSep, "", sentinelClose, "").Replace(s)
+}
+
+// stripSentinelsFromHTML removes any PUA sentinel code points from EVERY text node in rawHTML (AUDIT
+// FIX SEC-CRIT, LNK-SEC-3 global). This MUST run on the parsed DOM, not on the raw HTML string: an
+// attacker can plant a sentinel via an HTML entity (&#xE000;) which is still literal ASCII text at the
+// string level — golang.org/x/net/html's tokenizer only decodes it to the raw PUA rune during parsing.
+// A string-level stripSentinels(rawHTML) is therefore a no-op against entity-encoded forgeries; this
+// function parses first (forcing the decode) and strips the decoded runes from every text node,
+// INCLUDING inside <a> (harmless there — newLinkRule strips its own text again, LNK-SEC-3 local — and
+// necessary everywhere else, since a forged sentinel in body text outside any <a> would otherwise
+// reach htmltomd untouched by our link rule and be materialized in Fase B into a spoofed OSC 8
+// hyperlink aliasing a real link's index). Runs BEFORE htmltomd conversion, so Fase A's own sentinel
+// emission (which happens during conversion, after this strip) is never touched.
+func stripSentinelsFromHTML(rawHTML string) (string, error) {
+	root, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		return "", err
+	}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.TextNode {
+			n.Data = stripSentinels(n.Data)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	var buf bytes.Buffer
+	if err := html.Render(&buf, root); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // newLinkRule returns a htmltomd Rule over <a>. AddRules appends and selecToMD iterates rules in
