@@ -128,8 +128,19 @@ func hasControlBytes(s string) bool {
 //     LNK-4 overflow (verified: collapsing pushed maxWidth back to 105). This is why the earlier
 //     "collapseInternalWrap" idea (audit H3) is REJECTED — it was actively wrong.
 //
+// Scan order (LNK-A3-E1): after finding sentinelOpen, find sentinelClose NEXT and advance rest
+// UNCONDITIONALLY past the CLOSE (not just past the OPEN) before continuing the loop. This
+// guarantees strictly linear progress through rendered even when the token is malformed (forged
+// OPEN bytes with no SEP/CLOSE), keeping the scan O(n) instead of the O(n²) that resulted from
+// only consuming the OPEN marker on the malformed path. sentinelSep is then searched only WITHIN
+// the OPEN..CLOSE token, which is also the correct semantic (SEP belongs to this token, not
+// wherever it next appears in the remaining text).
+//
 // Guards (all degrade to plain text, never panic):
-//   - LNK-SEC-4: index n must exist in acc; otherwise emit text (no hyperlink).
+//   - LNK-SEC-4 / LNK-A3-R1: index n must exist in acc AND be the canonical decimal form Fase A
+//     emits (strconv.Itoa(n) round-trips to nStr); otherwise emit text (no hyperlink). Rejecting
+//     non-canonical forms ("+1", "01", "007") prevents a forged sentinel from aliasing a real link
+//     the user never marked.
 //   - LNK-SEC-1: URL must not contain control bytes; otherwise emit text without OSC 8.
 func materializeSentinels(rendered string, acc *linkAccumulator) string {
 	var b strings.Builder
@@ -142,30 +153,38 @@ func materializeSentinels(rendered string, acc *linkAccumulator) string {
 			break
 		}
 		b.WriteString(rest[:start])
-		rest = rest[start+len(sentinelOpen):]
+		afterOpen := rest[start+len(sentinelOpen):]
+		end := strings.Index(afterOpen, sentinelClose)
+		if end < 0 {
+			// No CLOSE ahead: no token can complete. Emit the rest literally and stop (O(n) total).
+			b.WriteString(afterOpen)
+			break
+		}
+		token := afterOpen[:end]
+		rest = afterOpen[end+len(sentinelClose):] // advance PAST the CLOSE — guarantees linear progress
 
-		sep := strings.Index(rest, sentinelSep)
-		end := strings.Index(rest, sentinelClose)
-		if sep < 0 || end < 0 || sep > end {
-			// Malformed token (forged partial sentinel): drop the open marker, keep scanning the rest.
+		sep := strings.Index(token, sentinelSep)
+		if sep < 0 {
+			// OPEN..CLOSE with no SEP → malformed; emit the token text literally, no hyperlink.
+			b.WriteString(token)
 			continue
 		}
-		nStr := rest[:sep]
-		text := rest[sep+len(sentinelSep) : end]
-		rest = rest[end+len(sentinelClose):]
+		nStr := token[:sep]
+		text := token[sep+len(sentinelSep):]
 
+		// Finding 2 (LNK-A3-R1): reject non-canonical index forms. Fase A emits only decimal via
+		// strconv.Itoa; "+1"/"01"/"007" can ONLY be attacker-forged and would alias a real link the
+		// user never marked. Require the parsed int to re-serialize to exactly nStr.
 		n, err := strconv.Atoi(nStr)
-		if err != nil || n < 1 || n > len(links) {
-			b.WriteString(text) // LNK-SEC-4: forged/OOB index → plain text (already carries " (n)")
+		if err != nil || n < 1 || n > len(links) || strconv.Itoa(n) != nStr {
+			b.WriteString(text) // LNK-SEC-4: forged/OOB/non-canonical index → plain text, no hyperlink
 			continue
 		}
 		url := links[n-1]
 		if hasControlBytes(url) {
-			b.WriteString(text) // LNK-SEC-1: degrade, no OSC 8 (text already carries " (n)")
+			b.WriteString(text) // LNK-SEC-1: control-byte URL → plain text, no OSC 8
 			continue
 		}
-		// Wrap the bare (glamour-wrapped) text AS-IS; a multi-line OSC 8 span is valid. See the
-		// function doc: collapsing the internal newlines would reintroduce LNK-4 overflow.
 		b.WriteString(ansi.SetHyperlink(url) + text + ansi.ResetHyperlink())
 	}
 	return b.String()

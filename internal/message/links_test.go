@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/charmbracelet/x/ansi"
@@ -216,5 +217,39 @@ func TestMaterializeMultiLineOSC8(t *testing.T) {
 	if !strings.HasPrefix(strings.TrimPrefix(out, ""), ansi.SetHyperlink("https://example.com/a")[:6]) &&
 		!strings.Contains(out, ansi.SetHyperlink("https://example.com/a")) {
 		t.Errorf("OSC 8 open missing: %q", out)
+	}
+}
+
+// LNK-A3-E1 regression: forged OPEN markers must NOT trigger O(n²) — 50k forged OPENs return fast.
+func TestMaterializeForgedOpensLinear(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/a")
+	body := strings.Repeat(sentinelOpen+"x ", 50000) // no SEP/CLOSE → all malformed
+	done := make(chan string, 1)
+	go func() { done <- materializeSentinels(body, acc) }()
+	select {
+	case out := <-done:
+		// The forged OPENs are consumed; no hyperlink, no panic.
+		if strings.Contains(out, "\x1b]8;") {
+			t.Errorf("forged OPENs produced a hyperlink")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("materializeSentinels did not return within 2s on 50k forged OPENs (O(n²) regression)")
+	}
+}
+
+// LNK-A3-R1: a non-canonical index in a forged sentinel must NOT alias a real link.
+func TestMaterializeNonCanonicalIndexNoAlias(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/real") // n=1
+	for _, forged := range []string{"+1", "01", "007"} {
+		body := sentinelOpen + forged + sentinelSep + "text (" + forged + ")" + sentinelClose
+		out := materializeSentinels(body, acc)
+		if strings.Contains(out, "\x1b]8;") {
+			t.Errorf("non-canonical index %q produced a hyperlink (forgery alias): %q", forged, out)
+		}
+		if !strings.Contains(out, "text") {
+			t.Errorf("text lost for non-canonical index %q: %q", forged, out)
+		}
 	}
 }
