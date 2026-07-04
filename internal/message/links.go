@@ -78,26 +78,55 @@ func stripSentinels(s string) string {
 	return strings.NewReplacer(sentinelOpen, "", sentinelSep, "", sentinelClose, "").Replace(s)
 }
 
-// stripSentinelsFromHTML removes any PUA sentinel code points from EVERY text node in rawHTML (AUDIT
-// FIX SEC-CRIT, LNK-SEC-3 global). This MUST run on the parsed DOM, not on the raw HTML string: an
-// attacker can plant a sentinel via an HTML entity (&#xE000;) which is still literal ASCII text at the
-// string level — golang.org/x/net/html's tokenizer only decodes it to the raw PUA rune during parsing.
-// A string-level stripSentinels(rawHTML) is therefore a no-op against entity-encoded forgeries; this
-// function parses first (forcing the decode) and strips the decoded runes from every text node,
-// INCLUDING inside <a> (harmless there — newLinkRule strips its own text again, LNK-SEC-3 local — and
-// necessary everywhere else, since a forged sentinel in body text outside any <a> would otherwise
-// reach htmltomd untouched by our link rule and be materialized in Fase B into a spoofed OSC 8
-// hyperlink aliasing a real link's index). Runs BEFORE htmltomd conversion, so Fase A's own sentinel
-// emission (which happens during conversion, after this strip) is never touched.
+// stripDangerousControls removes control bytes that email content could use for terminal injection —
+// ESC (0x1b), BEL (0x07), all other C0 (< 0x20) except the layout whitespace \n \t \r, DEL (0x7f),
+// and C1 (0x80-0x9f). It runs on untrusted HTML text BEFORE glamour, where no legitimate terminal
+// control sequence exists yet, so stripping unconditionally is safe: the only OSC 8 / SGR in the final
+// render then originates from glamour and our materializer, never from attacker-controlled content.
+// This is the pre-glamour half of the ANSI-injection defense; sanitizeTerminalOutput is the post-
+// glamour half (which must PRESERVE glamour's own sequences and so cannot distinguish a forged OSC 8).
+func stripDangerousControls(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\n' || r == '\t' || r == '\r' {
+			b.WriteRune(r)
+			continue
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// stripSentinelsFromHTML removes any PUA sentinel code points AND dangerous control bytes (ESC, BEL,
+// other C0/C1, DEL) from EVERY text node and attribute value in rawHTML (AUDIT FIX SEC-CRIT, LNK-SEC-3
+// global; whole-branch CRIT + S2). This MUST run on the parsed DOM, not on the raw HTML string: an
+// attacker can plant a sentinel or a control byte via an HTML entity (&#xE000;, &#x1b;) which is still
+// literal ASCII text at the string level — golang.org/x/net/html's tokenizer only decodes it to the raw
+// rune during parsing. A string-level stripSentinels(rawHTML) is therefore a no-op against
+// entity-encoded forgeries; this function parses first (forcing the decode) and strips from every text
+// node, INCLUDING inside <a> (harmless there — newLinkRule strips its own text again, LNK-SEC-3 local —
+// and necessary everywhere else, since a forged sentinel or ESC/OSC-8 introducer in body text outside
+// any <a> would otherwise reach htmltomd and glamour untouched and be materialized/rendered into a
+// spoofed hyperlink). This is the PRE-glamour half of the ANSI-injection defense (see
+// sanitizeTerminalOutput for the POST-glamour half, which must preserve glamour's own OSC 8/CSI and so
+// cannot distinguish a forged one from a real one). Runs BEFORE htmltomd conversion, so Fase A's own
+// sentinel emission (which happens during conversion, after this strip) is never touched.
 func stripSentinelsFromHTML(rawHTML string) (string, error) {
 	root, err := html.Parse(strings.NewReader(rawHTML))
 	if err != nil {
 		return "", err
 	}
+	clean := func(s string) string { return stripDangerousControls(stripSentinels(s)) }
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.TextNode {
-			n.Data = stripSentinels(n.Data)
+			n.Data = clean(n.Data)
+		}
+		for i := range n.Attr {
+			n.Attr[i].Val = clean(n.Attr[i].Val) // S2: also strip forged PUA/control bytes from attrs
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			walk(c)
@@ -352,9 +381,14 @@ func lineHasLongToken(line string, width int) bool {
 // "\x1b] ... BEL|ST"). Also preserves printable runes (incl. Unicode), "\n", and "\t".
 //
 // Dropped: lone C0 control bytes (except \n/\t), DEL (0x7f), C1 controls (0x80-0x9f, incl. 8-bit CSI
-// 0x9b / ST 0x9c), and any ESC that does not introduce a valid CSI/OSC sequence. This closes the
-// ANSI-injection surface for the whole rendered body (plain text, degraded links, and OSC 8 spans),
-// not just link text. Applied once as the final step of RenderRich, after materialization + footer.
+// 0x9b / ST 0x9c), and any ESC that does not introduce a valid CSI/OSC sequence. This is the POST-
+// glamour half of the ANSI-injection defense: it strips lone ESC / CSI-injection / raw control bytes
+// that survive glamour, but by design it PRESERVES every well-formed CSI/OSC sequence — including OSC
+// 8 — so it cannot tell a forged OSC-8 introducer from a legitimate one glamour or our materializer
+// emitted; post-glamour they are byte-identical. The PRE-glamour half, stripDangerousControls (invoked
+// from stripSentinelsFromHTML), is what actually neutralizes attacker-planted OSC-8 introducers, by
+// running before any legitimate control sequence exists to preserve. Applied once as the final step of
+// RenderRich, after materialization + footer.
 //
 // Note: invalid UTF-8 bytes (e.g. a raw 0x9b) are decoded to U+FFFD by []rune() before this scan, so
 // they render as the harmless replacement character rather than reaching the terminal as a control.

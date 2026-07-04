@@ -749,3 +749,68 @@ func TestLNK7ViewportPreservesOSC8(t *testing.T) {
 		t.Errorf("OSC 8 did not survive viewport+border:\n%q", framed)
 	}
 }
+
+// CRITICAL (whole-branch): a forged OSC 8 sequence in link text (ESC introducer via entity) must NOT
+// reach the terminal as an active hyperlink. Real production path: SanitizeHTML → RenderRich.
+func TestRenderRichNoForgedOSC8InLinkText(t *testing.T) {
+	san, err := SanitizeHTML(`<p><a href="https://example.com/ok">click &#x1b;]8;;https://evil.example&#x07;here</a></p>`, false)
+	if err != nil {
+		t.Fatalf("SanitizeHTML: %v", err)
+	}
+	out, err := RenderRich(&Parsed{TextHTML: san.HTML}, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	if strings.Contains(out, "\x1b]8;;https://evil.example\x07") {
+		t.Errorf("forged OSC 8 to attacker URL survived: %q", out)
+	}
+	// NOTE (deviation from fix brief, documented — see f5-fix-report.md): the brief's helper
+	// stripDangerousControls is a control-byte filter (ESC/BEL/C0/C1/DEL), not a substring filter; it
+	// cannot and must not strip printable ASCII like "evil.example" — doing so would require matching
+	// attacker text, not control bytes, and is out of scope for this CRIT (a forged CLICKABLE hyperlink,
+	// per the brief's own vulnerability narrative). After the fix the URL text is inert, non-clickable
+	// plain text (no ESC/BEL survive, no goldmark linkify is configured), so we assert non-clickability
+	// instead of textual absence.
+	if strings.Contains(out, "\x1b]8;;https://evil.example") {
+		t.Errorf("attacker URL still wrapped in an OSC 8 introducer: %q", out)
+	}
+	// The only OSC 8 opens are the legitimate link's (materializer emits open + reset = 2). This is the
+	// most important assertion: it proves the attacker's forged OSC 8 did NOT survive as a 3rd open.
+	if n := strings.Count(out, "\x1b]8;;"); n != 2 {
+		t.Errorf("expected exactly 2 OSC 8 opens (legit link open+reset), got %d: %q", n, out)
+	}
+}
+
+// Same vector in PLAIN body text (no link) — must also be neutralized.
+func TestRenderRichNoForgedOSC8InPlainText(t *testing.T) {
+	san, _ := SanitizeHTML(`<p>hello &#x1b;]8;;https://evil.example&#x07;world</p>`, false)
+	out, _ := RenderRich(&Parsed{TextHTML: san.HTML}, 80)
+	if strings.Contains(out, "\x1b]8;;") {
+		t.Errorf("forged OSC 8 in plain text survived: %q", out)
+	}
+	// See NOTE in TestRenderRichNoForgedOSC8InLinkText: stripDangerousControls strips control bytes,
+	// not attacker text; the URL survives as inert plain text (no ESC/BEL, no OSC 8, non-clickable —
+	// already proven by the assertion above), which is the correct and only scope of this CRIT fix.
+}
+
+// D1 fold-in: the SEC-CRIT PUA-forge test via the REAL production pipeline (SanitizeHTML first),
+// not just raw RenderRich — a sanitized sibling of TestRenderRichSentinelForgeViaEntityNoSpoof.
+func TestRenderRichSentinelForgeViaSanitizedPipeline(t *testing.T) {
+	san, _ := SanitizeHTML(`<p><a href="https://example.com/real">legit</a>. Go &#xE000;1&#xE001;https://your-bank.example/login&#xE002; now.</p>`, false)
+	out, _ := RenderRich(&Parsed{TextHTML: san.HTML}, 80)
+	spoof := ansi.SetHyperlink("https://example.com/real") + "https://your-bank.example/login"
+	if strings.Contains(out, spoof) {
+		t.Errorf("forged-entity sentinel spoofed a hyperlink via the sanitized pipeline: %q", out)
+	}
+}
+
+// S2: a forged PUA in an href/alt attribute must not survive stripSentinelsFromHTML.
+func TestStripSentinelsFromHTMLCleansAttributes(t *testing.T) {
+	out, err := stripSentinelsFromHTML("<a href=\"https://example.com/a" + sentinelOpen + "x\" alt=\"al" + sentinelSep + "t\">t</a>")
+	if err != nil {
+		t.Fatalf("stripSentinelsFromHTML: %v", err)
+	}
+	if strings.ContainsAny(out, sentinelOpen+sentinelSep+sentinelClose) {
+		t.Errorf("sentinel survived in attribute: %q", out)
+	}
+}
