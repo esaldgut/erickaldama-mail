@@ -495,17 +495,24 @@ func TestSanitizeTerminalOutputPreservesLegit(t *testing.T) {
 }
 
 func TestSanitizeTerminalOutputDropsInjection(t *testing.T) {
-	for _, c := range []struct{ name, in, mustNot string }{
-		{"loose-ESC", "cl\x1bick", "\x1b"},
-		{"C1-CSI", "p\x9bq", "\x9b"},
-		{"C1-ST", "a\x9cb", "\x9c"},
-		{"DEL", "x\x7fy", "\x7f"},
-		{"BEL", "a\x07b", "\x07"},
-		{"trailing-ESC", "abc\x1b", "\x1b"},
+	// The dangerous input byte must be gone at the BYTE level. Note: an invalid-UTF-8 byte like
+	// 0x9b becomes U+FFFD after []rune() inside the sanitizer, so it never survives as a raw byte —
+	// but strings.ContainsAny is UTF-8-aware and would false-positive on the U+FFFD; use IndexByte.
+	for _, c := range []struct {
+		name    string
+		in      string
+		mustNot byte
+	}{
+		{"loose-ESC", "cl\x1bick", 0x1b},
+		{"C1-CSI", "p\x9bq", 0x9b},
+		{"C1-ST", "a\x9cb", 0x9c},
+		{"DEL", "x\x7fy", 0x7f},
+		{"BEL", "a\x07b", 0x07},
+		{"trailing-ESC", "abc\x1b", 0x1b},
 	} {
 		out := sanitizeTerminalOutput(c.in)
-		if strings.ContainsAny(out, c.mustNot) {
-			t.Errorf("%s: injection byte survived: %q", c.name, out)
+		if strings.IndexByte(out, c.mustNot) >= 0 {
+			t.Errorf("%s: injection byte 0x%02x survived: %q", c.name, c.mustNot, out)
 		}
 	}
 }
