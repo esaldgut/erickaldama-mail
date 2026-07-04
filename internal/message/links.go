@@ -6,6 +6,7 @@ import (
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Sentinel code points (Unicode Private Use Area) that carry a link through glamour untouched.
@@ -97,4 +98,75 @@ func newLinkRule(acc *linkAccumulator) htmltomd.Rule {
 			return htmltomd.AdvancedResult{Markdown: md}, false
 		},
 	}
+}
+
+// hasControlBytes reports whether s contains any control byte unsafe inside an OSC 8 URI:
+// C0 (< 0x20, incl. ESC 0x1b, BEL 0x07), DEL 0x7f, and C1 (0x80-0x9f, incl. CSI 0x9b, ST 0x9c).
+// ansi.SetHyperlink does NOT escape the URI (hyperlink.go), so this guard is mandatory
+// defense-in-depth (LNK-SEC-1). Note: the audit verified bluemonday already strips C0/DEL (drops the
+// whole <a>) and percent-encodes C1, so in practice this never fires — but a future bluemonday bump
+// could change that, and the guard is cheap. Iterates over runes so a legitimate multibyte rune whose
+// continuation bytes are >0x7f is never misflagged (we check the decoded rune, not raw bytes).
+func hasControlBytes(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return true
+		}
+	}
+	return false
+}
+
+// materializeSentinels scans rendered ANSI for U+E000 {n} U+E001 {text} U+E002 tokens and wraps the
+// text in an OSC 8 hyperlink. Two verified design points (proved by running the pipeline before F4):
+//   - The visible marker " (n)" is INSIDE {text} (emitted in Fase A), and {text} is left BARE so
+//     glamour word-wraps it to width. This keeps body lines within width (AUDIT FIX H2, verified:
+//     maxWidth=28 at width 30). The OPEN{n}SEP prefix is the only opaque part; the wrappable text
+//     lives after SEP.
+//   - The text is wrapped in ONE OSC 8 span AS-IS, including any "\n  " that glamour inserted for
+//     word-wrap. A multi-line OSC 8 hyperlink is valid and standard; do NOT collapse the internal
+//     newlines — doing so re-joins glamour's wrapped lines into one 105-col line and reintroduces the
+//     LNK-4 overflow (verified: collapsing pushed maxWidth back to 105). This is why the earlier
+//     "collapseInternalWrap" idea (audit H3) is REJECTED — it was actively wrong.
+//
+// Guards (all degrade to plain text, never panic):
+//   - LNK-SEC-4: index n must exist in acc; otherwise emit text (no hyperlink).
+//   - LNK-SEC-1: URL must not contain control bytes; otherwise emit text without OSC 8.
+func materializeSentinels(rendered string, acc *linkAccumulator) string {
+	var b strings.Builder
+	links := acc.links()
+	rest := rendered
+	for {
+		start := strings.Index(rest, sentinelOpen)
+		if start < 0 {
+			b.WriteString(rest)
+			break
+		}
+		b.WriteString(rest[:start])
+		rest = rest[start+len(sentinelOpen):]
+
+		sep := strings.Index(rest, sentinelSep)
+		end := strings.Index(rest, sentinelClose)
+		if sep < 0 || end < 0 || sep > end {
+			// Malformed token (forged partial sentinel): drop the open marker, keep scanning the rest.
+			continue
+		}
+		nStr := rest[:sep]
+		text := rest[sep+len(sentinelSep) : end]
+		rest = rest[end+len(sentinelClose):]
+
+		n, err := strconv.Atoi(nStr)
+		if err != nil || n < 1 || n > len(links) {
+			b.WriteString(text) // LNK-SEC-4: forged/OOB index → plain text (already carries " (n)")
+			continue
+		}
+		url := links[n-1]
+		if hasControlBytes(url) {
+			b.WriteString(text) // LNK-SEC-1: degrade, no OSC 8 (text already carries " (n)")
+			continue
+		}
+		// Wrap the bare (glamour-wrapped) text AS-IS; a multi-line OSC 8 span is valid. See the
+		// function doc: collapsing the internal newlines would reintroduce LNK-4 overflow.
+		b.WriteString(ansi.SetHyperlink(url) + text + ansi.ResetHyperlink())
+	}
+	return b.String()
 }

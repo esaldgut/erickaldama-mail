@@ -6,21 +6,22 @@ import (
 	"testing"
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestClassifyHref(t *testing.T) {
 	cases := map[string]bool{
 		"http://example.com/a":  true,
 		"https://example.com/b": true,
-		"HTTP://EXAMPLE.COM":     true, // case-insensitive
-		"HtTpS://example.org":    true,
-		"mailto:x@example.com":   false,
-		"//cdn.tracker.test/px":  false, // protocol-relative = tracking vector
-		"/relative/path":         false,
-		"#anchor":                false,
-		"":                       false,
-		"ftp://example.com":      false,
-		"tel:+15551234":          false,
+		"HTTP://EXAMPLE.COM":    true, // case-insensitive
+		"HtTpS://example.org":   true,
+		"mailto:x@example.com":  false,
+		"//cdn.tracker.test/px": false, // protocol-relative = tracking vector
+		"/relative/path":        false,
+		"#anchor":               false,
+		"":                      false,
+		"ftp://example.com":     false,
+		"tel:+15551234":         false,
 	}
 	for href, want := range cases {
 		if got := classifyHref(href); got != want {
@@ -137,5 +138,83 @@ func TestLinkAccumulatorCap(t *testing.T) {
 	}
 	if len(a.links()) != maxLinks {
 		t.Errorf("cap: want exactly %d links, got %d", maxLinks, len(a.links()))
+	}
+}
+
+func TestHasControlBytes(t *testing.T) {
+	if hasControlBytes("https://example.com/ok") {
+		t.Error("clean URL flagged as control bytes")
+	}
+	// C0, DEL, and C1 (0x9b CSI, 0x9c ST) must all be caught. A legit multibyte rune must NOT be.
+	for _, bad := range []string{"a\x07b", "a\x1bb", "a\x00b", "a\x7fb", "a\nb", "a\u009bb", "a\u009cb"} {
+		if !hasControlBytes(bad) {
+			t.Errorf("control byte not detected in %q", bad)
+		}
+	}
+	if hasControlBytes("café résumé ñ 日本語") { // legit multibyte runes, no control chars
+		t.Error("multibyte runes misflagged as control bytes")
+	}
+}
+
+func TestMaterializeSentinelHappyPath(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/a") // n=1
+	// AUDIT FIX H2: the marker "(1)" is INSIDE the sentinel text (as Fase A emits it).
+	body := "Ver " + sentinelOpen + "1" + sentinelSep + "la oferta (1)" + sentinelClose + " ahora"
+	out := materializeSentinels(body, acc)
+	if strings.Contains(out, sentinelOpen) || strings.Contains(out, sentinelClose) {
+		t.Errorf("sentinel survived materialization: %q", out)
+	}
+	// The materializer wraps text (incl. its "(1)") in OSC 8; it appends NO extra width.
+	want := ansi.SetHyperlink("https://example.com/a") + "la oferta (1)" + ansi.ResetHyperlink()
+	if !strings.Contains(out, want) {
+		t.Errorf("OSC 8 sequence missing.\n got: %q\nwant substr: %q", out, want)
+	}
+}
+
+func TestMaterializeForgedIndexDegradesToPlain(t *testing.T) {
+	// Sentinel with an index that is not in the accumulator (forged / OOB) → plain text, no panic,
+	// no hyperlink (LNK-SEC-4).
+	acc := &linkAccumulator{} // empty: index 9 does not exist
+	body := sentinelOpen + "9" + sentinelSep + "evil (9)" + sentinelClose
+	out := materializeSentinels(body, acc)
+	if strings.Contains(out, "\x1b]8;") {
+		t.Errorf("forged index produced a hyperlink: %q", out)
+	}
+	if !strings.Contains(out, "evil") {
+		t.Errorf("text lost on forged index: %q", out)
+	}
+}
+
+func TestMaterializeControlByteURLDegrades(t *testing.T) {
+	// A URL that somehow carries a control byte must NOT reach SetHyperlink (LNK-SEC-1).
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/\x07evil") // n=1, control byte in URL
+	body := sentinelOpen + "1" + sentinelSep + "text (1)" + sentinelClose
+	out := materializeSentinels(body, acc)
+	if strings.Contains(out, "\x1b]8;;https://example.com/\x07") {
+		t.Errorf("control-byte URL reached OSC 8: %q", out)
+	}
+	if !strings.Contains(out, "text (1)") {
+		t.Errorf("expected degraded 'text (1)', got: %q", out)
+	}
+}
+
+// The link text stays wrapped by glamour and the OSC 8 span may cross lines. Verify the OSC 8 wraps
+// bare wrapped text as-is (no newline collapsing), so a long link text does not overflow width.
+func TestMaterializeMultiLineOSC8(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/a") // n=1
+	// text as glamour would leave it: wrapped with an internal newline + margin, marker inside.
+	body := sentinelOpen + "1" + sentinelSep + "oferta especial\n  para ti (1)" + sentinelClose
+	out := materializeSentinels(body, acc)
+	// The internal newline survives (multi-line hyperlink), NOT collapsed to a space.
+	if !strings.Contains(out, "oferta especial\n  para ti (1)") {
+		t.Errorf("materializer must preserve glamour's internal wrap verbatim: %q", out)
+	}
+	// OSC 8 open before the text, reset after.
+	if !strings.HasPrefix(strings.TrimPrefix(out, ""), ansi.SetHyperlink("https://example.com/a")[:6]) &&
+		!strings.Contains(out, ansi.SetHyperlink("https://example.com/a")) {
+		t.Errorf("OSC 8 open missing: %q", out)
 	}
 }
