@@ -2,7 +2,10 @@ package message
 
 import (
 	"strconv"
+	"strings"
 	"testing"
+
+	htmltomd "github.com/JohannesKaufmann/html-to-markdown"
 )
 
 func TestClassifyHref(t *testing.T) {
@@ -46,6 +49,77 @@ func TestLinkAccumulatorDedup(t *testing.T) {
 	}
 	if links[0] != "https://example.com/a" || links[1] != "https://example.com/b" {
 		t.Errorf("links out of insertion order: %v", links)
+	}
+}
+
+// convertWithRule runs htmltomd with our custom link rule and returns the body markdown + accumulator.
+func convertWithRule(t *testing.T, html string) (string, *linkAccumulator) {
+	t.Helper()
+	acc := &linkAccumulator{}
+	conv := htmltomd.NewConverter("", true, nil)
+	conv.AddRules(newLinkRule(acc))
+	md, err := conv.ConvertString(html)
+	if err != nil {
+		t.Fatalf("ConvertString: %v", err)
+	}
+	return md, acc
+}
+
+func TestStripSentinels(t *testing.T) {
+	in := "abcd"
+	if got := stripSentinels(in); got != "abcd" {
+		t.Errorf("stripSentinels = %q, want %q", got, "abcd")
+	}
+}
+
+func TestLinkRuleEmitsSentinelNoInlineURL(t *testing.T) {
+	md, acc := convertWithRule(t, `<p>Ver <a href="https://example.com/very/long/tracking/path">la oferta</a> ya</p>`)
+	if strings.Contains(md, "https://example.com") {
+		t.Errorf("URL leaked into body markdown: %q", md)
+	}
+	if !strings.Contains(md, sentinelOpen) || !strings.Contains(md, sentinelClose) {
+		t.Errorf("no sentinel in body: %q", md)
+	}
+	if !strings.Contains(md, "la oferta") {
+		t.Errorf("link text lost: %q", md)
+	}
+	// AUDIT FIX H2: the visible marker "(1)" is emitted INSIDE the sentinel text (pre-glamour).
+	if !strings.Contains(md, "la oferta (1)") {
+		t.Errorf("marker (1) not inside sentinel text: %q", md)
+	}
+	if len(acc.links()) != 1 || acc.links()[0] != "https://example.com/very/long/tracking/path" {
+		t.Errorf("accumulator wrong: %v", acc.links())
+	}
+}
+
+func TestLinkRuleNonClickableSchemesPlain(t *testing.T) {
+	// mailto + protocol-relative → plain text, NO sentinel, NO accumulator entry (LNK-1, LNK-5)
+	md, acc := convertWithRule(t, `<p><a href="mailto:x@example.com">mail me</a> and <a href="//cdn.tracker.test/px">px</a></p>`)
+	if strings.Contains(md, sentinelOpen) {
+		t.Errorf("non-clickable scheme produced a sentinel: %q", md)
+	}
+	if len(acc.links()) != 0 {
+		t.Errorf("non-clickable schemes entered accumulator: %v", acc.links())
+	}
+	if !strings.Contains(md, "mail me") || !strings.Contains(md, "px") {
+		t.Errorf("link text lost for non-clickable: %q", md)
+	}
+}
+
+func TestLinkRuleStripsForgedSentinel(t *testing.T) {
+	// Attacker plants raw PUA in the link text — must be stripped before we inject our own (LNK-SEC-3).
+	md, _ := convertWithRule(t, "<p><a href=\"https://example.com/a\">safetext</a></p>")
+	// The only sentinels present must be OUR wrapping ones; the forged inner triple is gone,
+	// so total U+E001 separators == 1 (ours), not 2.
+	if strings.Count(md, sentinelSep) != 1 {
+		t.Errorf("forged sentinel not stripped: %d separators in %q", strings.Count(md, sentinelSep), md)
+	}
+}
+
+func TestLinkRuleDedupSameHref(t *testing.T) {
+	_, acc := convertWithRule(t, `<p><a href="https://example.com/x">one</a> <a href="https://example.com/x">two</a></p>`)
+	if len(acc.links()) != 1 {
+		t.Errorf("dedup failed: %v", acc.links())
 	}
 }
 
