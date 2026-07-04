@@ -18,9 +18,10 @@ func RenderPlain(p *Parsed) string {
 // P-1 CRÍTICO: DEBE convertir HTML→markdown con htmltomd ANTES de glamour.
 //
 // v0.6 link render (3 phases, all downstream of bluemonday):
-//   Fase A: custom <a> rule emits U+E000..U+E002 sentinels + fills a per-call link accumulator.
-//   Fase C: pre-wrap unbreakable body tokens.
-//   Fase B: after glamour, materialize sentinels → OSC 8, append the footer built outside glamour.
+//
+//	Fase A: custom <a> rule emits U+E000..U+E002 sentinels + fills a per-call link accumulator.
+//	Fase C: pre-wrap unbreakable body tokens.
+//	Fase B: after glamour, materialize sentinels → OSC 8, append the footer built outside glamour.
 //
 // AUDIT FIX SEC-CRIT (LNK-SEC-3): the sanitized HTML is stripped of any U+E000..U+E002 code points
 // BEFORE htmltomd, so the only PUA sentinels in the pipeline are the ones our rule injects. Without
