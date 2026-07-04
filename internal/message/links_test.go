@@ -110,10 +110,10 @@ func TestLinkRuleNonClickableSchemesPlain(t *testing.T) {
 }
 
 func TestLinkRuleStripsForgedSentinel(t *testing.T) {
-	// Attacker plants raw PUA in the link text — must be stripped before we inject our own (LNK-SEC-3).
-	md, _ := convertWithRule(t, "<p><a href=\"https://example.com/a\">safetext</a></p>")
-	// The only sentinels present must be OUR wrapping ones; the forged inner triple is gone,
-	// so total U+E001 separators == 1 (ours), not 2.
+	// Attacker plants a raw PUA sentinel in the link text; stripSentinels(content) must remove it
+	// before the rule injects its own, so exactly ONE sentinelSep remains (the rule's own).
+	forged := "<p><a href=\"https://example.com/a\">safe" + sentinelSep + "text</a></p>"
+	md, _ := convertWithRule(t, forged)
 	if strings.Count(md, sentinelSep) != 1 {
 		t.Errorf("forged sentinel not stripped: %d separators in %q", strings.Count(md, sentinelSep), md)
 	}
@@ -612,6 +612,17 @@ func TestFixtureMarketingLinks(t *testing.T) {
 	if !strings.Contains(out, "[1] https://example.com/CL0/") {
 		t.Errorf("footer entry [1] missing:\n%s", out)
 	}
+	// Full URL survives to the footer (chunkRunes splits for display but must not drop the tail).
+	fullURL := "https://example.com/CL0/aHR0cHM6Ly9zaG9wL3RyYWNraW5nL3Zlcnlsb25ncGF0aC93aXRoL21hbnkvc2VnbWVudHM"
+	// The footer hard-splits long URLs across lines; strip newlines+indent to check the URL is intact.
+	footerFlat := strings.ReplaceAll(strings.ReplaceAll(out, "\n", ""), " ", "")
+	if !strings.Contains(footerFlat, fullURL) {
+		t.Errorf("full tracking URL not intact in footer (truncated?): want %q", fullURL)
+	}
+	// Dedup: the repeated href yields exactly ONE footer entry and ONE header.
+	if strings.Count(out, footerHeader) != 1 {
+		t.Errorf("expected exactly one footer header, got %d", strings.Count(out, footerHeader))
+	}
 	if !strings.Contains(out, "[2] https://example.org/promo/banner") {
 		t.Errorf("footer entry [2] (img link) missing:\n%s", out)
 	}
@@ -646,7 +657,12 @@ func TestFixtureMarketingLinks(t *testing.T) {
 	}
 }
 
-// --- Mutation tests: each FAILS if its guard is reverted ---
+// --- LNK-SEC mutation tests: each FAILS if its guard is reverted (verified by mutation experiment). ---
+// Covers: LNK-SEC-1 (control-byte), LNK-SEC-2 (no URL-decode), LNK-SEC-3 (forged-sentinel strip, both
+// the in-rule local strip and the global entity strip), LNK-SEC-4 (index range), LNK-6 (cap).
+// The C1 (0x9b/0x9c) guard, the non-canonical-index guard (+1/01), and sanitizeTerminalOutput are
+// covered by TestHasControlBytes, TestMaterializeNonCanonicalIndexNoAlias, and
+// TestSanitizeTerminalOutput* respectively (elsewhere in this file).
 
 // LNK-SEC-1: a control byte in the URL must degrade to plain text, never reach OSC 8.
 func TestMutationControlByteInURL(t *testing.T) {
@@ -683,9 +699,14 @@ func TestMutationNoURLDecode(t *testing.T) {
 
 // LNK-SEC-3: a forged sentinel in the attacker's link text must be stripped.
 func TestMutationForgedSentinelStripped(t *testing.T) {
-	md, _ := convertWithRule(t, "<p><a href=\"https://example.com/a\">xy</a></p>")
+	// Plant a forged sentinel triple INSIDE the attacker-controlled link text. LNK-SEC-3's
+	// stripSentinels(content) must remove it before the rule wraps the link, leaving exactly ONE
+	// sentinelSep (the rule's own legitimate token). If the guard is reverted, the forged sep
+	// survives and the count is 2 → this test fails. (Verified: reverting the guard makes this fail.)
+	forged := "<p><a href=\"https://example.com/a\">x" + sentinelOpen + "9" + sentinelSep + "evil" + sentinelClose + "y</a></p>"
+	md, _ := convertWithRule(t, forged)
 	if strings.Count(md, sentinelSep) != 1 {
-		t.Fatal("MUTATION: forged sentinel not stripped (LNK-SEC-3 reverted)")
+		t.Fatalf("MUTATION: forged sentinel not stripped (LNK-SEC-3 reverted): %q", md)
 	}
 }
 
