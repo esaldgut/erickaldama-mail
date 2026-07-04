@@ -478,3 +478,67 @@ func TestRenderRichMaterializeIdempotent(t *testing.T) {
 		t.Errorf("materializeSentinels not idempotent on rendered output")
 	}
 }
+
+func TestSanitizeTerminalOutputPreservesLegit(t *testing.T) {
+	color := "\x1b[31mrojo\x1b[0m"
+	if got := sanitizeTerminalOutput(color); got != color {
+		t.Errorf("SGR color not preserved: %q", got)
+	}
+	osc8 := "\x1b]8;;https://example.com/x\x07click\x1b]8;;\x07"
+	if got := sanitizeTerminalOutput(osc8); got != osc8 {
+		t.Errorf("OSC 8 not preserved: %q", got)
+	}
+	uni := "café 日本語 ñ\ntab\there"
+	if got := sanitizeTerminalOutput(uni); got != uni {
+		t.Errorf("unicode/newline/tab not preserved: %q", got)
+	}
+}
+
+func TestSanitizeTerminalOutputDropsInjection(t *testing.T) {
+	for _, c := range []struct{ name, in, mustNot string }{
+		{"loose-ESC", "cl\x1bick", "\x1b"},
+		{"C1-CSI", "p\x9bq", "\x9b"},
+		{"C1-ST", "a\x9cb", "\x9c"},
+		{"DEL", "x\x7fy", "\x7f"},
+		{"BEL", "a\x07b", "\x07"},
+		{"trailing-ESC", "abc\x1b", "\x1b"},
+	} {
+		out := sanitizeTerminalOutput(c.in)
+		if strings.ContainsAny(out, c.mustNot) {
+			t.Errorf("%s: injection byte survived: %q", c.name, out)
+		}
+	}
+}
+
+// End-to-end: a raw ESC in <a> link text must NOT reach the terminal inside the OSC 8 span (S1).
+func TestRenderRichNoAnsiInjectionInLinkText(t *testing.T) {
+	san, _ := SanitizeHTML("<p><a href=\"https://example.com/\">cl\x1bick here</a></p>", false)
+	out, err := RenderRich(&Parsed{TextHTML: san.HTML}, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	// The only ESC bytes in the output must be part of SGR (\x1b[) or OSC (\x1b]) — never a lone ESC.
+	rs := []rune(out)
+	for i, r := range rs {
+		if r == 0x1b {
+			if i+1 >= len(rs) || (rs[i+1] != '[' && rs[i+1] != ']') {
+				t.Errorf("lone ESC (injection) survived at rune %d: %q", i, out)
+			}
+		}
+	}
+}
+
+// End-to-end: a raw ESC in PLAIN body text (no link) must also not reach the terminal (the class).
+func TestRenderRichNoAnsiInjectionInPlainText(t *testing.T) {
+	san, _ := SanitizeHTML("<p>plain te\x1bxt no link</p>", false)
+	out, err := RenderRich(&Parsed{TextHTML: san.HTML}, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	rs := []rune(out)
+	for i, r := range rs {
+		if r == 0x1b && (i+1 >= len(rs) || (rs[i+1] != '[' && rs[i+1] != ']')) {
+			t.Errorf("lone ESC survived in plain-text render: %q", out)
+		}
+	}
+}

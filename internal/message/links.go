@@ -338,3 +338,71 @@ func lineHasLongToken(line string, width int) bool {
 	}
 	return false
 }
+
+// sanitizeTerminalOutput removes raw control bytes that email content could use for ANSI injection
+// (cursor moves, line/screen erase, style spoofing) while preserving the terminal control sequences
+// glamour legitimately emits: 7-bit CSI (SGR color, "\x1b[ ... final-byte") and OSC (hyperlinks,
+// "\x1b] ... BEL|ST"). Also preserves printable runes (incl. Unicode), "\n", and "\t".
+//
+// Dropped: lone C0 control bytes (except \n/\t), DEL (0x7f), C1 controls (0x80-0x9f, incl. 8-bit CSI
+// 0x9b / ST 0x9c), and any ESC that does not introduce a valid CSI/OSC sequence. This closes the
+// ANSI-injection surface for the whole rendered body (plain text, degraded links, and OSC 8 spans),
+// not just link text. Applied once as the final step of RenderRich, after materialization + footer.
+//
+// Note: invalid UTF-8 bytes (e.g. a raw 0x9b) are decoded to U+FFFD by []rune() before this scan, so
+// they render as the harmless replacement character rather than reaching the terminal as a control.
+func sanitizeTerminalOutput(s string) string {
+	var b strings.Builder
+	rs := []rune(s)
+	i := 0
+	for i < len(rs) {
+		r := rs[i]
+		if r == 0x1b && i+1 < len(rs) {
+			next := rs[i+1]
+			if next == '[' { // CSI: keep through the final byte 0x40-0x7e
+				j := i + 2
+				for j < len(rs) && !(rs[j] >= 0x40 && rs[j] <= 0x7e) {
+					j++
+				}
+				if j < len(rs) { // complete, valid CSI sequence
+					b.WriteString(string(rs[i : j+1]))
+					i = j + 1
+					continue
+				}
+				i++ // incomplete CSI: drop the ESC, continue
+				continue
+			}
+			if next == ']' { // OSC: keep through BEL (0x07) or ST (ESC \)
+				j := i + 2
+				for j < len(rs) {
+					if rs[j] == 0x07 {
+						j++
+						break
+					}
+					if rs[j] == 0x1b && j+1 < len(rs) && rs[j+1] == '\\' {
+						j += 2
+						break
+					}
+					j++
+				}
+				b.WriteString(string(rs[i:j]))
+				i = j
+				continue
+			}
+			i++ // ESC not introducing CSI/OSC: injection attempt, drop it
+			continue
+		}
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case r == 0x1b:
+			// trailing ESC with nothing after → drop
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			// raw dangerous control byte → drop
+		default:
+			b.WriteRune(r) // printable (incl. Unicode)
+		}
+		i++
+	}
+	return b.String()
+}
