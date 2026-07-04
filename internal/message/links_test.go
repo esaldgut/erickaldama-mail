@@ -1,6 +1,7 @@
 package message
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -581,5 +582,129 @@ func TestRenderRichNoAnsiInjectionInPlainText(t *testing.T) {
 		if r == 0x1b && (i+1 >= len(rs) || (rs[i+1] != '[' && rs[i+1] != ']')) {
 			t.Errorf("lone ESC survived in plain-text render: %q", out)
 		}
+	}
+}
+
+// TestFixtureMarketingLinks exercises the full Parse→Sanitize→RenderRich path on a realistic email.
+func TestFixtureMarketingLinks(t *testing.T) {
+	raw, err := os.ReadFile("testdata/marketing-links.eml")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	p, err := Parse(strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	san, err := SanitizeHTML(p.TextHTML, false)
+	if err != nil {
+		t.Fatalf("SanitizeHTML: %v", err)
+	}
+	clean := &Parsed{TextHTML: san.HTML, TextPlain: p.TextPlain}
+	out, err := RenderRich(clean, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+
+	// Clickable http/https footer entries in appearance order (dedup collapses the repeated one):
+	//   [1] the tracking URL (appears twice, same href → one entry)
+	//   [2] the img-wrapped link
+	//   [3] the HTTP:// uppercase link (classifyHref is case-insensitive)
+	if !strings.Contains(out, "[1] https://example.com/CL0/") {
+		t.Errorf("footer entry [1] missing:\n%s", out)
+	}
+	if !strings.Contains(out, "[2] https://example.org/promo/banner") {
+		t.Errorf("footer entry [2] (img link) missing:\n%s", out)
+	}
+	// bluemonday lowercases the URL SCHEME (verified: HTTP://→http://) but preserves host case.
+	if !strings.Contains(out, "[3] http://EXAMPLE.ORG/upper") {
+		t.Errorf("footer entry [3] (scheme-lowercased HTTP) missing:\n%s", out)
+	}
+	// Exactly 3 clickable links → no [4].
+	if strings.Contains(out, "[4] ") {
+		t.Errorf("unexpected footer entry [4] — a non-clickable scheme leaked in:\n%s", out)
+	}
+	// AUDIT FIX H-3/H4: <a href><img></a> — the destination is in the footer ([2]); the clickable body
+	// text is glamour's image render, which exposes the cid:. Documented, asserted behavior (not an
+	// accident): the cid: appears as link text. If this is ever changed to use alt-text, update here.
+	if !strings.Contains(out, "cid:banner@test") {
+		t.Errorf("expected <a><img></a> body to render the image markdown (cid:) as link text:\n%s", out)
+	}
+	// mailto text present but NOT clickable / not in footer (LNK-1, LNK-5).
+	if !strings.Contains(out, "soporte") {
+		t.Errorf("mailto text lost")
+	}
+	// LNK-5: #anchor, relative and empty hrefs → plain text, never in footer.
+	if !strings.Contains(out, "sección de ofertas") || !strings.Contains(out, "promociones") {
+		t.Errorf("relative/#anchor link text lost (LNK-5):\n%s", out)
+	}
+	if strings.Contains(out, "[") && strings.Contains(out, "] #seccion-ofertas") {
+		t.Errorf("#anchor wrongly entered footer (LNK-5):\n%s", out)
+	}
+	// protocol-relative tracker URL must NOT appear anywhere (not clickable, not in footer).
+	if strings.Contains(out, "cdn.tracker.test") {
+		t.Errorf("protocol-relative tracker leaked into render:\n%s", out)
+	}
+}
+
+// --- Mutation tests: each FAILS if its guard is reverted ---
+
+// LNK-SEC-1: a control byte in the URL must degrade to plain text, never reach OSC 8.
+func TestMutationControlByteInURL(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/\x1bevil")
+	body := sentinelOpen + "1" + sentinelSep + "click (1)" + sentinelClose
+	out := materializeSentinels(body, acc)
+	if strings.Contains(out, "\x1b]8;;https://example.com/\x1b") {
+		t.Fatal("MUTATION: control byte reached OSC 8 (LNK-SEC-1 reverted)")
+	}
+}
+
+// SEC-CRIT: a sentinel forged via HTML entity in body text OUTSIDE any <a>, with a VALID index,
+// must NOT produce a spoofed hyperlink (the global strip before htmltomd neutralizes it).
+func TestMutationSentinelForgeViaEntity(t *testing.T) {
+	attack := `<p><a href="https://example.com/real">legit</a>. ` +
+		`Go &#xE000;1&#xE001;https://your-bank.example/login&#xE002; now.</p>`
+	out, _ := RenderRich(&Parsed{TextHTML: attack}, 80)
+	if strings.Contains(out, ansi.SetHyperlink("https://example.com/real")+"https://your-bank.example/login") {
+		t.Fatal("MUTATION: forged-entity sentinel spoofed a hyperlink (SEC-CRIT global strip reverted)")
+	}
+}
+
+// LNK-SEC-2: the href must be used percent-encoded; a backtick stays %60 (bluemonday encodes it).
+func TestMutationNoURLDecode(t *testing.T) {
+	// bluemonday percent-encodes backtick to %60 in href; our pipeline must NOT decode it back.
+	san, _ := SanitizeHTML("<a href=\"https://example.com/a`b\">t</a>", false)
+	clean := &Parsed{TextHTML: san.HTML}
+	out, _ := RenderRich(clean, 80)
+	if strings.Contains(out, "example.com/a`b") {
+		t.Fatal("MUTATION: href was URL-decoded, backtick reappeared (LNK-SEC-2 reverted)")
+	}
+}
+
+// LNK-SEC-3: a forged sentinel in the attacker's link text must be stripped.
+func TestMutationForgedSentinelStripped(t *testing.T) {
+	md, _ := convertWithRule(t, "<p><a href=\"https://example.com/a\">xy</a></p>")
+	if strings.Count(md, sentinelSep) != 1 {
+		t.Fatal("MUTATION: forged sentinel not stripped (LNK-SEC-3 reverted)")
+	}
+}
+
+// LNK-SEC-4: an out-of-range sentinel index must degrade to plain text, never panic/hyperlink.
+func TestMutationForgedIndexNoHyperlink(t *testing.T) {
+	acc := &linkAccumulator{} // empty
+	out := materializeSentinels(sentinelOpen+"42"+sentinelSep+"z (42)"+sentinelClose, acc)
+	if strings.Contains(out, "\x1b]8;") {
+		t.Fatal("MUTATION: OOB index produced a hyperlink (LNK-SEC-4 reverted)")
+	}
+}
+
+// LNK-6: the 501st distinct link is not a hyperlink; footer notes the overflow.
+func TestMutationCapEnforced(t *testing.T) {
+	a := &linkAccumulator{}
+	for i := 0; i < maxLinks; i++ {
+		a.add("https://example.com/c" + strconv.Itoa(i))
+	}
+	if _, ok := a.add("https://example.com/over"); ok {
+		t.Fatal("MUTATION: cap not enforced, 501st link accepted (LNK-6 reverted)")
 	}
 }
