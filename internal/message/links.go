@@ -189,3 +189,68 @@ func materializeSentinels(rendered string, acc *linkAccumulator) string {
 	}
 	return b.String()
 }
+
+// footerHeader is the section title shown before the link list. Spanish, matching the existing UI.
+const footerHeader = "─── Enlaces ───"
+
+// chunkRunes breaks s into chunks of at most width runes each, without splitting a rune and without
+// relying on spaces. Used for the footer URLs (LNK-2) so a 300-char URL never overflows the width —
+// glamour would split it mid-token at 222 cols (verified); we split it deterministically instead.
+// Named chunkRunes (not hardSplit) per AUDIT FIX H9 DRY: Task 5 reuses this identical body for the
+// body pre-wrap, so it is defined once here under its final name.
+func chunkRunes(s string, width int) []string {
+	if width < 1 {
+		width = 80
+	}
+	runes := []rune(s)
+	if len(runes) <= width {
+		return []string{s}
+	}
+	var chunks []string
+	for len(runes) > width {
+		chunks = append(chunks, string(runes[:width]))
+		runes = runes[width:]
+	}
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
+	}
+	return chunks
+}
+
+// buildFooter renders the link list block, OUTSIDE glamour (LNK-2). Returns "" when there are no
+// links (no header, no block). Each unique href gets one "[n] URL" entry in first-appearance order,
+// hard-split to width with a hanging indent for continuation lines. overflow>0 appends a note.
+func buildFooter(acc *linkAccumulator, overflow int, width int) string {
+	links := acc.links()
+	if len(links) == 0 {
+		return ""
+	}
+	if width < 1 {
+		width = 80
+	}
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(footerHeader)
+	b.WriteString("\n")
+	for i, url := range links {
+		prefix := "[" + strconv.Itoa(i+1) + "] "
+		indent := strings.Repeat(" ", len([]rune(prefix)))
+		// Reserve the prefix/indent width so no line exceeds width.
+		avail := width - len([]rune(prefix))
+		if avail < 1 {
+			avail = 1
+		}
+		chunks := chunkRunes(url, avail)
+		for j, c := range chunks {
+			if j == 0 {
+				b.WriteString(prefix + c + "\n")
+			} else {
+				b.WriteString(indent + c + "\n")
+			}
+		}
+	}
+	if overflow > 0 {
+		b.WriteString("[…] (+" + strconv.Itoa(overflow) + " enlaces más)\n")
+	}
+	return b.String()
+}

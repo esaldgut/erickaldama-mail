@@ -253,3 +253,68 @@ func TestMaterializeNonCanonicalIndexNoAlias(t *testing.T) {
 		}
 	}
 }
+
+func TestChunkRunes(t *testing.T) {
+	// 250-rune token, width 80 → 4 chunks (80+80+80+10), none exceeding 80 runes.
+	s := strings.Repeat("a", 250)
+	chunks := chunkRunes(s, 80)
+	if len(chunks) != 4 {
+		t.Fatalf("want 4 chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len([]rune(c)) > 80 {
+			t.Errorf("chunk %d exceeds width: %d runes", i, len([]rune(c)))
+		}
+	}
+	if strings.Join(chunks, "") != s {
+		t.Error("chunkRunes lost data")
+	}
+}
+
+func TestBuildFooterEmpty(t *testing.T) {
+	acc := &linkAccumulator{}
+	if got := buildFooter(acc, 0, 80); got != "" {
+		t.Errorf("empty accumulator must yield no footer, got %q", got)
+	}
+}
+
+func TestBuildFooterEntries(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/first")
+	acc.add("https://example.org/second")
+	out := buildFooter(acc, 0, 80)
+	if !strings.Contains(out, "─── Enlaces ───") {
+		t.Errorf("footer header missing: %q", out)
+	}
+	if !strings.Contains(out, "[1] https://example.com/first") {
+		t.Errorf("entry 1 missing: %q", out)
+	}
+	if !strings.Contains(out, "[2] https://example.org/second") {
+		t.Errorf("entry 2 missing: %q", out)
+	}
+	// footer carries no OSC 8 — it is the universal fallback (plain URLs, copyable)
+	if strings.Contains(out, "\x1b]8;") {
+		t.Errorf("footer must not contain OSC 8: %q", out)
+	}
+}
+
+func TestBuildFooterOverflowNote(t *testing.T) {
+	acc := &linkAccumulator{}
+	acc.add("https://example.com/a")
+	out := buildFooter(acc, 7, 80) // 7 links dropped past the cap
+	if !strings.Contains(out, "(+7 enlaces más)") {
+		t.Errorf("overflow note missing: %q", out)
+	}
+}
+
+func TestBuildFooterHardSplitsLongURL(t *testing.T) {
+	acc := &linkAccumulator{}
+	long := "https://example.com/" + strings.Repeat("x", 300)
+	acc.add(long)
+	out := buildFooter(acc, 0, 80)
+	for _, line := range strings.Split(out, "\n") {
+		if ansi.StringWidth(line) > 80 {
+			t.Errorf("footer line exceeds width 80: %d cols — %q", ansi.StringWidth(line), line)
+		}
+	}
+}
