@@ -8,6 +8,8 @@ import (
 	"time"
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -727,5 +729,23 @@ func TestMutationCapEnforced(t *testing.T) {
 	}
 	if _, ok := a.add("https://example.com/over"); ok {
 		t.Fatal("MUTATION: cap not enforced, 501st link accepted (LNK-6 reverted)")
+	}
+}
+
+// LNK-7: OSC 8 sequences must survive viewport.SetContent + a lipgloss border (the TUI reader path).
+func TestLNK7ViewportPreservesOSC8(t *testing.T) {
+	p := &Parsed{TextHTML: `<p><a href="https://example.com/keep">keep me clickable</a></p>`}
+	rich, err := RenderRich(p, 60)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	if !strings.Contains(rich, "\x1b]8;;https://example.com/keep\x07") {
+		t.Fatalf("OSC 8 missing from RenderRich output")
+	}
+	vp := viewport.New(60, 20)
+	vp.SetContent(rich)
+	framed := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Render(vp.View())
+	if !strings.Contains(framed, "\x1b]8;;https://example.com/keep\x07") {
+		t.Errorf("OSC 8 did not survive viewport+border:\n%q", framed)
 	}
 }
