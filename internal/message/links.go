@@ -254,3 +254,52 @@ func buildFooter(acc *linkAccumulator, overflow int, width int) string {
 	}
 	return b.String()
 }
+
+// preWrapLongTokens inserts a space break inside any whitespace-delimited token longer than width
+// runes, so glamour never overflows the width on an unbreakable body token (Fase C). Operates LINE BY
+// LINE (splitting on "\n" and rejoining with "\n") so the markdown structure — headings, blank lines
+// between paragraphs, list markers — is preserved (AUDIT FIX H1). Sentinel tokens pass through
+// untouched (a break inside a sentinel would corrupt it). Applies to the body only; the footer is
+// hard-split separately in Fase B. Preserves all content (never truncates).
+func preWrapLongTokens(md string, width int) string {
+	if width < 1 {
+		width = 80
+	}
+	lines := strings.Split(md, "\n")
+	changed := false
+	for li, line := range lines {
+		// Only touch a line if it holds a non-sentinel token longer than width.
+		if !lineHasLongToken(line, width) {
+			continue
+		}
+		fields := strings.Split(line, " ") // preserve intra-line single spaces exactly
+		for i, f := range fields {
+			if f == "" || strings.Contains(f, sentinelOpen) {
+				continue // empty (from double space) or sentinel: leave as-is
+			}
+			if len([]rune(f)) <= width {
+				continue
+			}
+			fields[i] = strings.Join(chunkRunes(f, width), " ")
+		}
+		lines[li] = strings.Join(fields, " ")
+		changed = true
+	}
+	if !changed {
+		return md
+	}
+	return strings.Join(lines, "\n")
+}
+
+// lineHasLongToken reports whether line contains a space-delimited, non-sentinel token > width runes.
+func lineHasLongToken(line string, width int) bool {
+	for _, f := range strings.Split(line, " ") {
+		if strings.Contains(f, sentinelOpen) {
+			continue
+		}
+		if len([]rune(f)) > width {
+			return true
+		}
+	}
+	return false
+}

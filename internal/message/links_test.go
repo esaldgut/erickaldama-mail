@@ -318,3 +318,57 @@ func TestBuildFooterHardSplitsLongURL(t *testing.T) {
 		}
 	}
 }
+
+func TestPreWrapBreaksLongToken(t *testing.T) {
+	long := strings.Repeat("z", 200) // no spaces
+	out := preWrapLongTokens("prefix "+long+" suffix", 80)
+	// every whitespace-delimited token must now fit width
+	for _, tok := range strings.Fields(out) {
+		if len([]rune(tok)) > 80 {
+			t.Errorf("token still exceeds width: %d runes", len([]rune(tok)))
+		}
+	}
+	if strings.Count(out, "z") != 200 {
+		t.Errorf("preWrap lost data: %d z's", strings.Count(out, "z"))
+	}
+}
+
+// AUDIT FIX H1: multi-paragraph markdown structure MUST survive even when a long token is present.
+func TestPreWrapPreservesStructure(t *testing.T) {
+	md := "# Titulo\n\nPrimer parrafo.\n\nSegundo con " + strings.Repeat("z", 100) + " largo.\n\n- item uno\n- item dos\n"
+	before := strings.Count(md, "\n")
+	out := preWrapLongTokens(md, 80)
+	after := strings.Count(out, "\n")
+	if after < before {
+		t.Fatalf("preWrap collapsed structure: newlines %d → %d\nout: %q", before, after, out)
+	}
+	// heading and list markers still on their own lines
+	if !strings.Contains(out, "# Titulo\n") {
+		t.Errorf("heading fused into another line: %q", out)
+	}
+	if !strings.Contains(out, "- item uno") {
+		t.Errorf("list item lost: %q", out)
+	}
+	if strings.Count(out, "z") != 100 {
+		t.Errorf("preWrap lost data: %d z's", strings.Count(out, "z"))
+	}
+}
+
+func TestPreWrapPreservesSentinel(t *testing.T) {
+	// A sentinel token must pass through untouched even if the text inside is long.
+	in := sentinelOpen + "1" + sentinelSep + strings.Repeat("w", 200) + sentinelClose
+	out := preWrapLongTokens(in, 80)
+	if !strings.Contains(out, sentinelOpen+"1"+sentinelSep) {
+		t.Errorf("sentinel corrupted by pre-wrap: %q", out)
+	}
+	if !strings.Contains(out, sentinelClose) {
+		t.Errorf("sentinel close lost: %q", out)
+	}
+}
+
+func TestPreWrapShortTokensUntouched(t *testing.T) {
+	in := "the quick brown fox\n\nsecond line"
+	if out := preWrapLongTokens(in, 80); out != in {
+		t.Errorf("short tokens changed: %q → %q", in, out)
+	}
+}
