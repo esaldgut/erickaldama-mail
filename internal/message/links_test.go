@@ -142,6 +142,40 @@ func TestLinkAccumulatorCap(t *testing.T) {
 	}
 }
 
+func TestAccumulatorOverflowCount(t *testing.T) {
+	a := &linkAccumulator{}
+	for i := 0; i < maxLinks+3; i++ {
+		a.add("https://example.com/u" + strconv.Itoa(i)) // 503 distinct hrefs
+	}
+	if a.overflow() != 3 {
+		t.Errorf("overflow count = %d, want 3", a.overflow())
+	}
+}
+
+func TestRenderRichCapNote(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("<p>")
+	for i := 0; i < maxLinks+5; i++ {
+		sb.WriteString(`<a href="https://example.com/p` + strconv.Itoa(i) + `">L</a> `)
+	}
+	sb.WriteString("</p>")
+	p := &Parsed{TextHTML: sb.String()}
+	out, err := RenderRich(p, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	if !strings.Contains(out, "(+5 enlaces más)") {
+		t.Errorf("cap overflow note missing from footer")
+	}
+	// exactly maxLinks footer entries (numbered [1]..[500])
+	if !strings.Contains(out, "[500] ") {
+		t.Errorf("expected entry [500] present")
+	}
+	if strings.Contains(out, "[501] ") {
+		t.Errorf("entry [501] must not exist (capped)")
+	}
+}
+
 func TestHasControlBytes(t *testing.T) {
 	if hasControlBytes("https://example.com/ok") {
 		t.Error("clean URL flagged as control bytes")

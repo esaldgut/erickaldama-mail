@@ -73,6 +73,6 @@ func RenderRich(p *Parsed, width int) (string, error) {
 
 	// Fase B: sentinels → OSC 8, then append the footer (built outside glamour).
 	rendered = materializeSentinels(rendered, acc)
-	rendered += buildFooter(acc, 0, width) // overflow tracked in Task 7
+	rendered += buildFooter(acc, acc.overflow(), width)
 	return sanitizeTerminalOutput(rendered), nil
 }

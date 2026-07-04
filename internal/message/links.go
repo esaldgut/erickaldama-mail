@@ -36,8 +36,9 @@ func classifyHref(href string) bool {
 // 1-based index n. It is the single source of truth for the footer (htmltomd's own Footer accumulates
 // per-<a> without dedup — verified markdown.go:200-202 does +=, so we never use it).
 type linkAccumulator struct {
-	order []string       // hrefs in first-appearance order
-	index map[string]int // href → 1-based n
+	order   []string       // hrefs in first-appearance order
+	index   map[string]int // href → 1-based n
+	dropped int            // distinct http/https hrefs rejected by the cap (LNK-6)
 }
 
 // add registers href and returns its 1-based index. A repeated href reuses its index. Returns
@@ -51,6 +52,7 @@ func (a *linkAccumulator) add(href string) (n int, ok bool) {
 		return n, true
 	}
 	if len(a.order) >= maxLinks {
+		a.dropped++
 		return 0, false
 	}
 	a.order = append(a.order, href)
@@ -62,6 +64,11 @@ func (a *linkAccumulator) add(href string) (n int, ok bool) {
 // links returns the unique hrefs in first-appearance order (footer source).
 func (a *linkAccumulator) links() []string {
 	return a.order
+}
+
+// overflow reports how many NEW http/https hrefs were rejected by the cap (LNK-6).
+func (a *linkAccumulator) overflow() int {
+	return a.dropped
 }
 
 // stripSentinels removes any PUA sentinel code points from s (LNK-SEC-3). Called on link text before
