@@ -3,11 +3,14 @@ package aiassist
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 )
 
@@ -144,3 +147,38 @@ func (r *recordingSub) Search(ctx context.Context, mb, q string, n int) ([]mailb
 	*r.called = true
 	return r.inner.Search(ctx, mb, q, n)
 }
+
+// TI-1 — wiring: NewFallbackSearcher over a real (tmpdir) cache finds a synced header via FTS5.
+func TestNewFallbackSearcherFTSWiring(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := cache.Open(filepath.Join(dir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("cache.Open: %v", err)
+	}
+	defer ca.Close()
+	// Seed the cache via Sync from a fake reader that returns one header.
+	r := mailbox.NewReader(ddbWith("factura de energía"), fakeS3{})
+	if _, err := ca.Sync(context.Background(), r, "inbox", cache.SyncPageLimit); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	s := NewFallbackSearcher(ca, r)
+	hits, err := s.Search(context.Background(), "inbox", "factura", 50)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Subject != "factura de energía" {
+		t.Errorf("FTS wiring: want 'factura de energía', got %v", hits)
+	}
+}
+
+func TestNewFallbackSearcherNilCache(t *testing.T) {
+	r := mailbox.NewReader(ddbWith("NIL-CACHE-HIT"), fakeS3{})
+	s := NewFallbackSearcher(nil, r) // nil cache → substring only
+	hits, err := s.Search(context.Background(), "inbox", "NIL", 50)
+	if err != nil || len(hits) != 1 {
+		t.Errorf("nil cache: want 1 substring hit, got hits=%v err=%v", hits, err)
+	}
+}
+
+// keep the os import used even if the platform strips it
+var _ = os.Stderr

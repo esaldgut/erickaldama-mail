@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"erickaldama-mail/internal/cache"
 	"erickaldama-mail/internal/mailbox"
 )
 
@@ -61,4 +62,22 @@ func (f *fallbackSearcher) Search(ctx context.Context, mb, query string, limit i
 		fmt.Fprintf(os.Stderr, "warning: FTS5 search failed, falling back to substring: %v\n", err)
 	}
 	return f.sub.Search(ctx, mb, query, limit)
+}
+
+// ftsSearchFromCache adapts (*cache.Cache).Search to the fallbackSearcher.ftsSearch closure shape.
+// cache.Search already applies EscapeFTS internally (CT-4), so the raw query is passed through.
+func ftsSearchFromCache(c *cache.Cache) func(mb, q string, n int) ([]mailbox.Header, error) {
+	return func(mb, q string, n int) ([]mailbox.Header, error) {
+		return c.Search(mb, q, n)
+	}
+}
+
+// NewFallbackSearcher builds the composite Searcher. nil-safe: c==nil → the fts backend is nil → the
+// composite always uses substring (AR-1, ER-1). The substring backend always wraps the live Reader.
+func NewFallbackSearcher(c *cache.Cache, r *mailbox.Reader) Searcher {
+	var fts func(mb, q string, n int) ([]mailbox.Header, error)
+	if c != nil {
+		fts = ftsSearchFromCache(c)
+	}
+	return &fallbackSearcher{ftsSearch: fts, sub: &substringSearcher{r: r}}
 }
