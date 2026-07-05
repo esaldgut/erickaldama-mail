@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"erickaldama-mail/internal/mailbox"
 	"erickaldama-mail/internal/redact"
@@ -18,31 +17,44 @@ func ReadOnlyTools() []ToolSpec {
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{"limit": map[string]any{"type": "integer"}}}},
 		{Name: "read_message", Description: "Read one message body by s3Key.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{"s3Key": map[string]any{"type": "string"}}, "required": []string{"s3Key"}}},
-		{Name: "search_subject", Description: "Find messages whose subject contains the query.",
-			Parameters: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}},
+		{Name: "search_messages",
+			Description: "Search messages by sender or subject (full-text, ranked best-first, prefix match). Returns matching headers as JSON.",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Search terms (sender or subject)."},
+				"limit": map[string]any{"type": "integer", "description": "Max results (default 50)."},
+			}, "required": []string{"query"}}},
 	}
 }
 
-// execTool runs one read-only tool. Tolerant of reader==nil (returns "[]") for unit tests.
-func execTool(ctx context.Context, reader *mailbox.Reader, mb string, call ToolCall) string {
-	if reader == nil {
-		return "[]"
-	}
+// toolDeps carries what execTool needs: the live Reader (list/read tools) and the Searcher (search tool).
+type toolDeps struct {
+	reader   *mailbox.Reader
+	searcher Searcher
+}
+
+// execTool runs one read-only tool.
+func execTool(ctx context.Context, deps toolDeps, mb string, call ToolCall) string {
 	switch call.Name {
 	case "list_messages":
+		if deps.reader == nil {
+			return "[]"
+		}
 		limit := int32(20)
 		if v, ok := call.Args["limit"].(float64); ok && v > 0 {
 			limit = int32(v)
 		}
-		hs, _, err := reader.List(ctx, mb, limit, nil)
+		hs, _, err := deps.reader.List(ctx, mb, limit, nil)
 		if err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
 		b, _ := json.Marshal(hs)
 		return string(b)
 	case "read_message":
+		if deps.reader == nil {
+			return "[]"
+		}
 		key, _ := call.Args["s3Key"].(string)
-		rc, err := reader.Open(ctx, key)
+		rc, err := deps.reader.Open(ctx, key)
 		if err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
@@ -57,20 +69,26 @@ func execTool(ctx context.Context, reader *mailbox.Reader, mb string, call ToolC
 		// reaches any backend (incl. Claude, which crosses the network). Without this, an `ai agent --backend
 		// claude` would ship third-party PII unmasked — only `goal`/`summarize` redact at the call site (audit NUEVO-2).
 		return redact.Redact(string(body))
-	case "search_subject":
+	case "search_messages":
+		if deps.searcher == nil {
+			return "[]"
+		}
 		q, _ := call.Args["query"].(string)
-		hs, _, err := reader.List(ctx, mb, 100, nil)
+		limit := 50
+		if l, ok := call.Args["limit"].(float64); ok && l > 0 {
+			limit = int(l)
+		}
+		// AUDIT FIX (plan MAYOR): clamp the upper bound. Without this, an LLM sending a huge limit
+		// (e.g. 3e9) overflows int32(limit) to negative in substringSearcher → reader.List rejects
+		// it ("limit must be > 0") and the degraded fallback returns an error instead of results.
+		if limit > 1000 {
+			limit = 1000
+		}
+		hs, err := deps.searcher.Search(ctx, mb, q, limit)
 		if err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
-		var hits []mailbox.Header
-		for _, h := range hs {
-			// stdlib case-insensitive contains — handles Unicode (e.g. "café"); NO hand-rolled toLower (audit).
-			if strings.Contains(strings.ToLower(h.Subject), strings.ToLower(q)) {
-				hits = append(hits, h)
-			}
-		}
-		b, _ := json.Marshal(hits)
+		b, _ := json.Marshal(hs)
 		return string(b)
 	}
 	return fmt.Sprintf("unknown tool %q", call.Name)

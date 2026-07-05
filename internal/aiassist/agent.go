@@ -51,7 +51,7 @@ func RunAgent(ctx context.Context, p LLMProvider, reader *mailbox.Reader, mb, go
 		msgs = append(msgs, Message{Role: "assistant", ToolCalls: resp.ToolCalls})
 		// execute every requested tool, append each result (correlated by ID for Anthropic / Name for Ollama)
 		for _, call := range resp.ToolCalls {
-			result := execTool(ctx, reader, mb, call)
+			result := execTool(ctx, toolDeps{reader: reader}, mb, call)
 			msgs = append(msgs, Message{Role: "tool", ToolName: call.Name, ToolID: call.ID, Content: result})
 		}
 	}
