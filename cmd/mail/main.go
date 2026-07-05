@@ -473,7 +473,34 @@ func main() {
 				goal := target
 				// Redact goal before sending to LLM (goal may contain sensitive context)
 				goal = redact.Redact(goal)
-				result, err := aiassist.RunAgent(ctx, p, r, mailboxName, goal, 10)
+				// v0.7: build the composite Searcher — FTS5 (cache) with substring fallback (never blind).
+				var searcher aiassist.Searcher
+				if cachePath, perr := cache.DefaultPath(); perr == nil {
+					if ca, cerr := cache.Open(cachePath); cerr == nil {
+						defer ca.Close()
+						// best-effort Sync (same as mail search): refresh the index; a failure does not abort.
+						// AUDIT FIX (plan H8): capture n. If Sync failed AND the index ended up empty (n==0,
+						// cold-start with nothing indexed), fall to substring instead of an EMPTY FTS index —
+						// otherwise the agent sees "no matches" on a cold cache despite mail in DynamoDB
+						// ("blind with a warning"). A non-empty index with a failed Sync uses FTS (stale-but-usable).
+						n, serr := ca.Sync(ctx, r, mailboxName, cache.SyncPageLimit)
+						if serr != nil {
+							fmt.Fprintf(os.Stderr, "warning: cache sync failed, AI search may be stale: %v\n", serr)
+						}
+						if serr != nil && n == 0 {
+							fmt.Fprintf(os.Stderr, "warning: cold cache + sync failed, AI search falls back to substring\n")
+							searcher = aiassist.NewFallbackSearcher(nil, r)
+						} else {
+							searcher = aiassist.NewFallbackSearcher(ca, r)
+						}
+					} else {
+						fmt.Fprintf(os.Stderr, "warning: cache unavailable, AI search falls back to substring: %v\n", cerr)
+						searcher = aiassist.NewFallbackSearcher(nil, r)
+					}
+				} else {
+					searcher = aiassist.NewFallbackSearcher(nil, r)
+				}
+				result, err := aiassist.RunAgent(ctx, p, r, searcher, mailboxName, goal, 10)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "backend AI no disponible (¿ollama serve?); lectura/envío siguen\nerror: %v\n", err)
 					return nil // degrade: the user is informed; the AI failing must not abort with a nonzero exit (spec §6)
