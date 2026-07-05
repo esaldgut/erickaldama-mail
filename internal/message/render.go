@@ -39,7 +39,15 @@ func RenderRich(p *Parsed, width int) (string, error) {
 	}
 	src := p.TextHTML
 	if src == "" {
-		return p.TextPlain, nil
+		// AUDIT FIX (external review LNK-S1): a plain-text-only email returns TextPlain, which is
+		// attacker-controlled (enmime env.Text). Callers write RenderRich's output straight to the
+		// terminal and trust it to be sanitized, so this branch MUST neutralize terminal-injection too.
+		// Use stripDangerousControls (the AGGRESSIVE strip), NOT sanitizeTerminalOutput: on this path
+		// glamour never ran, so there is NO legitimate ANSI to preserve — every control byte here is
+		// attacker-controlled. sanitizeTerminalOutput preserves well-formed OSC 8 / CSI (it cannot tell
+		// a forged sequence from glamour's own), so it would let a forged OSC 8 or a raw \x1b[2J through.
+		// stripDangerousControls keeps \n/\t/\r and printable Unicode, so legitimate plain text is intact.
+		return stripDangerousControls(p.TextPlain), nil
 	}
 	// AUDIT FIX SEC-CRIT: neutralize any attacker-planted sentinel (incl. HTML-entity-encoded) BEFORE
 	// the link rule runs. Must operate on the parsed DOM — see stripSentinelsFromHTML doc.

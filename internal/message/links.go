@@ -387,8 +387,9 @@ func lineHasLongToken(line string, width int) bool {
 // 8 — so it cannot tell a forged OSC-8 introducer from a legitimate one glamour or our materializer
 // emitted; post-glamour they are byte-identical. The PRE-glamour half, stripDangerousControls (invoked
 // from stripSentinelsFromHTML), is what actually neutralizes attacker-planted OSC-8 introducers, by
-// running before any legitimate control sequence exists to preserve. Applied once as the final step of
-// RenderRich, after materialization + footer.
+// running before any legitimate control sequence exists to preserve. Applied as the last step of BOTH
+// RenderRich return paths: after materialization + footer on the HTML path, AND on the plain-text
+// early-return (TextHTML==""), since TextPlain is equally attacker-controlled (external review LNK-S1).
 //
 // Note: invalid UTF-8 bytes (e.g. a raw 0x9b) are decoded to U+FFFD by []rune() before this scan, so
 // they render as the harmless replacement character rather than reaching the terminal as a control.

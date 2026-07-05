@@ -587,6 +587,29 @@ func TestRenderRichNoAnsiInjectionInPlainText(t *testing.T) {
 	}
 }
 
+// LNK-S1 (external review): a plain-text-only email (TextHTML=="") returns TextPlain — which is
+// attacker-controlled — and callers write it straight to the terminal. That early-return MUST also run
+// sanitizeTerminalOutput, or a forged OSC 8 / raw CSI (e.g. \x1b[2J erase-screen) in the plain body
+// reaches the terminal. This is the TextHTML=="" sibling of TestRenderRichNoAnsiInjectionInPlainText.
+func TestRenderRichPlainOnlyNoInjection(t *testing.T) {
+	p := &Parsed{TextHTML: "", TextPlain: "click \x1b]8;;https://evil.example\x07here\x1b]8;;\x07 \x1b[2Jerased"}
+	out, err := RenderRich(p, 80)
+	if err != nil {
+		t.Fatalf("RenderRich: %v", err)
+	}
+	// No forged OSC 8 to the attacker URL, and no raw erase-screen CSI, reach the output.
+	if strings.Contains(out, "\x1b]8;;https://evil.example") {
+		t.Errorf("forged OSC 8 survived the plain-text path: %q", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Errorf("raw CSI (erase-screen) survived the plain-text path: %q", out)
+	}
+	// The printable text is preserved (sanitizeTerminalOutput keeps printable + \n/\t).
+	if !strings.Contains(out, "click") || !strings.Contains(out, "here") || !strings.Contains(out, "erased") {
+		t.Errorf("legitimate plain text was damaged: %q", out)
+	}
+}
+
 // TestFixtureMarketingLinks exercises the full Parse→Sanitize→RenderRich path on a realistic email.
 func TestFixtureMarketingLinks(t *testing.T) {
 	raw, err := os.ReadFile("testdata/marketing-links.eml")
