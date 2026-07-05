@@ -5,14 +5,16 @@ provisioned entirely with **AWS CDK (Go)**, consumed by a terminal-native Go cli
 
 > Region: `us-east-1` · Account: ErickSA (367707589526) · All resources provisioned via AWS CDK Go.
 >
-> **Status (2026-07-04):** the SEND path (SP-2), the RECEIVE path (SP-3), the Go terminal client
-> (SP-4, up to **v0.6**), and the CD pipeline (GitHub Actions → OIDC → AWS) are **all live and verified** —
+> **Status (2026-07-05):** the SEND path (SP-2), the RECEIVE path (SP-3), the Go terminal client
+> (SP-4, up to **v0.7**), and the CD pipeline (GitHub Actions → OIDC → AWS) are **all live and verified** —
 > send→receive→read exercised end-to-end against live AWS. The full loop is closed.
 >
 > **Client evolution (`internal/message` render pipeline):** v0.3 rich HTML render (bluemonday sanitize →
-> html-to-markdown → glamour) · v0.4 two-pane TUI · v0.5 SQLite+FTS5 cache · **v0.6 legible link render
-> (OSC 8 hyperlinks + footer list)** with a two-layer terminal-injection defense over untrusted email HTML.
-> See [`METHODOLOGY.md`](METHODOLOGY.md) for how the layered audit caught 8 distinct defect classes in v0.6.
+> html-to-markdown → glamour) · v0.4 two-pane TUI · v0.5 SQLite+FTS5 cache · v0.6 legible link render
+> (OSC 8 hyperlinks + footer list) with a two-layer terminal-injection defense over untrusted email HTML ·
+> **v0.7 FTS5-backed AI search**. See [`METHODOLOGY.md`](METHODOLOGY.md) for how the layered audit caught
+> 8 distinct defect classes in v0.6, and [`v0.7-AI-FTS5.md`](v0.7-AI-FTS5.md) for the v0.7 runbook and
+> deploy finding.
 >
 > **Client v0.2:** `config.toml` (XDG path) drives a multi-mailbox `mail ls` (merged, sorted by `SK`).
 > CC/BCC on send/reply + the TUI composer — the **BCC rides only the SES envelope, never the MIME header**

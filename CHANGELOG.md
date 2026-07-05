@@ -12,6 +12,117 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.7] — FTS5 en las tools del agente AI — 2026-07-05
+
+v0.5 construyó un cache local SQLite+FTS5 que acelera `mail ls` y habilita búsqueda full-text rankeada
+para `mail search` y el filtro `/` de la TUI — pero dejó una inconsistencia documentada y diferida
+(§8(d) de `docs/v0.5-CACHE.md`): la tool de búsqueda del agente AI (`search_subject`) seguía haciendo un
+scan de substring en memoria sobre `Subject`, trayendo headers en vivo de DynamoDB en cada llamada, sin
+tocar el índice FTS5 que ya existía a un `cache.Search` de distancia. El agente AI veía resultados que
+podían rankear/matchear distinto a `mail search` para la misma query — la única superficie de búsqueda
+del cliente que no se beneficiaba del cache. v0.7 cierra esa brecha.
+
+### Added
+
+- **Tool `search_messages`** (rename de `search_subject`, `internal/aiassist/tools.go`) — busca sobre
+  **sender + subject** (antes solo subject), con `Description` que promete "full-text, ranked best-first,
+  prefix match". El clamp `limit` a `[1, 1000]` en `execTool` protege contra un LLM enviando un valor
+  fuera de rango.
+- **`Searcher` interface + `fallbackSearcher` composite** (`internal/aiassist/search.go`) — dos backends:
+  `substringSearcher` (el comportamiento histórico, ahora solo fallback, envuelve el `Reader` en vivo) y
+  el compuesto `fallbackSearcher`, que intenta FTS5 (`cache.Search`, inyectado como closure) y cae a
+  substring **solo** si el backend FTS es `nil` o devuelve un error real de infraestructura — nunca ante
+  `0` resultados sin error (regla **AR-1**, "nunca ciego, nunca mal-disparado"). `NewFallbackSearcher(c,
+  r)` es nil-safe: `c == nil` deja el closure FTS en `nil` y el compuesto usa siempre substring.
+- **El wire de `mail ai agent`** (`cmd/mail/main.go`) abre el cache best-effort, lo sincroniza, y decide
+  FTS-vs-substring según el **estado real del índice**, no según cuántas filas trajo la sincronización de
+  esta invocación — ver el hallazgo H8-SYNC-N-1 abajo.
+
+### Los hallazgos de la auditoría en capas (cada uno invisible a la capa de arriba/abajo)
+
+- **F3 — auditoría del plan** (compila contra el código real antes de ejecutar): un **CRIT** de shadowing
+  — el parámetro `mailbox` de `Searcher.Search`/`substringSearcher.Search` sombreaba el paquete
+  `erickaldama-mail/internal/mailbox`, rompiendo cualquier referencia a `mailbox.Header` dentro del
+  cuerpo del método (renombrado a `mb`). Un **MAYOR**: sin clamp, un `limit` enorme enviado por el LLM
+  desbordaba `int32(limit)` a negativo en `substringSearcher` → se agregó el clamp a 1000 en `execTool`.
+
+- **F4 — auditoría 6-ejes por-tarea, hallazgo H8-SYNC-N-1 (MAYOR):** `cache.Sync` devuelve
+  `n = len(hs)` — las filas traídas de DynamoDB **en esta llamada**, NO el tamaño del índice SQLite ya
+  existente. El primer guard del wire era `if serr != nil && n == 0 { substring } else { FTS }`. Un
+  índice **tibio** (filas indexadas por una sincronización exitosa anterior) combinado con un `r.List`
+  que falla en esta llamada produce `Sync → (0, err)` → `n == 0` → el guard tomaba la rama de substring,
+  **descartando un índice FTS perfectamente usable** — contradiciendo el propio comentario del código
+  ("un índice no vacío con Sync fallido usa FTS, obsoleto-pero-usable"). Fix: en vez de confiar en `n`,
+  cuando `Sync` falla se prueba el **estado real** con `ca.List(mb, 1)` — "¿tiene esta mailbox ≥1 fila
+  indexada?". Si sí → FTS (obsoleto-pero-usable); si no → substring. Nota meta: la primera corrección
+  que propuso el propio ciclo de auditoría era un guard "fail-open" que habría **reintroducido la
+  ceguera de cold-start** (usar FTS incluso con el índice genuinamente vacío) — se verificó esa
+  sugerencia contra el código real antes de aplicarla y se descartó a favor del probe explícito.
+  "Validar, no confiar — incluso al revisor" (la misma disciplina que cazó defectos de reviewers en v0.6).
+
+- **F5 — revisión de rama completa (ojos frescos):** un **IMPORTANT** cross-package invisible a las
+  revisiones por-tarea — los dos backends de `Searcher` no coincidían en qué significa "buscar". El
+  índice FTS cubre `sender`+`subject` (esquema `fts5(sender, subject)` de v0.5) y la tool promete
+  "sender or subject", pero `substringSearcher` matcheaba **solo Subject** (nunca From); y con query
+  vacía, FTS no matchea nada mientras que substring matchea **todo**
+  (`strings.Contains(x, "")` es siempre `true` en Go). Causa raíz: el rename `search_subject` →
+  `search_messages` amplió el contrato de la tool, pero solo el lado FTS lo cumplía de verdad. Fix
+  (commit `51a3c67`): `substringSearcher` ahora matchea From **o** Subject, y query vacía devuelve `nil`
+  en vez de todo el listado.
+
+### Smoke E2E — 2 capas, contra el sistema real (la parte más valiosa de esta entrega)
+
+Corrido contra la cuenta AWS real `367707589526` (perfil `mail-client-read`) con un cache FTS5 tibio y
+el backend local Ollama corriendo **`qwen2.5:7b`** — no el modelo por defecto del cliente (`qwen3:32b`),
+pasado explícito con `--agent-model qwen2.5:7b`.
+
+- **Layer 1** (harness determinístico sobre el `Searcher` real, no un mock): match de subject; **prefix
+  match** confirmado (una query corta encontró un subject con un token más largo del mismo prefijo — es
+  FTS5 prefix, no substring plano); **paridad sender+subject** confirmada sobre el índice real (el fix de
+  F5 funciona en producción, no solo en el test unitario); semántica AND (2 términos que no debían
+  matchear → 0); query vacía → 0.
+- **Layer 2** (loop LLM real): `mail ai agent "<goal>"` → qwen invocó `search_messages` → FTS5 resolvió →
+  respuesta en lenguaje natural correcta.
+
+### Deploy finding — qwen inventa operadores estilo Gmail (solo un smoke real con un LLM real lo revela)
+
+Al pedirle al agente que buscara correo por remitente, `qwen2.5:7b` invocó `search_messages` con
+`query="from:amazon"` — inventando un operador de campo estilo Gmail (`from:`) que la tool no soporta ni
+documenta. FTS5 buscó el término literal `"from:amazon"` (los dos puntos no son operador para SQLite
+FTS5) → 0 hits.
+
+**No es un bug de v0.7:** re-ejecutando el mismo goal con una query limpia (`query="amazon"`, sin el
+prefijo inventado) el mismo índice devolvió 3 hits con los subjects correctos. El código funciona — el
+modelo local asumió una sintaxis de operadores que la tool nunca prometió.
+
+**AR-1 se sostuvo correctamente:** `0` resultados **sin error** es una respuesta válida (§ arriba) — no
+hubo fallback espurio a substring (que tampoco habría encontrado nada buscando el string literal
+`"from:amazon"`). El agente reportó honestamente "sin coincidencias" en vez de fallar o inventar una
+respuesta. El invariante nunca-ciego-nunca-mal-disparado se comportó exactamente como se diseñó, incluso
+frente a un input que el diseño no anticipó — la evidencia de por qué un smoke E2E con un LLM real
+revela clases de hallazgo que ningún test unitario puede simular.
+
+**Mitigación diferida (deuda registrada, no bloqueante):** el `Description` de `search_messages` podría
+declarar explícitamente "solo términos simples, sin operadores `from:`/`subject:`"; o el wire podría
+despojar prefijos de operador conocidos antes de pasar la query a FTS5. Es un ajuste de comportamiento de
+modelo, no una corrección de código — el fallback ya garantiza que el peor caso es "0 resultados
+honestos".
+
+### Fast-follows registrados (no bloquean)
+
+- **PATRON-1** (MENOR) — el árbol `DefaultPath→Open→Sync` es ahora una 4ª copia parcial entre `mail ls` /
+  `mail search` / `mail ai agent`. Candidato de refactor: extraer un helper compartido.
+- **BP-1** (MENOR) — el clamp `[1, 1000]` de `limit` lo aplica el caller (`execTool`) por convención, no
+  `substringSearcher` mismo — oportunidad de defensa en profundidad diferida (un solo caller hoy).
+
+### Invariante preservado
+
+`TestReadMessageRedactsBody` sigue intacto: el body crudo de `read_message` se redacta antes de
+reingresar al loop del agente. La nueva superficie de `search_messages` expone solo headers
+(From/Subject) como JSON — idéntico a `search_subject` en ese aspecto — nunca el cuerpo del mensaje.
+
+---
+
 ## [mail v0.6] — Render de enlaces del correo (OSC 8 + lista al pie) — 2026-07-04
 
 En el smoke de v0.5.1 el usuario notó algo "medio raro": en correo de marketing, una URL de tracking de ~200
