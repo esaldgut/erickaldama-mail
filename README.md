@@ -216,6 +216,18 @@ classes (including two terminal-injection CRITs) that no single review pass coul
 status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
 [`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)): tmux `prefix+e` → popup; nvim `<leader>m{l,s,c,a}` → list/search/compose/AI.
 
+**v0.7 — FTS5-backed AI search** — the AI agent's search tool, renamed `search_messages` (from
+`search_subject`), now routes through the same v0.5 FTS5 cache `mail search` uses instead of scanning
+`Subject` substrings live against DynamoDB: sender **and** subject, bm25-ranked, prefix match. A
+`Searcher`/`fallbackSearcher` composite falls back to a live-DynamoDB substring search only when the
+cache infrastructure actually fails — never on a legitimate zero-result search (invariant **AR-1**).
+
+- The real E2E smoke against a live Ollama backend (`qwen2.5:7b`) surfaced a deploy finding: the model
+  invented Gmail-style `from:`/`subject:` query operators the tool doesn't support — AR-1 held correctly
+  (0 results, no spurious fallback, an honest "no matches" answer). See
+  [`docs/v0.7-AI-FTS5.md`](docs/v0.7-AI-FTS5.md) for the full runbook, the FTS-vs-substring decision
+  logic, and the deploy finding.
+
 Two IAM users provisioned via CDK with least-privilege disjoint scopes:
 
 | User | Scope |

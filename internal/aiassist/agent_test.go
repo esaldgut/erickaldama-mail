@@ -19,7 +19,7 @@ func (f *fakeProvider) Chat(_ context.Context, _ []Message, _ []ToolSpec) (Respo
 
 func TestRunAgentExecutesToolThenAnswers(t *testing.T) {
 	fp := &fakeProvider{}
-	out, err := RunAgent(context.Background(), fp, nil, "test@erickaldama.com", "¿cuántos correos?", 5)
+	out, err := RunAgent(context.Background(), fp, nil, nil, "test@erickaldama.com", "¿cuántos correos?", 5)
 	if err != nil || out != "Tienes 1 mensaje." {
 		t.Fatalf("agent: %q err=%v", out, err)
 	}
@@ -33,7 +33,7 @@ func TestRunAgentCapsIterations(t *testing.T) {
 	loop := providerFunc(func() Response {
 		return Response{Stop: "tool_use", ToolCalls: []ToolCall{{ID: "x", Name: "list_messages", Args: map[string]any{}}}}
 	})
-	_, err := RunAgent(context.Background(), loop, nil, "m", "g", 3)
+	_, err := RunAgent(context.Background(), loop, nil, nil, "m", "g", 3)
 	if err == nil {
 		t.Fatal("expected error on iteration cap")
 	}

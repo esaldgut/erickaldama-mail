@@ -33,10 +33,11 @@ func Draft(ctx context.Context, p LLMProvider, thread, instruction string) (stri
 // Bounded by maxIters (anti-runaway). Each tool result occupies its own Message{Role:"tool"} in the slice;
 // the Anthropic adapter (Task 8) must pack all same-turn tool_result blocks into ONE user message to satisfy
 // the API (multiple tool_use in a turn → one user message of tool_result blocks). Tools are read-only — no send.
-func RunAgent(ctx context.Context, p LLMProvider, reader *mailbox.Reader, mb, goal string, maxIters int) (string, error) {
+func RunAgent(ctx context.Context, p LLMProvider, reader *mailbox.Reader, searcher Searcher, mb, goal string, maxIters int) (string, error) {
 	if maxIters <= 0 {
 		return "", fmt.Errorf("RunAgent: maxIters must be > 0, got %d", maxIters)
 	}
+	deps := toolDeps{reader: reader, searcher: searcher}
 	msgs := []Message{{Role: "user", Content: goal}}
 	tools := ReadOnlyTools()
 	for i := 0; i < maxIters; i++ {
@@ -51,7 +52,7 @@ func RunAgent(ctx context.Context, p LLMProvider, reader *mailbox.Reader, mb, go
 		msgs = append(msgs, Message{Role: "assistant", ToolCalls: resp.ToolCalls})
 		// execute every requested tool, append each result (correlated by ID for Anthropic / Name for Ollama)
 		for _, call := range resp.ToolCalls {
-			result := execTool(ctx, reader, mb, call)
+			result := execTool(ctx, deps, mb, call)
 			msgs = append(msgs, Message{Role: "tool", ToolName: call.Name, ToolID: call.ID, Content: result})
 		}
 	}

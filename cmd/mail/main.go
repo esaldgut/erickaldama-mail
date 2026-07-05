@@ -473,7 +473,42 @@ func main() {
 				goal := target
 				// Redact goal before sending to LLM (goal may contain sensitive context)
 				goal = redact.Redact(goal)
-				result, err := aiassist.RunAgent(ctx, p, r, mailboxName, goal, 10)
+				// v0.7: build the composite Searcher — FTS5 (cache) with substring fallback (never blind).
+				var searcher aiassist.Searcher
+				if cachePath, perr := cache.DefaultPath(); perr == nil {
+					if ca, cerr := cache.Open(cachePath); cerr == nil {
+						defer ca.Close()
+						// best-effort Sync (same as mail search): refresh the index; a failure does not abort.
+						_, serr := ca.Sync(ctx, r, mailboxName, cache.SyncPageLimit)
+						if serr != nil {
+							fmt.Fprintf(os.Stderr, "warning: cache sync failed, AI search may be stale: %v\n", serr)
+						}
+						// AUDIT FIX (H8-SYNC-N-1): decide FTS-vs-substring on the REAL index state, not on n.
+						// cache.Sync returns n = rows pulled from DynamoDB THIS call (sync.go returns len(hs)),
+						// NOT the index size — so on a Sync failure n==0 even when a prior successful sync left
+						// rows indexed. If we substring'd on n==0 we'd discard a usable stale index. Instead, when
+						// Sync failed, probe the actual index: if List finds ≥1 row the index is usable (stale-but-
+						// usable → FTS); if it's empty or the probe errors, the index is truly blind → substring.
+						useFTS := true
+						if serr != nil {
+							if existing, lerr := ca.List(mailboxName, 1); lerr != nil || len(existing) == 0 {
+								useFTS = false
+							}
+						}
+						if useFTS {
+							searcher = aiassist.NewFallbackSearcher(ca, r)
+						} else {
+							fmt.Fprintf(os.Stderr, "warning: cold cache + sync failed, AI search falls back to substring\n")
+							searcher = aiassist.NewFallbackSearcher(nil, r)
+						}
+					} else {
+						fmt.Fprintf(os.Stderr, "warning: cache unavailable, AI search falls back to substring: %v\n", cerr)
+						searcher = aiassist.NewFallbackSearcher(nil, r)
+					}
+				} else {
+					searcher = aiassist.NewFallbackSearcher(nil, r)
+				}
+				result, err := aiassist.RunAgent(ctx, p, r, searcher, mailboxName, goal, 10)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "backend AI no disponible (¿ollama serve?); lectura/envío siguen\nerror: %v\n", err)
 					return nil // degrade: the user is informed; the AI failing must not abort with a nonzero exit (spec §6)
