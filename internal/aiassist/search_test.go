@@ -2,6 +2,7 @@ package aiassist
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -48,4 +49,98 @@ func TestSubstringSearcherNilReader(t *testing.T) {
 	if err != nil || hits != nil {
 		t.Errorf("nil reader: want (nil,nil), got (%v,%v)", hits, err)
 	}
+}
+
+// fakeFTS builds an injectable ftsSearch closure recording invocation and returning canned results.
+func fakeFTS(ret []mailbox.Header, err error, called *bool) func(string, string, int) ([]mailbox.Header, error) {
+	return func(mb, q string, n int) ([]mailbox.Header, error) {
+		*called = true
+		return ret, err
+	}
+}
+
+func TestFallbackUsesFTSWhenCacheOK(t *testing.T) {
+	ftsCalled, subCalled := false, false
+	// sub records via a reader that would return a different result; here we detect it wasn't used.
+	rSub := mailbox.NewReader(ddbWith("SUBSTRING-ONLY"), fakeS3{})
+	f := &fallbackSearcher{
+		ftsSearch: fakeFTS([]mailbox.Header{{Subject: "from FTS"}}, nil, &ftsCalled),
+		sub:       &recordingSub{inner: &substringSearcher{r: rSub}, called: &subCalled},
+	}
+	hits, err := f.Search(context.Background(), "inbox", "q", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ftsCalled {
+		t.Error("FTS backend was not called")
+	}
+	if subCalled {
+		t.Error("substring was called despite FTS success")
+	}
+	if len(hits) != 1 || hits[0].Subject != "from FTS" {
+		t.Errorf("want FTS result, got %v", hits)
+	}
+}
+
+// TF-2 — THE test with teeth: 0 results from FTS (no error) must NOT trigger fallback.
+func TestFallbackZeroResultsNoFallback(t *testing.T) {
+	ftsCalled, subCalled := false, false
+	f := &fallbackSearcher{
+		ftsSearch: fakeFTS(nil, nil, &ftsCalled), // 0 results, NO error
+		sub:       &recordingSub{inner: &substringSearcher{r: mailbox.NewReader(ddbWith("SHOULD-NOT-APPEAR"), fakeS3{})}, called: &subCalled},
+	}
+	hits, err := f.Search(context.Background(), "inbox", "q", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subCalled {
+		t.Error("AR-1 VIOLATED: substring called on 0-results (must only fall back on infra error)")
+	}
+	if len(hits) != 0 {
+		t.Errorf("want 0 results, got %v", hits)
+	}
+}
+
+func TestFallbackOnInfraError(t *testing.T) {
+	ftsCalled, subCalled := false, false
+	f := &fallbackSearcher{
+		ftsSearch: fakeFTS(nil, errors.New("db locked"), &ftsCalled), // infra error → fall back
+		sub:       &recordingSub{inner: &substringSearcher{r: mailbox.NewReader(ddbWith("SUBSTRING-HIT"), fakeS3{})}, called: &subCalled},
+	}
+	hits, err := f.Search(context.Background(), "inbox", "SUBSTRING", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !subCalled {
+		t.Error("substring was NOT called after FTS infra error")
+	}
+	if len(hits) != 1 || hits[0].Subject != "SUBSTRING-HIT" {
+		t.Errorf("want substring fallback result, got %v", hits)
+	}
+}
+
+func TestFallbackNilFTSUsesSubstring(t *testing.T) {
+	subCalled := false
+	f := &fallbackSearcher{
+		ftsSearch: nil, // no cache wired → always substring
+		sub:       &recordingSub{inner: &substringSearcher{r: mailbox.NewReader(ddbWith("NIL-FTS-HIT"), fakeS3{})}, called: &subCalled},
+	}
+	hits, err := f.Search(context.Background(), "inbox", "NIL", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !subCalled || len(hits) != 1 {
+		t.Errorf("nil FTS: want substring hit, got called=%v hits=%v", subCalled, hits)
+	}
+}
+
+// recordingSub wraps a substringSearcher to record whether Search was invoked.
+type recordingSub struct {
+	inner  *substringSearcher
+	called *bool
+}
+
+func (r *recordingSub) Search(ctx context.Context, mb, q string, n int) ([]mailbox.Header, error) {
+	*r.called = true
+	return r.inner.Search(ctx, mb, q, n)
 }
