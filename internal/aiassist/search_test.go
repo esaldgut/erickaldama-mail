@@ -46,6 +46,31 @@ func TestSubstringSearcherMatchesSubject(t *testing.T) {
 	}
 }
 
+func TestSubstringSearcherMatchesSender(t *testing.T) {
+	// ddbWith sets from = "sender-a@example.com", "sender-b@example.com", ... (verified in the helper).
+	r := mailbox.NewReader(ddbWith("uno", "dos", "tres"), fakeS3{})
+	s := &substringSearcher{r: r}
+	hits, err := s.Search(context.Background(), "inbox", "sender-b", 50)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 1 || hits[0].From != "sender-b@example.com" {
+		t.Errorf("want 1 hit from sender-b@example.com, got %v", hits)
+	}
+}
+
+func TestSubstringSearcherEmptyQueryMatchesNothing(t *testing.T) {
+	r := mailbox.NewReader(ddbWith("a", "b", "c"), fakeS3{})
+	s := &substringSearcher{r: r}
+	hits, err := s.Search(context.Background(), "inbox", "", 50)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("empty query must match nothing, got %d hits", len(hits))
+	}
+}
+
 func TestSubstringSearcherNilReader(t *testing.T) {
 	s := &substringSearcher{r: nil}
 	hits, err := s.Search(context.Background(), "inbox", "x", 50)

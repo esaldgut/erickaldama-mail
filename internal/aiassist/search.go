@@ -29,6 +29,12 @@ func (s *substringSearcher) Search(ctx context.Context, mb, query string, limit 
 	if s.r == nil {
 		return nil, nil
 	}
+	// Empty query matches nothing — mirror the FTS backend, where EscapeFTS("") yields a MATCH that
+	// returns no rows. Without this guard, strings.Contains(x, "") is always true and the fallback would
+	// return every header (a wall of noise), diverging from FTS on the same tool call (whole-branch review).
+	if query == "" {
+		return nil, nil
+	}
 	hs, _, err := s.r.List(ctx, mb, int32(limit), nil)
 	if err != nil {
 		return nil, err
@@ -36,8 +42,10 @@ func (s *substringSearcher) Search(ctx context.Context, mb, query string, limit 
 	var hits []mailbox.Header
 	lq := strings.ToLower(query)
 	for _, h := range hs {
-		// stdlib case-insensitive contains — handles Unicode (e.g. "café"); NO hand-rolled toLower (audit).
-		if strings.Contains(strings.ToLower(h.Subject), lq) {
+		// Match sender OR subject — same field coverage as the FTS backend (fts5(sender, subject)) and the
+		// tool's "sender or subject" promise. stdlib case-insensitive Contains handles Unicode (e.g. "café").
+		if strings.Contains(strings.ToLower(h.Subject), lq) ||
+			strings.Contains(strings.ToLower(h.From), lq) {
 			hits = append(hits, h)
 		}
 	}
