@@ -118,6 +118,49 @@ diff` vacío y `hash-object` == el blob de HEAD, para nunca commitear un guard r
 
 ---
 
+## La auditoría en capas, 7º fogueo (caso v0.7, MERGEADA PR #18) — dos hallazgos nuevos que el patrón aún no tenía
+
+v0.7 (FTS5 en las tools del agente AI) es el **séptimo fogueo** de la misma metodología, y no se limita a repetir
+la lección de v0.6 — **la extiende con dos datos nuevos y potentes** que ninguna corrida anterior había producido:
+el auditor de una capa puede él mismo prescribir un fix equivocado, y una clase entera de defecto — el
+comportamiento de un modelo — solo la revela un smoke E2E contra un LLM real, nunca una auditoría estática.
+
+| Capa de review | Qué SOLO ella puede ver | Hallazgo v0.7 |
+|---|---|---|
+| **Plan-audit** (F3, audita el código del plan) | bugs en el código concreto que el plan manda escribir | **CRIT shadowing**: el parámetro `mailbox` sombreaba el paquete `mailbox`, rompiendo `mailbox.Header` dentro del método; **MAYOR** overflow de `int32(limit)` si el LLM manda un `limit` enorme sin clamp |
+| **6-ejes por-tarea** (F4, el wire) | defectos locales de una unidad, incluido un fix que asume mal el propio estado del sistema | **MAYOR H8-SYNC-N-1**: `cache.Sync` devuelve `len(hs)` (filas traídas de DynamoDB en ESTA llamada), no el tamaño del índice. El guard de cold-start (`serr != nil && n == 0 → substring`) descartaba un índice FTS tibio y usable cuando un `r.List` fallaba en una invocación posterior a una sincronización exitosa. Fix: probar el estado REAL del índice con `ca.List(mb, 1)` |
+| **Whole-branch** (F5, ojos frescos) | defectos de **composición/contrato** entre piezas que cada una por sí sola pasa su propio review | **IMPORTANT cross-package**: los dos backends de `Searcher` no coincidían en qué significa "buscar" — FTS indexa sender+subject (y la tool promete "sender or subject"), pero `substringSearcher` matcheaba solo Subject (nunca From); y una query vacía hacía que FTS no matcheara nada mientras substring matcheaba TODO. Raíz: el rename `search_subject`→`search_messages` amplió el contrato, solo el lado FTS lo cumplía |
+| **External PR review** (F6, agente que NO construyó) | el punto ciego del constructor, y la fragilidad de sus propios tests | **NIT-1**: el guard de query vacía comparaba `== ""` exacto, así que una query solo-espacios se colaba. Fix con `strings.TrimSpace` — y el test que en teoría lo cubría era TAUTOLÓGICO (los subjects de fixture no tenían espacios, pasaba con o sin el guard); se reconstruyó con subjects que sí los tienen |
+
+Las capas siguen cazando clases distintas — nada de esto es nuevo como *patrón*. Lo nuevo son las dos sub-lecciones
+que siguen, cada una con evidencia que v0.6 no había producido.
+
+**Sub-lección — "validar, no confiar" aplica también al AUDITOR de la capa, no solo al revisor externo.** En v0.6
+la lección fue que un *revisor* (F5/F6) puede prescribir un fix sutilmente falso. v0.7 la extiende un nivel más
+adentro: en F4, el mismo agente de auditoría 6-ejes que **encontró** H8-SYNC-N-1 también **propuso** un fix —
+"fail-open a FTS ante cualquier error de sync". Ejecutar esa sugerencia contra el código real mostró que
+reintroducía exactamente la ceguera de cold-start que el guard original existía para prevenir: un índice
+genuinamente vacío (primer arranque) más un sync fallido habría dejado un índice FTS vacío, y el agente AI vería
+"sin coincidencias" pese a que sí hay correo en DynamoDB. El fix correcto — probar el índice real con
+`ca.List(mb, 1)` en vez de confiar en `n` — salió de **rechazar la propia sugerencia del auditor**. La lección: el
+agente que ENCUENTRA un defecto no es automáticamente el que tiene razón sobre el FIX. Verificar la corrección con
+el mismo rigor que el hallazgo, incluso cuando es tu propio agente de auditoría el que la propone.
+
+**Sub-lección — el smoke E2E con un LLM REAL caza una clase de defecto que ninguna auditoría estática puede ver:
+comportamiento de modelo.** El deploy finding: `qwen2.5:7b`, al pedírsele buscar correo por remitente, **inventó**
+un operador de campo estilo Gmail — mandó `query="from:amazon"` a `search_messages`. FTS5 buscó el token literal
+`"from:amazon"` → 0 hits. El invariante **AR-1** ("nunca ciego, nunca mal-disparado") se sostuvo correctamente: 0
+resultados sin error es una respuesta válida, no hubo fallback espurio a substring, y el agente reportó
+honestamente "sin coincidencias" en vez de inventar una respuesta. Y esto NO es un bug de código: re-ejecutando el
+mismo goal con `query="amazon"` (sin el prefijo inventado) el mismo índice devolvió 3 hits correctos. Es una clase
+de defecto distinta — "el LLM usa la tool de una forma que la tool no soporta" — que ningún spec-audit, plan-audit
+ni code review puede predecir, porque no vive en el código: vive en cómo un modelo concreto interpreta una
+`Description`. Solo un smoke E2E real contra un modelo real la revela. Técnica de instrumentación usada: loguear a
+stderr los argumentos reales de la tool-call (`query`/`limit`/hits devueltos) durante el smoke, y revertir esa
+instrumentación con `git checkout` al terminar — nunca comitearla.
+
+---
+
 ## Disciplinas transversales
 
 - **Validar, no confiar** — cada reporte de subagente (y cada prescripción de fix de un revisor) se verifica
