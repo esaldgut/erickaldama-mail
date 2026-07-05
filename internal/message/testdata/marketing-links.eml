@@ -1,0 +1,15 @@
+From: promo@example.com
+To: test@example.com
+Subject: Oferta especial
+Message-ID: <promo-001@example.com>
+Date: Thu, 03 Jul 2026 09:00:00 +0000
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Aprovecha nuestra <a href="https://example.com/CL0/aHR0cHM6Ly9zaG9wL3RyYWNraW5nL3Zlcnlsb25ncGF0aC93aXRoL21hbnkvc2VnbWVudHM">oferta especial</a> de esta semana.</p>
+<p>Ver de nuevo la <a href="https://example.com/CL0/aHR0cHM6Ly9zaG9wL3RyYWNraW5nL3Zlcnlsb25ncGF0aC93aXRoL21hbnkvc2VnbWVudHM">oferta especial</a> (mismo enlace, dedup).</p>
+<p>Con logo: <a href="https://example.org/promo/banner"><img src="cid:banner@test" alt="banner"></a></p>
+<p>Escríbenos a <a href="mailto:soporte@example.com">soporte</a> o visita <a href="//cdn.tracker.test/pixel">el sitio</a>.</p>
+<p>Ver la <a href="#seccion-ofertas">sección de ofertas</a>, ir a <a href="/promociones">promociones</a> o un <a href="">enlace vacío</a>.</p>
+<p>Sitio en <a href="HTTP://EXAMPLE.ORG/upper">mayúsculas</a>.</p>
+</body></html>
