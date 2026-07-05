@@ -479,19 +479,27 @@ func main() {
 					if ca, cerr := cache.Open(cachePath); cerr == nil {
 						defer ca.Close()
 						// best-effort Sync (same as mail search): refresh the index; a failure does not abort.
-						// AUDIT FIX (plan H8): capture n. If Sync failed AND the index ended up empty (n==0,
-						// cold-start with nothing indexed), fall to substring instead of an EMPTY FTS index —
-						// otherwise the agent sees "no matches" on a cold cache despite mail in DynamoDB
-						// ("blind with a warning"). A non-empty index with a failed Sync uses FTS (stale-but-usable).
-						n, serr := ca.Sync(ctx, r, mailboxName, cache.SyncPageLimit)
+						_, serr := ca.Sync(ctx, r, mailboxName, cache.SyncPageLimit)
 						if serr != nil {
 							fmt.Fprintf(os.Stderr, "warning: cache sync failed, AI search may be stale: %v\n", serr)
 						}
-						if serr != nil && n == 0 {
+						// AUDIT FIX (H8-SYNC-N-1): decide FTS-vs-substring on the REAL index state, not on n.
+						// cache.Sync returns n = rows pulled from DynamoDB THIS call (sync.go returns len(hs)),
+						// NOT the index size — so on a Sync failure n==0 even when a prior successful sync left
+						// rows indexed. If we substring'd on n==0 we'd discard a usable stale index. Instead, when
+						// Sync failed, probe the actual index: if List finds ≥1 row the index is usable (stale-but-
+						// usable → FTS); if it's empty or the probe errors, the index is truly blind → substring.
+						useFTS := true
+						if serr != nil {
+							if existing, lerr := ca.List(mailboxName, 1); lerr != nil || len(existing) == 0 {
+								useFTS = false
+							}
+						}
+						if useFTS {
+							searcher = aiassist.NewFallbackSearcher(ca, r)
+						} else {
 							fmt.Fprintf(os.Stderr, "warning: cold cache + sync failed, AI search falls back to substring\n")
 							searcher = aiassist.NewFallbackSearcher(nil, r)
-						} else {
-							searcher = aiassist.NewFallbackSearcher(ca, r)
 						}
 					} else {
 						fmt.Fprintf(os.Stderr, "warning: cache unavailable, AI search falls back to substring: %v\n", cerr)
