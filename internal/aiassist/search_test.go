@@ -60,14 +60,20 @@ func TestSubstringSearcherMatchesSender(t *testing.T) {
 }
 
 func TestSubstringSearcherEmptyQueryMatchesNothing(t *testing.T) {
-	r := mailbox.NewReader(ddbWith("a", "b", "c"), fakeS3{})
-	s := &substringSearcher{r: r}
-	hits, err := s.Search(context.Background(), "inbox", "", 50)
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if len(hits) != 0 {
-		t.Errorf("empty query must match nothing, got %d hits", len(hits))
+	// Both an empty AND a whitespace-only query must match nothing (external PR review NIT-1): a blank
+	// query can never be a meaningful match. TEETH: the subjects DELIBERATELY contain spaces ("informe
+	// mensual"), so a whitespace-only query " " WITHOUT the TrimSpace guard would strings.Contains-match
+	// every header with a space → this test fails if the guard is weakened back to `query == ""`.
+	for _, q := range []string{"", " ", "   ", "\t\n"} {
+		r := mailbox.NewReader(ddbWith("informe mensual", "café con leche", "otra cosa"), fakeS3{})
+		s := &substringSearcher{r: r}
+		hits, err := s.Search(context.Background(), "inbox", q, 50)
+		if err != nil {
+			t.Fatalf("Search(%q): %v", q, err)
+		}
+		if len(hits) != 0 {
+			t.Errorf("blank query %q must match nothing, got %d hits", q, len(hits))
+		}
 	}
 }
 

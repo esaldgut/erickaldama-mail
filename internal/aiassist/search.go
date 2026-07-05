@@ -29,10 +29,13 @@ func (s *substringSearcher) Search(ctx context.Context, mb, query string, limit 
 	if s.r == nil {
 		return nil, nil
 	}
-	// Empty query matches nothing — mirror the FTS backend, where EscapeFTS("") yields a MATCH that
-	// returns no rows. Without this guard, strings.Contains(x, "") is always true and the fallback would
-	// return every header (a wall of noise), diverging from FTS on the same tool call (whole-branch review).
-	if query == "" {
+	// Empty (or whitespace-only) query matches nothing — mirror the FTS backend, where EscapeFTS("") yields
+	// a MATCH that returns no rows. Without this guard, strings.Contains(x, "") is always true and the
+	// fallback would return every header (a wall of noise), diverging from FTS on the same tool call
+	// (whole-branch review). TrimSpace also short-circuits a whitespace-only query before the DynamoDB
+	// round-trip (external PR review NIT-1): a query of only spaces would else Contains-match any subject
+	// that contains a space, returning a wall of noise the FTS backend never would.
+	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
 	hs, _, err := s.r.List(ctx, mb, int32(limit), nil)
