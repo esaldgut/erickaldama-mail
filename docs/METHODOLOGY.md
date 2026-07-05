@@ -83,9 +83,48 @@ Cada uno se documentó con su causa raíz y su fix en el runbook correspondiente
 
 ---
 
+## La auditoría en capas caza clases DISTINTAS de defecto (caso v0.6, MERGEADA PR #16)
+
+Los deploy findings prueban el valor de las capas en infra. **v0.6 (render de enlaces del correo) probó el mismo
+principio en código puro**, sin AWS de por medio: 8 clases distintas de defecto, cada una cazada por una capa de
+review diferente e **invisible a las demás**. No es redundancia — es que cada clase de defecto requiere un punto de
+observación distinto. Es la mejor demostración del proyecto de por qué las capas no se pueden colapsar:
+
+| Capa de review | Qué SOLO ella puede ver | Hallazgo v0.6 |
+|---|---|---|
+| **Spec-audit** (F2, compila contra libs vivas) | supuestos FALSOS sobre el provider/API | "mailto no sobrevive bluemonday" (era falso; sí sobrevive en `<a href>`) |
+| **Plan-audit** (F3, audita el código del plan) | bugs en el código concreto que el plan manda escribir | `strings.Fields` colapsaba la estructura del cuerpo (8 newlines → 0) |
+| **6-ejes por-tarea** (F4) | defectos locales de una unidad | **O(n²) DoS** en el scan de sentinel; **test de mutación tautológico** |
+| **Whole-branch** (F5) | defectos de **COMPOSICIÓN** | **forja OSC 8**: fixes por-tarea correctos cuya interacción abría el vector `ESC]` (`sanitizeTerminalOutput` preserva OSC por diseño → no distingue la forjada) |
+| **External PR review** (F6, agente que NO construyó) | el **punto ciego del constructor** | **sink de plain-text**: `TextHTML=="" → return TextPlain` se saltaba todo el saneo — el constructor no lo vio porque "mi sanitizer es el paso final" |
+
+Los dos hallazgos más caros — la forja OSC 8 (composición, F5) y el sink de plain-text (punto ciego, F6) — habrían
+llegado a producción sin su capa específica, porque **ninguna otra capa podía verlos**. El per-task review de la
+tarea del materializador no podía ver la forja porque solo miraba su tarea; el constructor no podía ver el sink
+porque su modelo mental se lo ocultaba. No es que un reviewer fuera flojo: cada clase de defecto vive en una capa
+distinta. Skills reutilizables derivados: `layered-audit-catches-distinct-defect-classes` y `mutation-test-must-have-teeth`.
+
+**Sub-lección — validar, no confiar TAMBIÉN al revisor.** El reviewer que caza un defecto puede prescribir un fix
+sutilmente falso. En v0.6, DOS prescripciones lo eran: `collapseInternalWrap` (F5) re-unía el wrap de glamour →
+overflow; y `sanitizeTerminalOutput(TextPlain)` (F6) preserva secuencias OSC/CSI → dejaba pasar el ataque (el
+correcto era el strip agresivo `stripDangerousControls`, porque en el plain-path no hay ANSI legítimo que
+preservar). Ambas se cazaron **ejecutando el fix propuesto** antes de aceptarlo.
+
+**Sub-lección — un test de mutación de seguridad DEBE tener dientes.** `TestMutationForgedSentinelStripped` decía
+cubrir el strip de sentinel forjado, pero su input (`"xy"`) no contenía ningún sentinel forjado → pasaba con el
+guard revertido. Un test tautológico da confianza falsa, peor que no tener test. La regla: verificar SIEMPRE con
+un experimento de mutación (revertir el guard → el test debe FALLAR → `git checkout` restaurar → confirmar `git
+diff` vacío y `hash-object` == el blob de HEAD, para nunca commitear un guard revertido).
+
+---
+
 ## Disciplinas transversales
 
-- **Validar, no confiar** — cada reporte de subagente se verifica contra el código/sistema real.
+- **Validar, no confiar** — cada reporte de subagente (y cada prescripción de fix de un revisor) se verifica
+  contra el código/sistema real, ejecutándolo, antes de aceptarlo.
+- **Un test de mutación de seguridad DEBE tener dientes** — verificar SIEMPRE con un experimento de mutación
+  (revertir el guard → el test debe FALLAR → `git checkout` restaurar → confirmar hash == HEAD). Un test
+  tautológico da confianza falsa, peor que ninguno.
 - **Gate humano out-of-band** — el agente nunca ejecuta writes a sistemas reales; entrega los comandos exactos.
 - **Menor privilegio verificado empíricamente** — no se asume; se prueba (`mail-client-read` puede leer pero NO
   enviar → AccessDenied real).

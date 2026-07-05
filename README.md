@@ -193,6 +193,25 @@ Design note: the FTS5 index is **contentless without triggers** — synced expli
 FROM` a contentless FTS5 table is illegal (the special `'delete'` command with the old values is used instead).
 See [`docs/v0.5-CACHE.md`](docs/v0.5-CACHE.md) for the cache runbook and known limitations.
 
+**v0.6 — Legible link render (OSC 8 + footer list)** — in the TUI reader and `mail read <key> --rich`, an
+`<a href>` link is shown as **clickable text via an OSC 8 terminal hyperlink** (the long tracking URL hidden
+from the body) plus a numbered **`─── Enlaces ───`** list at the foot with the full URLs. This fixes the v0.5.1
+defect where a ~200-char tracking URL rendered inline and drowned the text (one link = 4 lines = 40% of the
+render). The footer is the universal fallback — it preserves the destination even where OSC 8 doesn't render (a
+pipe, an old terminal), because the URL is always legible at the foot. Only `http`/`https` links become
+clickable; `mailto:`, protocol-relative and relative links stay plain. Duplicate URLs dedup to one footer entry;
+a hostile `.eml` is capped at 500 links.
+
+- **Clickable links need OSC 8 passthrough.** In tmux ≥3.4 add `set -ga terminal-features "*:hyperlinks"` to
+  `~/.tmux.conf` (and reload). Works in iTerm2, kitty, WezTerm; degrades cleanly to the footer elsewhere.
+
+Email HTML is untrusted, so the render pipeline is a **two-layer terminal-injection defense**: raw control
+bytes (ESC, BEL, C1) are stripped from the untrusted content pre-glamour (`stripDangerousControls`, over DOM
+text nodes and attributes), and a post-glamour pass (`sanitizeTerminalOutput`) preserves only glamour's own
+legitimate SGR/OSC 8. Every security guard has a **mutation test with teeth** — it fails if the guard is
+reverted. See [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the layered audit caught 8 distinct defect
+classes (including two terminal-injection CRITs) that no single review pass could see.
+
 **Editor/multiplexer integration** — `mail tmux popup` opens the TUI in a floating tmux overlay; `mail tmux
 status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
 [`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)): tmux `prefix+e` → popup; nvim `<leader>m{l,s,c,a}` → list/search/compose/AI.
