@@ -12,6 +12,106 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.6] — Render de enlaces del correo (OSC 8 + lista al pie) — 2026-07-04
+
+En el smoke de v0.5.1 el usuario notó algo "medio raro": en correo de marketing, una URL de tracking de ~200
+caracteres dentro de un `<a href>` se renderizaba inline y ahogaba el texto legible — medido, 1 link = 4 líneas
+= 40% del render, y glamour excedía el ancho (108 cols con `WithWordWrap(80)`) al partir el token no-rompible.
+v0.6 lo arregla: el enlace se muestra como **texto clicable vía OSC 8** (hyperlink de terminal, con la URL
+oculta del cuerpo) y una **lista numerada al pie** (`─── Enlaces ───`) con las URLs completas — respaldo
+universal que preserva el destino incluso donde OSC 8 no se renderiza (un pipe, un terminal viejo, Terminal.app).
+
+Construida con `subproject-delivery-canonical` (6º fogueo). Lo notable de esta capa **no es el feature — es la
+metodología de auditoría en capas probándose a sí misma**: 8 clases distintas de defecto, cada una cazada por
+una capa de review diferente e **invisible a las demás**, todas verificadas por el controlador con prueba
+binaria propia antes de corregir. Es la mejor evidencia del proyecto de por qué las capas de review no son
+redundantes.
+
+### Added
+
+- **Render de enlaces OSC 8 + footer** en la TUI y el CLI `--rich`. Los `<a href>` http/https se vuelven texto
+  clicable; el resto (`mailto:`, protocol-relative, relativos, `#`, vacío) queda como texto plano. Dedup por
+  href (la misma URL 2× en el cuerpo → una sola entrada de footer). Cap de 500 links (un `.eml` hostil con
+  100k `<a>` no congela el render); a partir de ahí, texto plano + nota `[…] (+N enlaces más)`.
+- **Arquitectura de 3 fases** en `internal/message` (firma de `RenderRich` intacta, los 5 call sites no cambian):
+  - **Fase A** — rule custom de htmltomd sobre `<a>` que emite un **sentinel private-use** `U+E000-E002` (opaco
+    a goldmark) + acumulador con dedup + filtro de esquema. El marcador `[n]`+`[n]:` NO se puede usar: es
+    reference-link de CommonMark y goldmark re-inlinea la URL. El marcador `(n)` va DENTRO del texto del sentinel
+    (pre-glamour) para que glamour lo cuente en el word-wrap.
+  - **Fase C** — pre-wrap defensivo línea-por-línea (`strings.Split("\n")`, NO `strings.Fields` que colapsaría
+    la estructura), para tokens no-rompibles residuales.
+  - **Fase B** — post-glamour: materializa el sentinel → OSC 8 (`x/ansi.SetHyperlink`, scan close-first O(n)) +
+    construye el footer FUERA de glamour (que overflowea las URLs largas a 222 cols), con hard-split a width.
+- **Defensa de inyección de terminal en 2 capas** (el correo es contenido NO confiable):
+  `stripDangerousControls` PRE-glamour (agresivo — borra todo byte de control de text nodes y atributos, porque
+  a esa altura no hay ANSI legítimo que preservar) + `sanitizeTerminalOutput` POST-glamour (preserva el SGR/OSC8
+  legítimo de glamour). El plain-text path (`TextHTML==""`) también sanea con el strip agresivo.
+- `x/ansi` y `goquery` promovidos de indirect a directas en `go.mod`. 13 invariantes (8 LNK funcionales + 5
+  LNK-SEC de seguridad), cada guard con un test de mutación **con dientes** (probado revirtiendo el guard → el
+  test falla).
+
+### Hallazgos de la auditoría en capas (8 clases, cada una invisible a la capa de abajo)
+
+La substancia de esta entrega. Cada capa cazó una clase de defecto que las otras estructuralmente no podían ver:
+
+- **F2 spec-audit** (compila contra libs vivas) — 2 supuestos FALSOS del spec del controlador: (a) "mailto no
+  sobrevive bluemonday" era falso (mailto Y protocol-relative SÍ sobreviven en `<a href>` — el
+  `AllowURLSchemes("cid")` gobierna `img.src`, no `<a>`); (b) "envolver el footer en inline-code evita el
+  overflow" era falso (evita el doble-render, no el overflow → footer FUERA de glamour).
+- **F3 plan-audit** (audita el CÓDIGO del plan, no el spec) — 3 CRIT/MAYOR: (a) **spoof de hyperlink OSC 8** vía
+  sentinel forjado con entidad HTML `&#xE000;` en texto fuera de `<a>` (bluemonday la decodifica a PUA cruda) →
+  strip global pre-htmltomd sobre el DOM; (b) **H1** `strings.Fields` colapsaba la estructura del cuerpo (8
+  newlines → 0) → pre-wrap línea-por-línea; (c) **H2** el marcador `(n)` post-glamour desbordaba el width angosto
+  → marcador dentro del sentinel. Además, ejecutar el código consolidado del plan antes de F4 reveló 2
+  correcciones que la auditoría NO vio: `collapseInternalWrap` era ACTIVAMENTE incorrecto (re-unía el wrap de
+  glamour → overflow 105; la corrección es NO colapsar, el span OSC 8 multi-línea es válido) y bluemonday
+  minúsculiza el esquema (`HTTP://`→`http://`).
+- **F4 6-ejes por-tarea** — 3 hallazgos: (a) **CRIT O(n²) DoS** en el scan de sentinel malformado (un `.eml`
+  hostil con OPENs forjados congela el render síncrono; benchmark ×3.8 por duplicación de input → close-first
+  O(n), ~3400× más rápido); (b) **MAYOR ANSI-injection** — un ESC crudo en el texto del correo llegaba a la
+  terminal (leak PRE-EXISTENTE desde v0.3, general a todo el body; se arregló la CLASE con `sanitizeTerminalOutput`,
+  no solo el síntoma del link); (c) **CRIT test de mutación TAUTOLÓGICO** — un test que decía cubrir el strip de
+  sentinel forjado pasaba con el guard revertido (su input no tenía ningún sentinel forjado) → payload real +
+  dientes probados por experimento de mutación.
+- **F5 whole-branch review** (rama completa, ojos frescos) — **CRIT forja de OSC 8 por COMPOSICIÓN**: los fixes
+  por-tarea eran localmente correctos, pero su interacción dejaba abierto el vector `ESC]` — `sanitizeTerminalOutput`
+  preserva OSC 8 por diseño (no puede distinguir la forjada de la de glamour), así que un `&#x1b;]8;;evil.example&#x07;`
+  en el texto del link producía un hyperlink spoofeado a la URL del atacante, ausente del footer. Solo emerge
+  viendo la rama entera. Fix: el strip agresivo pre-glamour cierra los introductores OSC antes de que glamour corra.
+- **F6 external PR review** (agente que NO construyó, alimentado con `gh pr diff`) — **MAYOR sink de plain-text
+  (LNK-S1)**: el early-return `if src == "" { return p.TextPlain }` de `RenderRich` se saltaba TODO el saneo. Para
+  un correo plain-text-only (común), un OSC 8 forjado o un `\x1b[2J` (borra-pantalla) en el cuerpo plano llegaba a
+  la terminal. Punto ciego del CONSTRUCTOR — el modelo mental decía "mi sanitizer es el paso final", pero el
+  early-return está ARRIBA. Un revisor sin contexto lo trazó en minutos.
+
+### Meta-lecciones (persistidas como agent skills reutilizables)
+
+- **La auditoría en capas caza clases DISTINTAS de defecto** — cada capa (spec/plan/per-task/whole-branch/external)
+  ve un tipo que las otras estructuralmente no pueden. Saltar una capa no ahorra trabajo; deja una clase entera sin
+  cazar. → skill `layered-audit-catches-distinct-defect-classes`.
+- **Un test de mutación DEBE tener dientes** — verificar SIEMPRE con un experimento de mutación (revertir el guard →
+  el test debe fallar → `git checkout` restaurar → confirmar hash == HEAD). Un test tautológico da falsa confianza,
+  peor que ninguno. → skill `mutation-test-must-have-teeth`.
+- **Validar, no confiar — también al revisor.** Dos prescripciones de reviewers eran sutilmente falsas
+  (`collapseInternalWrap` en F5, `sanitizeTerminalOutput` vs el correcto `stripDangerousControls` en F6); ambas
+  cazadas ejecutando el fix propuesto antes de aceptarlo.
+
+### Smoke E2E — verde
+
+Contra el stack real del usuario (iTerm2 + tmux 3.7b con `set -ga terminal-features "*:hyperlinks"`): **clic OSC 8
+confirmado visualmente** (el navegador abrió la URL). Footer visible correcto (dedup, URL íntegra hard-split,
+`mailto` como texto plano sin entrada de footer). Se documentó el confound del harness de captura: el `!`-command
+de la sesión muestra `]8;;` literal porque captura stdout, pero el escape sí llega a la TTY (probado clicando).
+
+### Fast-follows registrados (no bloquean; en el PR #16)
+
+- **LNK-S2** — URLs bare-text (fuera de `<a>`) las auto-linkifica goldmark DUPLICÁNDOLAS inline (comportamiento
+  pre-existente de glamour, benigno). Fuera de alcance de v0.6; candidato: desactivar la extensión autolink.
+- **D2** — los error-returns de `stripSentinelsFromHTML` (`html.Parse`/`Render`) son inalcanzables en práctica.
+- **P1** — `stripSentinelsFromHTML` es un 3er parse HTML del cuerpo (tradeoff SRP consciente; O(n), ~295ms en 2MB).
+
+---
+
 ## [mail v0.5.1] — Fix del reader vacío + refresh de la TUI — 2026-07-02
 
 Mejoras de la TUI que el smoke E2E de v0.5 destapó al usarla contra correo real. Antes de cerrar, una auditoría
