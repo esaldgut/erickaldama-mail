@@ -84,3 +84,12 @@ func TestSearchMessagesSearcherError(t *testing.T) {
 		t.Errorf("searcher error should surface as 'error: ...', got %q", out)
 	}
 }
+
+func TestSearchMessagesEmptyReturnsJSONArray(t *testing.T) {
+	fs := &fakeSearcher{ret: nil} // 0 matches → nil slice
+	out := execTool(context.Background(), toolDeps{searcher: fs}, "inbox",
+		ToolCall{Name: "search_messages", Args: map[string]any{"query": "nothingmatches"}})
+	if out != "[]" {
+		t.Errorf("empty search must return %q, got %q", "[]", out)
+	}
+}

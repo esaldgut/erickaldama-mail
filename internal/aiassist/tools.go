@@ -47,8 +47,7 @@ func execTool(ctx context.Context, deps toolDeps, mb string, call ToolCall) stri
 		if err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
-		b, _ := json.Marshal(hs)
-		return string(b)
+		return marshalHeaders(hs)
 	case "read_message":
 		if deps.reader == nil {
 			return "[]"
@@ -88,8 +87,17 @@ func execTool(ctx context.Context, deps toolDeps, mb string, call ToolCall) stri
 		if err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
-		b, _ := json.Marshal(hs)
-		return string(b)
+		return marshalHeaders(hs)
 	}
 	return fmt.Sprintf("unknown tool %q", call.Name)
+}
+
+// marshalHeaders serializes headers to a JSON array. A nil/empty slice becomes "[]" (not "null"),
+// so the LLM always receives a valid JSON array as the tool's Description promises.
+func marshalHeaders(hs []mailbox.Header) string {
+	if len(hs) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(hs)
+	return string(b)
 }
