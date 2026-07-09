@@ -1,0 +1,26 @@
+From: sender@example.com
+To: recipient@example.com
+Subject: Test inline image (synthetic)
+Message-ID: <inline-image-001@example.com>
+Date: Mon, 23 Jun 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="test-boundary-001"
+
+--test-boundary-001
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Message with inline image and a tracking pixel.</p>
+<img src="cid:logo@test" alt="logo" width="100" height="100">
+<img src="http://track.er/pixel.png" alt="">
+</body></html>
+
+--test-boundary-001
+Content-Type: image/png
+Content-ID: <logo@test>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9
+awAAAABJRU5ErkJggg==
+
+--test-boundary-001--

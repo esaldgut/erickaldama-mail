@@ -11,9 +11,17 @@ This is the umbrella repo. The system is decomposed into independent subprojects
 | SP-0 | Governance — CDK-Go `PreToolUse` hook + skill-recipes (CDK, SES) | ✅ live |
 | SP-1 | Foundation — Route 53 hosted zone + base IAM (CDK-Go) | ✅ live |
 | SP-2 | SES identity + send — DKIM, custom MAIL FROM, DMARC, reputation (CDK-Go) | ✅ live |
-| SP-3 | Receive pipeline — receipt rule → S3 → Lambda → DynamoDB + DLQ (CDK-Go) | pending |
-| SP-4 | Go TUI client — reads DynamoDB+S3, sends via SES v2 (nvim/tmux) | pending |
+| SP-3 | Receive pipeline — catch-all receipt rule → S3 → Go Lambda → DynamoDB + DLQ (CDK-Go) | ✅ live |
+| SP-4 | Go TUI/CLI/AI client — reads DynamoDB+S3, sends via SES, AI dual-backend (Ollama+Claude) | ✅ live |
+| CD | GitHub Actions → OIDC → AWS, deployed 2026-06-24, PR #6 | ✅ live |
 | SP-5 | iOS Swift client (future) — same backend | pending |
+
+The send, receive, **and** client layers are live: mail to any `*@erickaldama.com` lands parsed and
+indexed in DynamoDB; `erick@erickaldama.com` can send DKIM-signed, DMARC-aligned mail; and the Go
+terminal client (SP-4) closes the loop end-to-end — send→receive→read verified in live AWS on
+2026-06-24. See **[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)** and
+**[`CHANGELOG.md`](CHANGELOG.md#sp-4----cliente-tuicliai-go----2026-06-24)** for the full build
+history, deploy findings, and the verified end-to-end test.
 
 ## Architecture
 
@@ -42,7 +50,7 @@ diagram is the eagle-eye view.
 
 ## What's deployed (live)
 
-Two CDK-Go stacks are live in `367707589526` / `us-east-1`:
+Five CDK-Go stacks plus a Go terminal client are live in `367707589526` / `us-east-1`:
 
 **`FoundationStack` (SP-1)** — the public Route 53 hosted zone for `erickaldama.com`
 (`Z023932911KA6S98A6ZRW`, CAA pinned to Amazon), plus the `mail-readonly` managed policy that scopes
@@ -68,23 +76,207 @@ erick@erickaldama.com ──ses:SendEmail──▶ EmailIdentity (erickaldama.co
                           │                        Reputation.ComplaintRate ≥ 0.0005
             Events::Rule (source aws.ses)          treatMissingData: ignore
                           ▼
-            SNS topic mail-bounce-complaint  ──▶  (subscriber added in SP-3)
+            SNS topic mail-bounce-complaint  ──▶  operator email (subscribed in SP-3)
 ```
 
 Sending is gated by the `mail-send` managed policy (`ses:SendEmail` on the identity ARN with a
 `ses:FromAddress = erick@erickaldama.com` condition) carried by `mail-sender-role`. The full deploy
 runbook — real commands, real outputs, and the two failure modes the audit didn't anticipate (the
 permissions boundary needing the same `events:*` the exec-policy gained; the read-only role needing to
-read the SNS/EventBridge it deploys) — is in **[`docs/SP-2-DEPLOY.md`](docs/SP-2-DEPLOY.md)**. The
-human-executed bootstrap/deploy steps per subproject are in **[`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)**.
+read the SNS/EventBridge it deploys) — is in **[`docs/SP-2-DEPLOY.md`](docs/SP-2-DEPLOY.md)**.
+
+**`MailStorageStack` + `ReceivingStack` (SP-3)** — the inbound pipeline. Mail to any
+`*@erickaldama.com` is accepted, archived raw in S3, parsed by a Go Lambda, and indexed in DynamoDB:
+
+```
+external sender ──▶ MX erickaldama.com → inbound-smtp.us-east-1.amazonaws.com
+                          │
+                    SES receipt rule set "erickaldama-inbound" (ACTIVE, catch-all)
+                    TlsPolicy Require · scan on · activated by a CDK custom resource
+                          │
+                ┌─────────┴── ① S3 action ──▶ bucket erickaldama-mail-raw
+                │                              SSE-S3 · Block-All-Public · key inbound/<sesMessageId>
+                │
+                └─── ② Lambda action (async) ──▶ mail-receive  (Go, provided.al2023, arm64)
+                                                  │  reads Receipt.Recipients (envelope, authoritative)
+                                                  │  idempotent PutItem per domain recipient
+                                                  ▼
+                                          DynamoDB mail-index (on-demand)
+                                          PK = mailbox#<addr>   SK = ts#<rfc3339>#<rfc5322-msgid>
+                                                  │
+                                  on failure ─────┴──▶ SQS DLQ (SSE) ──▶ alarm depth>0 ──▶ SNS
+                                                                                            │
+   _dmarc TXT rua=mailto:dmarc-reports@erickaldama.com (same-domain, dogfooded) ──▶ pipeline
+                                                          SNS mail-bounce-complaint ──▶ operator email
+```
+
+The bucket lives in its own stack and crosses to `ReceivingStack` as a Go prop (the SES bucket policy
+is created in `ReceivingStack`, not via `bucket.AddToResourcePolicy`, to avoid a real CloudFormation
+dependency cycle). Verified live with a real inbound message: received, stored in S3, and indexed in
+DynamoDB end-to-end. Full runbook — commands, real outputs, the post-deploy diagnostic, and the two
+"symptoms that weren't bugs" — is in **[`docs/SP-3-DEPLOY.md`](docs/SP-3-DEPLOY.md)**. The
+human-executed bootstrap/deploy steps per subproject are in **[`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md)**;
+SP-1's first-deploy runbook is in **[`docs/SP-1-DEPLOY.md`](docs/SP-1-DEPLOY.md)**.
+
+**Go terminal client (SP-4)** — the consumer layer that closes the loop end-to-end. Two binaries over a
+shared domain core:
+
+```
+cmd/mail         CLI Cobra · ls / read / send / reply / ai / tmux (popup·status)
+cmd/mail-tui     TUI Bubble Tea · list / reader / multi-field composer · Vim-motions (j/k/gg/G)
+
+internal/config     config.toml (~/.config/erickaldama-mail, XDG) — known mailboxes, default from/profiles
+internal/message    MIME parse/build (enmime/v2) · threading RFC 5322 · html-to-markdown render (glamour)
+internal/mailbox    Reader  — Query DynamoDB mail-index + GetObject S3 erickaldama-mail-raw
+                    Sender  — SendRawEmail via SES v2 + SigV4
+internal/aiassist   LLMProvider interface + agent-loop (read-only tools, no send tool)
+  /ollama             Ollama local  (qwen3:32b)   — default, mail stays on-device
+  /claude             Claude API    (claude-opus-4-8, adaptive thinking) — opt-in with explicit warning
+internal/redact     Deterministic NDA mask (secret-shaped tokens + third-party emails) before any
+                    backend that crosses the network
+internal/awsconf    Credential loader for the two scoped IAM users
+internal/wire       Single instantiation point (DRY)
+```
+
+**v0.2** — `mail ls` (no `--mailbox`) lists every mailbox from `config.toml`, merged and sorted by `SK`
+(ISO8601) descending. CC/BCC on `send`/`reply` and in the TUI composer, with a hard privacy invariant: the
+**BCC travels only in the SES envelope, never in the MIME header** (asserted at the core and TUI-end-to-end).
+Reply-all pre-fills the Cc with the original recipients minus self. See [`docs/SP-4-DEPLOY.md` §10](docs/SP-4-DEPLOY.md).
+
+**v0.3 — Rich HTML render + inline images** — `mail read <key> --rich` and the TUI reader render HTML mail
+in full ANSI color via glamour. Remote images (tracking pixels, external URLs) are **blocked by default** —
+a `[imagen remota bloqueada]` placeholder replaces them. Inline `cid:` images (embedded in the MIME) can be
+rendered in the terminal via chafa (symbols mode) with the `i` key in the TUI, or loaded on demand with
+`--load-remote` (CLI) / `R` key (TUI) for remote images when you explicitly trust the sender.
+
+**Optional dependency — chafa** (for inline image rendering in the terminal):
+```bash
+brew install chafa   # macOS — renders cid: images as Unicode block art in the TUI
+```
+Without chafa, `i` gracefully degrades (no image render, no crash). The sanitized HTML and ANSI glamour
+render work independently of chafa.
+
+**Privacy policy — remote images are blocked by default:**
+- Tracking pixels (`<img src="http://...">`) are replaced by `[imagen remota bloqueada]` — they never load.
+- Protocol-relative URLs (`//host/...`) and any uppercase variant (`HTTP://`, `HTTPS://`) are also blocked
+  (the sanitizer is case-insensitive, defending against the SAN-2 bypasses found in the audit).
+- `cid:` inline images (embedded in the MIME body) are always available — they never hit the network.
+- To load remote images explicitly: `mail read <key> --rich --load-remote` (CLI) or press `R` in the TUI reader.
+
+**TUI rich-reader key bindings (reader panel):**
+| Key | Action |
+|-----|--------|
+| `i` | Render inline `cid:` images with chafa (symbols mode, on-demand) |
+| `R` | Reload body allowing remote images (`--load-remote` equivalent) |
+
+See [`docs/SP-4-DEPLOY.md` §11](docs/SP-4-DEPLOY.md) and [`CHANGELOG.md`](CHANGELOG.md#mail-v03) for the
+full v0.3 build history, audit findings, and the privacy invariant verification.
+
+**v0.4 — TUI two-pane layout** — the TUI browses in a proper two-pane layout: a `bubbles/list` on the left
+(fuzzy filter with `/`, `Tab` to move focus) and a `viewport` reader on the right. Selecting a message loads
+its body with a 150 ms debounce; selection is tracked by S3 key (never by list index, which the filter
+reorders).
+
+**v0.5 — Local SQLite+FTS5 cache** — a discardable local cache (`~/.cache/erickaldama-mail/index.sqlite`,
+`0600`) built on `modernc.org/sqlite` (CGO-free, SQLite 3.53.2, FTS5 built in). It decorates the reader:
+- **`mail ls`** shows **date+time** and the **s3Key** on each row (copy it with tmux copy-mode → `mail read
+  <s3Key>` without re-listing). In the TUI, each item is three lines: subject / sender·datetime / s3Key (faint).
+- **`mail search <query>`** — full-text search over `sender`+`subject`, bm25-ranked, with **prefix match** on
+  the last token (`transfer` finds `transferencia`). `--limit` caps the results (default 50).
+- The TUI filter (`/`) now queries FTS5 over the full cached history instead of fuzzy-matching only the loaded
+  page. The cache is never the source of truth — any failure falls back transparently to a live DynamoDB read.
+- **Refresh (v0.5.1):** press **`g`** to sync now, or let the TUI **auto-refresh every 30 s** in the background.
+  New mail appears at the top, but your selection is preserved by S3 key — it never yanks you off what you're
+  reading. Auto-refresh pauses while you filter, compose, or a body load is in flight.
+
+Design note: the FTS5 index is **contentless without triggers** — synced explicitly in Go, because `DELETE
+FROM` a contentless FTS5 table is illegal (the special `'delete'` command with the old values is used instead).
+See [`docs/v0.5-CACHE.md`](docs/v0.5-CACHE.md) for the cache runbook and known limitations.
+
+**v0.6 — Legible link render (OSC 8 + footer list)** — in the TUI reader and `mail read <key> --rich`, an
+`<a href>` link is shown as **clickable text via an OSC 8 terminal hyperlink** (the long tracking URL hidden
+from the body) plus a numbered **`─── Enlaces ───`** list at the foot with the full URLs. This fixes the v0.5.1
+defect where a ~200-char tracking URL rendered inline and drowned the text (one link = 4 lines = 40% of the
+render). The footer is the universal fallback — it preserves the destination even where OSC 8 doesn't render (a
+pipe, an old terminal), because the URL is always legible at the foot. Only `http`/`https` links become
+clickable; `mailto:`, protocol-relative and relative links stay plain. Duplicate URLs dedup to one footer entry;
+a hostile `.eml` is capped at 500 links.
+
+- **Clickable links need OSC 8 passthrough.** In tmux ≥3.4 add `set -ga terminal-features "*:hyperlinks"` to
+  `~/.tmux.conf` (and reload). Works in iTerm2, kitty, WezTerm; degrades cleanly to the footer elsewhere.
+
+Email HTML is untrusted, so the render pipeline is a **two-layer terminal-injection defense**: raw control
+bytes (ESC, BEL, C1) are stripped from the untrusted content pre-glamour (`stripDangerousControls`, over DOM
+text nodes and attributes), and a post-glamour pass (`sanitizeTerminalOutput`) preserves only glamour's own
+legitimate SGR/OSC 8. Every security guard has a **mutation test with teeth** — it fails if the guard is
+reverted. See [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the layered audit caught 8 distinct defect
+classes (including two terminal-injection CRITs) that no single review pass could see.
+
+**Editor/multiplexer integration** — `mail tmux popup` opens the TUI in a floating tmux overlay; `mail tmux
+status` prints the message count for the tmux `status-right`. Suggested bindings (collision-checked, copy-paste in
+[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)): tmux `prefix+e` → popup; nvim `<leader>m{l,s,c,a}` → list/search/compose/AI.
+
+**v0.7 — FTS5-backed AI search** — the AI agent's search tool, renamed `search_messages` (from
+`search_subject`), now routes through the same v0.5 FTS5 cache `mail search` uses instead of scanning
+`Subject` substrings live against DynamoDB: sender **and** subject, bm25-ranked, prefix match. A
+`Searcher`/`fallbackSearcher` composite falls back to a live-DynamoDB substring search only when the
+cache infrastructure actually fails — never on a legitimate zero-result search (invariant **AR-1**).
+
+- The real E2E smoke against a live Ollama backend (`qwen2.5:7b`) surfaced a deploy finding: the model
+  invented Gmail-style `from:`/`subject:` query operators the tool doesn't support — AR-1 held correctly
+  (0 results, no spurious fallback, an honest "no matches" answer). See
+  [`docs/v0.7-AI-FTS5.md`](docs/v0.7-AI-FTS5.md) for the full runbook, the FTS-vs-substring decision
+  logic, and the deploy finding.
+
+Two IAM users provisioned via CDK with least-privilege disjoint scopes:
+
+| User | Scope |
+|---|---|
+| `mail-client-read` | `dynamodb:Query` on `mail-index` + `s3:GetObject` on `erickaldama-mail-raw` |
+| `mail-sender` | `ses:SendRawEmail` on the identity ARN + `mail-config` configuration set |
+
+SES is still in sandbox (200/day). The client handles sandbox rejections via a typed
+`ErrSandboxRecipient` sentinel — no string-match error silencing.
+
+The **AI dual-backend** is the differentiating piece: Ollama local (`qwen3:32b`) is the safe default —
+the mail corpus never leaves the Mac; Claude API (`claude-opus-4-8`, adaptive thinking) is opt-in with
+an explicit on-screen warning. Both share the same agent-loop with read-only tools (summarize, draft,
+triage) — no send tool in the agent path.
+
+Full build and deploy history, including the 3 live-deploy incidents and the end-to-end verification, is
+in **[`docs/SP-4-DEPLOY.md`](docs/SP-4-DEPLOY.md)** and **[`CHANGELOG.md`](CHANGELOG.md)**.
+
+**`CdStack` (CD pipeline)** — the fifth stack, deployed 2026-06-24 (PR #6, merged to develop at 95ce3a3):
+
+```
+CdStack
+  AWS::IAM::OIDCProvider  GithubOidc   — token.actions.githubusercontent.com (L1, 0 Lambda, 0 custom-resource)
+  AWS::IAM::Role          mail-cd-diff — trust sub=…:pull_request → sts:AssumeRole on lookup-role only
+  AWS::IAM::Role          mail-cd-deploy — trust sub=…:environment:production → sts:AssumeRole on 4 cdk-* roles
+  Both roles carry boundary erickaldama-boundary
+```
+
+Workflow `.github/workflows/cd.yml` automates future deploys: `diff` job runs `cdk diff` on every PR and
+comments the result; `deploy` job runs `cdk deploy --all` on every push to `main`, gated behind the GitHub
+Environment `production` (required reviewer: esaldgut) and the OIDC trust `StringEquals` — two independent
+human-approval layers. The first real run of `diff` verified the full OIDC flow end-to-end (PR #6 received
+the bot comment with the CDK diff). Four deploy findings captured during bootstrap — see
+**[`docs/CD-DEPLOY.md`](docs/CD-DEPLOY.md)** (§11) and **[`docs/architecture.md`](docs/architecture.md)**
+(§ CD pipeline) for details.
 
 ### Why this is the interesting part
 
 Every mutation is human-executed out-of-band with SSO Admin; the agent works only as `mail-readonly`
-and a `PreToolUse` hook (SP-0) mechanically blocks any non-CDK-Go write. Two of the three deploys
-failed first — and the failures are documented as findings, not hidden. The discipline on display:
-adversarial audit before implementing, real-output verification before declaring done (a green deploy
-is not a verified one — DKIM is asynchronous), and productivizing every real-deploy lesson.
+and a `PreToolUse` hook (SP-0) mechanically blocks any non-CDK-Go write. Across five subprojects, twelve
+real-deploy findings were recorded — not hidden — including failures that the adversarial audit did not
+anticipate (a permissions boundary that intersects the exec-policy, a receipt rule set with no
+declarative "active" field, two Lambda field traps that `go build` accepts but `go vet` rejects, a CDK
+CLI npm version scheme that is entirely separate from the Go library version, and a `cdk diff --all` flag
+that does not exist in CLI 2.1xxx). The discipline on display: adversarial audit before implementing
+(agents that *compile* the CDK against the live version, not just read docs), real-output verification
+before declaring done (a green deploy is not a verified one — DKIM is asynchronous and the SP-3 "bug
+reports" turned out to be a confirmed pipeline plus a missing click), and productivizing every
+real-deploy lesson into memories, skills, and this repo.
 
 ## Ecosystem
 

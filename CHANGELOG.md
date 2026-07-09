@@ -1,0 +1,860 @@
+# Changelog
+
+Historia de la construcción del sistema de correo `erickaldama.com` — envío y recepción sobre AWS SES,
+provisionado **íntegramente con AWS CDK en Go**, consumido por un cliente terminal-native Go (CLI + TUI + agente AI).
+
+Este changelog es **orgánico**: narra la evolución real, las decisiones de arquitectura, y los hallazgos que solo
+aparecieron al desplegar contra AWS de verdad — no un volcado de commits. El proyecto se construyó como cadena de
+subproyectos (SP-0 → SP-4), cada uno con su ciclo **brainstorm → spec → auditoría adversarial → plan → ejecución
+subagent-driven → deploy verificado en vivo**. El formato se inspira en [Keep a Changelog](https://keepachangelog.com).
+
+Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (`main`/`rc`/`develop` protegidos).
+
+---
+
+## [mail v0.7] — FTS5 en las tools del agente AI — 2026-07-05
+
+v0.5 construyó un cache local SQLite+FTS5 que acelera `mail ls` y habilita búsqueda full-text rankeada
+para `mail search` y el filtro `/` de la TUI — pero dejó una inconsistencia documentada y diferida
+(§8(d) de `docs/v0.5-CACHE.md`): la tool de búsqueda del agente AI (`search_subject`) seguía haciendo un
+scan de substring en memoria sobre `Subject`, trayendo headers en vivo de DynamoDB en cada llamada, sin
+tocar el índice FTS5 que ya existía a un `cache.Search` de distancia. El agente AI veía resultados que
+podían rankear/matchear distinto a `mail search` para la misma query — la única superficie de búsqueda
+del cliente que no se beneficiaba del cache. v0.7 cierra esa brecha.
+
+### Added
+
+- **Tool `search_messages`** (rename de `search_subject`, `internal/aiassist/tools.go`) — busca sobre
+  **sender + subject** (antes solo subject), con `Description` que promete "full-text, ranked best-first,
+  prefix match". El clamp `limit` a `[1, 1000]` en `execTool` protege contra un LLM enviando un valor
+  fuera de rango.
+- **`Searcher` interface + `fallbackSearcher` composite** (`internal/aiassist/search.go`) — dos backends:
+  `substringSearcher` (el comportamiento histórico, ahora solo fallback, envuelve el `Reader` en vivo) y
+  el compuesto `fallbackSearcher`, que intenta FTS5 (`cache.Search`, inyectado como closure) y cae a
+  substring **solo** si el backend FTS es `nil` o devuelve un error real de infraestructura — nunca ante
+  `0` resultados sin error (regla **AR-1**, "nunca ciego, nunca mal-disparado"). `NewFallbackSearcher(c,
+  r)` es nil-safe: `c == nil` deja el closure FTS en `nil` y el compuesto usa siempre substring.
+- **El wire de `mail ai agent`** (`cmd/mail/main.go`) abre el cache best-effort, lo sincroniza, y decide
+  FTS-vs-substring según el **estado real del índice**, no según cuántas filas trajo la sincronización de
+  esta invocación — ver el hallazgo H8-SYNC-N-1 abajo.
+
+### Los hallazgos de la auditoría en capas (cada uno invisible a la capa de arriba/abajo)
+
+- **F3 — auditoría del plan** (compila contra el código real antes de ejecutar): un **CRIT** de shadowing
+  — el parámetro `mailbox` de `Searcher.Search`/`substringSearcher.Search` sombreaba el paquete
+  `erickaldama-mail/internal/mailbox`, rompiendo cualquier referencia a `mailbox.Header` dentro del
+  cuerpo del método (renombrado a `mb`). Un **MAYOR**: sin clamp, un `limit` enorme enviado por el LLM
+  desbordaba `int32(limit)` a negativo en `substringSearcher` → se agregó el clamp a 1000 en `execTool`.
+
+- **F4 — auditoría 6-ejes por-tarea, hallazgo H8-SYNC-N-1 (MAYOR):** `cache.Sync` devuelve
+  `n = len(hs)` — las filas traídas de DynamoDB **en esta llamada**, NO el tamaño del índice SQLite ya
+  existente. El primer guard del wire era `if serr != nil && n == 0 { substring } else { FTS }`. Un
+  índice **tibio** (filas indexadas por una sincronización exitosa anterior) combinado con un `r.List`
+  que falla en esta llamada produce `Sync → (0, err)` → `n == 0` → el guard tomaba la rama de substring,
+  **descartando un índice FTS perfectamente usable** — contradiciendo el propio comentario del código
+  ("un índice no vacío con Sync fallido usa FTS, obsoleto-pero-usable"). Fix: en vez de confiar en `n`,
+  cuando `Sync` falla se prueba el **estado real** con `ca.List(mb, 1)` — "¿tiene esta mailbox ≥1 fila
+  indexada?". Si sí → FTS (obsoleto-pero-usable); si no → substring. Nota meta: la primera corrección
+  que propuso el propio ciclo de auditoría era un guard "fail-open" que habría **reintroducido la
+  ceguera de cold-start** (usar FTS incluso con el índice genuinamente vacío) — se verificó esa
+  sugerencia contra el código real antes de aplicarla y se descartó a favor del probe explícito.
+  "Validar, no confiar — incluso al revisor" (la misma disciplina que cazó defectos de reviewers en v0.6).
+
+- **F5 — revisión de rama completa (ojos frescos):** un **IMPORTANT** cross-package invisible a las
+  revisiones por-tarea — los dos backends de `Searcher` no coincidían en qué significa "buscar". El
+  índice FTS cubre `sender`+`subject` (esquema `fts5(sender, subject)` de v0.5) y la tool promete
+  "sender or subject", pero `substringSearcher` matcheaba **solo Subject** (nunca From); y con query
+  vacía, FTS no matchea nada mientras que substring matchea **todo**
+  (`strings.Contains(x, "")` es siempre `true` en Go). Causa raíz: el rename `search_subject` →
+  `search_messages` amplió el contrato de la tool, pero solo el lado FTS lo cumplía de verdad. Fix
+  (commit `51a3c67`): `substringSearcher` ahora matchea From **o** Subject, y query vacía devuelve `nil`
+  en vez de todo el listado.
+
+### Smoke E2E — 2 capas, contra el sistema real (la parte más valiosa de esta entrega)
+
+Corrido contra la cuenta AWS real `367707589526` (perfil `mail-client-read`) con un cache FTS5 tibio y
+el backend local Ollama corriendo **`qwen2.5:7b`** — no el modelo por defecto del cliente (`qwen3:32b`),
+pasado explícito con `--agent-model qwen2.5:7b`.
+
+- **Layer 1** (harness determinístico sobre el `Searcher` real, no un mock): match de subject; **prefix
+  match** confirmado (una query corta encontró un subject con un token más largo del mismo prefijo — es
+  FTS5 prefix, no substring plano); **paridad sender+subject** confirmada sobre el índice real (el fix de
+  F5 funciona en producción, no solo en el test unitario); semántica AND (2 términos que no debían
+  matchear → 0); query vacía → 0.
+- **Layer 2** (loop LLM real): `mail ai agent "<goal>"` → qwen invocó `search_messages` → FTS5 resolvió →
+  respuesta en lenguaje natural correcta.
+
+### Deploy finding — qwen inventa operadores estilo Gmail (solo un smoke real con un LLM real lo revela)
+
+Al pedirle al agente que buscara correo por remitente, `qwen2.5:7b` invocó `search_messages` con
+`query="from:amazon"` — inventando un operador de campo estilo Gmail (`from:`) que la tool no soporta ni
+documenta. FTS5 buscó el término literal `"from:amazon"` (los dos puntos no son operador para SQLite
+FTS5) → 0 hits.
+
+**No es un bug de v0.7:** re-ejecutando el mismo goal con una query limpia (`query="amazon"`, sin el
+prefijo inventado) el mismo índice devolvió 3 hits con los subjects correctos. El código funciona — el
+modelo local asumió una sintaxis de operadores que la tool nunca prometió.
+
+**AR-1 se sostuvo correctamente:** `0` resultados **sin error** es una respuesta válida (§ arriba) — no
+hubo fallback espurio a substring (que tampoco habría encontrado nada buscando el string literal
+`"from:amazon"`). El agente reportó honestamente "sin coincidencias" en vez de fallar o inventar una
+respuesta. El invariante nunca-ciego-nunca-mal-disparado se comportó exactamente como se diseñó, incluso
+frente a un input que el diseño no anticipó — la evidencia de por qué un smoke E2E con un LLM real
+revela clases de hallazgo que ningún test unitario puede simular.
+
+**Mitigación diferida (deuda registrada, no bloqueante):** el `Description` de `search_messages` podría
+declarar explícitamente "solo términos simples, sin operadores `from:`/`subject:`"; o el wire podría
+despojar prefijos de operador conocidos antes de pasar la query a FTS5. Es un ajuste de comportamiento de
+modelo, no una corrección de código — el fallback ya garantiza que el peor caso es "0 resultados
+honestos".
+
+### Fast-follows registrados (no bloquean)
+
+- **PATRON-1** (MENOR) — el árbol `DefaultPath→Open→Sync` es ahora una 4ª copia parcial entre `mail ls` /
+  `mail search` / `mail ai agent`. Candidato de refactor: extraer un helper compartido.
+- **BP-1** (MENOR) — el clamp `[1, 1000]` de `limit` lo aplica el caller (`execTool`) por convención, no
+  `substringSearcher` mismo — oportunidad de defensa en profundidad diferida (un solo caller hoy).
+
+### Invariante preservado
+
+`TestReadMessageRedactsBody` sigue intacto: el body crudo de `read_message` se redacta antes de
+reingresar al loop del agente. La nueva superficie de `search_messages` expone solo headers
+(From/Subject) como JSON — idéntico a `search_subject` en ese aspecto — nunca el cuerpo del mensaje.
+
+---
+
+## [mail v0.6] — Render de enlaces del correo (OSC 8 + lista al pie) — 2026-07-04
+
+En el smoke de v0.5.1 el usuario notó algo "medio raro": en correo de marketing, una URL de tracking de ~200
+caracteres dentro de un `<a href>` se renderizaba inline y ahogaba el texto legible — medido, 1 link = 4 líneas
+= 40% del render, y glamour excedía el ancho (108 cols con `WithWordWrap(80)`) al partir el token no-rompible.
+v0.6 lo arregla: el enlace se muestra como **texto clicable vía OSC 8** (hyperlink de terminal, con la URL
+oculta del cuerpo) y una **lista numerada al pie** (`─── Enlaces ───`) con las URLs completas — respaldo
+universal que preserva el destino incluso donde OSC 8 no se renderiza (un pipe, un terminal viejo, Terminal.app).
+
+Construida con `subproject-delivery-canonical` (6º fogueo). Lo notable de esta capa **no es el feature — es la
+metodología de auditoría en capas probándose a sí misma**: 8 clases distintas de defecto, cada una cazada por
+una capa de review diferente e **invisible a las demás**, todas verificadas por el controlador con prueba
+binaria propia antes de corregir. Es la mejor evidencia del proyecto de por qué las capas de review no son
+redundantes.
+
+### Added
+
+- **Render de enlaces OSC 8 + footer** en la TUI y el CLI `--rich`. Los `<a href>` http/https se vuelven texto
+  clicable; el resto (`mailto:`, protocol-relative, relativos, `#`, vacío) queda como texto plano. Dedup por
+  href (la misma URL 2× en el cuerpo → una sola entrada de footer). Cap de 500 links (un `.eml` hostil con
+  100k `<a>` no congela el render); a partir de ahí, texto plano + nota `[…] (+N enlaces más)`.
+- **Arquitectura de 3 fases** en `internal/message` (firma de `RenderRich` intacta, los 5 call sites no cambian):
+  - **Fase A** — rule custom de htmltomd sobre `<a>` que emite un **sentinel private-use** `U+E000-E002` (opaco
+    a goldmark) + acumulador con dedup + filtro de esquema. El marcador `[n]`+`[n]:` NO se puede usar: es
+    reference-link de CommonMark y goldmark re-inlinea la URL. El marcador `(n)` va DENTRO del texto del sentinel
+    (pre-glamour) para que glamour lo cuente en el word-wrap.
+  - **Fase C** — pre-wrap defensivo línea-por-línea (`strings.Split("\n")`, NO `strings.Fields` que colapsaría
+    la estructura), para tokens no-rompibles residuales.
+  - **Fase B** — post-glamour: materializa el sentinel → OSC 8 (`x/ansi.SetHyperlink`, scan close-first O(n)) +
+    construye el footer FUERA de glamour (que overflowea las URLs largas a 222 cols), con hard-split a width.
+- **Defensa de inyección de terminal en 2 capas** (el correo es contenido NO confiable):
+  `stripDangerousControls` PRE-glamour (agresivo — borra todo byte de control de text nodes y atributos, porque
+  a esa altura no hay ANSI legítimo que preservar) + `sanitizeTerminalOutput` POST-glamour (preserva el SGR/OSC8
+  legítimo de glamour). El plain-text path (`TextHTML==""`) también sanea con el strip agresivo.
+- `x/ansi` y `goquery` promovidos de indirect a directas en `go.mod`. 13 invariantes (8 LNK funcionales + 5
+  LNK-SEC de seguridad), cada guard con un test de mutación **con dientes** (probado revirtiendo el guard → el
+  test falla).
+
+### Hallazgos de la auditoría en capas (8 clases, cada una invisible a la capa de abajo)
+
+La substancia de esta entrega. Cada capa cazó una clase de defecto que las otras estructuralmente no podían ver:
+
+- **F2 spec-audit** (compila contra libs vivas) — 2 supuestos FALSOS del spec del controlador: (a) "mailto no
+  sobrevive bluemonday" era falso (mailto Y protocol-relative SÍ sobreviven en `<a href>` — el
+  `AllowURLSchemes("cid")` gobierna `img.src`, no `<a>`); (b) "envolver el footer en inline-code evita el
+  overflow" era falso (evita el doble-render, no el overflow → footer FUERA de glamour).
+- **F3 plan-audit** (audita el CÓDIGO del plan, no el spec) — 3 CRIT/MAYOR: (a) **spoof de hyperlink OSC 8** vía
+  sentinel forjado con entidad HTML `&#xE000;` en texto fuera de `<a>` (bluemonday la decodifica a PUA cruda) →
+  strip global pre-htmltomd sobre el DOM; (b) **H1** `strings.Fields` colapsaba la estructura del cuerpo (8
+  newlines → 0) → pre-wrap línea-por-línea; (c) **H2** el marcador `(n)` post-glamour desbordaba el width angosto
+  → marcador dentro del sentinel. Además, ejecutar el código consolidado del plan antes de F4 reveló 2
+  correcciones que la auditoría NO vio: `collapseInternalWrap` era ACTIVAMENTE incorrecto (re-unía el wrap de
+  glamour → overflow 105; la corrección es NO colapsar, el span OSC 8 multi-línea es válido) y bluemonday
+  minúsculiza el esquema (`HTTP://`→`http://`).
+- **F4 6-ejes por-tarea** — 3 hallazgos: (a) **CRIT O(n²) DoS** en el scan de sentinel malformado (un `.eml`
+  hostil con OPENs forjados congela el render síncrono; benchmark ×3.8 por duplicación de input → close-first
+  O(n), ~3400× más rápido); (b) **MAYOR ANSI-injection** — un ESC crudo en el texto del correo llegaba a la
+  terminal (leak PRE-EXISTENTE desde v0.3, general a todo el body; se arregló la CLASE con `sanitizeTerminalOutput`,
+  no solo el síntoma del link); (c) **CRIT test de mutación TAUTOLÓGICO** — un test que decía cubrir el strip de
+  sentinel forjado pasaba con el guard revertido (su input no tenía ningún sentinel forjado) → payload real +
+  dientes probados por experimento de mutación.
+- **F5 whole-branch review** (rama completa, ojos frescos) — **CRIT forja de OSC 8 por COMPOSICIÓN**: los fixes
+  por-tarea eran localmente correctos, pero su interacción dejaba abierto el vector `ESC]` — `sanitizeTerminalOutput`
+  preserva OSC 8 por diseño (no puede distinguir la forjada de la de glamour), así que un `&#x1b;]8;;evil.example&#x07;`
+  en el texto del link producía un hyperlink spoofeado a la URL del atacante, ausente del footer. Solo emerge
+  viendo la rama entera. Fix: el strip agresivo pre-glamour cierra los introductores OSC antes de que glamour corra.
+- **F6 external PR review** (agente que NO construyó, alimentado con `gh pr diff`) — **MAYOR sink de plain-text
+  (LNK-S1)**: el early-return `if src == "" { return p.TextPlain }` de `RenderRich` se saltaba TODO el saneo. Para
+  un correo plain-text-only (común), un OSC 8 forjado o un `\x1b[2J` (borra-pantalla) en el cuerpo plano llegaba a
+  la terminal. Punto ciego del CONSTRUCTOR — el modelo mental decía "mi sanitizer es el paso final", pero el
+  early-return está ARRIBA. Un revisor sin contexto lo trazó en minutos.
+
+### Meta-lecciones (persistidas como agent skills reutilizables)
+
+- **La auditoría en capas caza clases DISTINTAS de defecto** — cada capa (spec/plan/per-task/whole-branch/external)
+  ve un tipo que las otras estructuralmente no pueden. Saltar una capa no ahorra trabajo; deja una clase entera sin
+  cazar. → skill `layered-audit-catches-distinct-defect-classes`.
+- **Un test de mutación DEBE tener dientes** — verificar SIEMPRE con un experimento de mutación (revertir el guard →
+  el test debe fallar → `git checkout` restaurar → confirmar hash == HEAD). Un test tautológico da falsa confianza,
+  peor que ninguno. → skill `mutation-test-must-have-teeth`.
+- **Validar, no confiar — también al revisor.** Dos prescripciones de reviewers eran sutilmente falsas
+  (`collapseInternalWrap` en F5, `sanitizeTerminalOutput` vs el correcto `stripDangerousControls` en F6); ambas
+  cazadas ejecutando el fix propuesto antes de aceptarlo.
+
+### Smoke E2E — verde
+
+Contra el stack real del usuario (iTerm2 + tmux 3.7b con `set -ga terminal-features "*:hyperlinks"`): **clic OSC 8
+confirmado visualmente** (el navegador abrió la URL). Footer visible correcto (dedup, URL íntegra hard-split,
+`mailto` como texto plano sin entrada de footer). Se documentó el confound del harness de captura: el `!`-command
+de la sesión muestra `]8;;` literal porque captura stdout, pero el escape sí llega a la TTY (probado clicando).
+
+### Fast-follows registrados (no bloquean; en el PR #16)
+
+- **LNK-S2** — URLs bare-text (fuera de `<a>`) las auto-linkifica goldmark DUPLICÁNDOLAS inline (comportamiento
+  pre-existente de glamour, benigno). Fuera de alcance de v0.6; candidato: desactivar la extensión autolink.
+- **D2** — los error-returns de `stripSentinelsFromHTML` (`html.Parse`/`Render`) son inalcanzables en práctica.
+- **P1** — `stripSentinelsFromHTML` es un 3er parse HTML del cuerpo (tradeoff SRP consciente; O(n), ~295ms en 2MB).
+
+---
+
+## [mail v0.5.1] — Fix del reader vacío + refresh de la TUI — 2026-07-02
+
+Mejoras de la TUI que el smoke E2E de v0.5 destapó al usarla contra correo real. Antes de cerrar, una auditoría
+exhaustiva de 3 agentes (diagnóstico de bug + robustez + elegancia) cazó un CRITICAL adicional (C-1) que ningún
+smoke corto revelaba.
+
+### Fixed
+
+- **Reader pane vacío tras filtrar (regresión de v0.5).** Al aplicar/limpiar el filtro `/` — o cuando un
+  re-sync traía un correo nuevo que quedaba seleccionado — el panel derecho se quedaba en blanco. Causa:
+  `applyFilter` reconstruye la lista y restaura la selección por S3Key, pero **no disparaba la carga del
+  body** del elemento recién seleccionado; solo el cambio de selección por tecla y el primer resize lo hacían.
+  El filtro nativo de v0.4 no reconstruía la lista, así que este camino no existía antes. Fix: se extrajo el
+  tick de debounce a un helper `scheduleLoad(key)` (elimina la triplicación en los 3 call-sites) y `applyFilter`
+  lo llama tras restaurar la selección. Test de regresión `TestApplyFilterLoadsSelectedBody` (search + clear).
+
+- **[CRITICAL C-1] Fuga de `inflight` → refresh muerto para toda la sesión.** El handler de `bodyLoadedMsg`
+  descartaba un load con generación obsoleta (`return m, nil`) **sin decrementar el contador `inflight`**. Dos
+  cargas de body superpuestas — trivial de provocar navegando rápido entre correos cuando la latencia de S3
+  excede el intervalo entre teclas — dejaban `inflight` sin volver a 0. Como `canRefresh()` exige `inflight==0`,
+  el refresh (manual y automático) quedaba **permanentemente inhabilitado** el resto de la sesión, con el spinner
+  atascado. La auditoría lo cazó comparando con `imagesRenderedMsg`, que ya hacía lo correcto (decrementar
+  ANTES de chequear la generación) y tenía test; `bodyLoadedMsg` era la anomalía sin cobertura. Fix: replicar
+  ese patrón. Test guardián `TestStaleBodyLoadReleasesInflight` (habría fallado sin el fix). Nota: v0.5.1 elevó
+  este defecto de cosmético (spinner) a funcional (refresh muerto) al introducir la dependencia `inflight==0`.
+
+- **Carga inicial del body resiliente al timing.** El auto-load del reader al arrancar dependía de un gate
+  `firstResize` de un solo disparo; un timing async podía perderlo, dejando el reader vacío hasta que el usuario
+  movía la selección (síntoma reportado). Un diagnóstico exhaustivo descartó las 5 hipótesis de causa raíz con
+  tests (la lógica del flujo de mensajes es correcta en cada capa verificable), así que el fix no persigue la
+  causa exacta sino que hace el load robusto: se re-agenda en **cualquier** resize mientras el reader siga vacío
+  y no haya carga en vuelo, y un refresh también recupera un load perdido. Auto-cura sin recarga perpetua.
+
+### Refactored
+
+- **`rebuildList(hs)` extraído.** El patrón "reconstruir la lista + restaurar selección por S3Key" estaba
+  duplicado letra por letra entre `applyFilter` y el handler de `refreshDoneMsg` — un solo punto de verdad ahora.
+- El handler de la tecla `g` reusa `canRefresh()` en vez de duplicar el guard, para que las dos comprobaciones
+  de "¿puedo refrescar?" no diverjan.
+
+### Added
+
+- **Refresh de la TUI — manual (`g`) + automático (30 s).** La TUI solo sincronizaba con DynamoDB al arrancar;
+  para ver correo nuevo había que salir y re-entrar. Ahora:
+  - Tecla **`g`**: refresh manual inmediato (Sync + recarga) con spinner.
+  - **Auto-refresh cada 30 s** vía `tea.Tick`. El loop se auto-perpetúa — cada tick re-arma el siguiente, así
+    que pausar un refresh nunca mata el loop, solo salta ese round.
+  - **Pausas** (skip del round): mientras filtras (`/`), mientras compones, y con una carga de body en vuelo
+    (`inflight > 0`) — el refresh nunca arranca la lista de debajo de una interacción activa (`canRefresh`).
+  - **Selección preservada por S3Key (B-1):** el correo nuevo aparece arriba pero no te mueve ni cambia el
+    reader — no interrumpe la lectura.
+  - El contador `inflight` se balancea con un flag `manual` en `refreshDoneMsg`: solo el path manual
+    incrementa/decrementa, así que auto y manual no corrompen el contador mutuamente.
+  - El footer de la lista anuncia `g refrescar`.
+  - Tests: `TestCanRefreshPauseRules`, `TestRefreshTickAlwaysRearms`, `TestRefreshDonePreservesSelectionByS3Key`.
+
+---
+
+## [mail v0.5] — Cache local SQLite+FTS5, búsqueda, hora+s3Key — 2026-07-02
+
+Tercera capa de la serie de cliente (v0.3 render → v0.4 TUI → **v0.5 cache**): un cache local descartable que
+acelera `mail ls` sirviendo headers desde SQLite en vez de golpear DynamoDB en cada invocación, habilita búsqueda
+full-text local (`mail search` + el filtro `/` de la TUI), y resuelve dos puntos de dolor de display arrastrados
+desde v0.2: el listado solo mostraba fecha (no hora → correos del mismo día indistinguibles) y nunca mostraba el
+s3Key (había que re-listar con `--json` o inspeccionar para conseguir el identificador que `mail read <s3Key>`
+necesita). DynamoDB sigue siendo la fuente de verdad — el cache se reconstruye borrándolo, sin pérdida de datos.
+
+### Added
+
+- **`internal/cache`** — paquete nuevo, decorador de `mailbox.Reader`: `Open`/`Close` (SQLite en
+  `~/.cache/erickaldama-mail/index.sqlite`, respeta `$XDG_CACHE_HOME`), `Sync` (DynamoDB → SQLite, upsert +
+  FTS explícito), `List`/`Search` (newest-first / FTS5 `MATCH ... ORDER BY rank`). Los call-sites (`mail ls`,
+  `mail-tui`) abren el cache y sincronizan antes de leer; si `Open`/`Sync` fallan, caen de vuelta a
+  `reader.List` directo — el cache nunca bloquea el flujo, es puramente una optimización.
+
+- **Esquema contentless sin triggers** (`internal/cache/schema.go`) — tabla `headers` (rowid INTEGER PK
+  explícito, `s3Key UNIQUE` como clave de conflicto del upsert, `pk`/`sk`/`messageId`/`sender`/`subject`/`date`)
+  + `headers_fts` FTS5 `content=''` (contentless) + `sync_state` (mailbox → `last_sk`/`synced_at`, preparado
+  para un incremental futuro). El índice `idx_headers_mailbox(pk, sk DESC)` sirve el `List` newest-first sin scan.
+
+- **`mail search <query>`** (subcomando nuevo, no un flag de `ls` — más descubrible, espacio propio para
+  `--mailbox`/`--limit`/`--json`) — full-text sobre `sender`+`subject` vía `headers_fts MATCH`, reusa
+  `renderList` así que la salida trae hora+s3Key igual que `ls`. A diferencia de `ls`, `search` no tiene
+  equivalente "vivo": el FTS solo existe en el cache local, así que un fallo de `cache.Open` aborta el comando
+  en vez de degradar.
+
+- **`EscapeFTS(q string) string`** (`internal/cache/escape.go`) — envuelve el query del usuario en comillas
+  dobles y duplica cualquier `"` interna, neutralizando `AND`/`OR`/`NOT`/`NEAR` como operadores FTS5 y
+  caracteres especiales. Compartida por el CLI (`mail search`) y la TUI (filtro `/`) — una sola función, un
+  solo test, cero duplicación. Añade un `*` **fuera** de la comilla de cierre (`"transfer"*`, sqlite.org/fts5.html
+  §3.3) para habilitar **prefix match del último token** — `transfer` matchea `transferencia` — sin sacrificar la
+  neutralización de operadores. El string vacío se devuelve como `""` sin `*` (el filtro TUI al limpiarse).
+
+- **`FormatDate(raw string) string`** (`internal/cache/format.go`) — reemplaza a `shortDate` de v0.4:
+  `"2006-01-02 15:04"` (ISO-like, ordenable, 24h, hora local) en vez de `"2 Jan 2006"`. Misma tolerancia
+  multi-layout (RFC1123Z/RFC1123/RFC822Z/RFC822/RFC3339), mismo fallback al string crudo si no parsea.
+  Compartida por `cmd/mail` y `cmd/mail-tui` — un único punto de formato de fecha en todo el cliente.
+
+- **`mail ls` con hora+s3Key** (`cmd/mail/main.go renderList`) — la columna `Date` pasa de fecha-sola a
+  `FormatDate` (fecha+hora); se añade el `s3Key` como columna final (para copiar directo a `mail read <s3Key>`,
+  vía el copy-mode de tmux — el cliente no añade clipboard propio). `--json` ya serializaba el struct completo;
+  el cambio es solo en la salida tabular humana.
+
+- **TUI: ítem de 3 líneas + filtro FTS5** (`cmd/mail-tui/listitem.go`, `model.go`) — el `DefaultDelegate` de
+  bubbles/list solo da 2 líneas (Title/Description); se escribió un `itemDelegate` propio (`Height()==3`) que
+  añade una 3ª línea con el s3Key en estilo faint (tenue, menor énfasis, visible pero no protagonista). La
+  Description pasa a usar `FormatDate` (fecha+hora, la misma función del CLI). El filtro `/` deja de ser fuzzy
+  en memoria (`sahilm/fuzzy` sobre los items ya cargados) y pasa a consultar `cache.Search` — mismo ranking que
+  `mail search`, sobre el histórico completo del cache, no solo la página cargada en memoria.
+
+### Decisión de diseño que distingue esta versión: contentless sin triggers
+
+El research previo (F0) había dejado NO VERIFICADO si un `INSERT ... ON CONFLICT DO UPDATE` dispara los
+triggers `AFTER INSERT`/`AFTER UPDATE` que un esquema *external-content* necesitaría para mantener el FTS5
+sincronizado automáticamente. En vez de apostar a ese comportamiento no verificado (y arriesgar corrupción
+silenciosa del índice si no dispara), el spec invirtió la elección del research hacia **contentless sin
+triggers**: Go sincroniza el índice FTS explícitamente, dentro de la misma transacción del upsert.
+
+Esa inversión destapó un segundo hallazgo, verificado empíricamente en la auditoría del plan: una tabla FTS5
+contentless **rechaza `DELETE FROM ... WHERE rowid`** (`cannot DELETE from contentless fts5 table`). Reemplazar
+la entrada de un s3Key existente exige el comando especial `'delete'`, y ese comando **requiere los valores
+VIEJOS** actualmente indexados (`sqlite.org/fts5.html` §6.3: los valores insertados en las demás columnas deben
+coincidir con lo que FTS5 tiene almacenado). El flujo de `Sync` quedó así: leer `sender`/`subject` VIEJOS del
+s3Key (si existía) → `INSERT INTO headers_fts(headers_fts, rowid, sender, subject) VALUES('delete', ...)` con
+esos valores viejos → upsert de `headers` con `RETURNING rowid` → `INSERT INTO headers_fts(rowid, sender,
+subject)` con los valores nuevos. El test `TestSyncMutationDoesNotLeaveStaleFTS` es el guardián de este
+invariante — una regresión que reintroduzca un `DELETE FROM headers_fts` directo rompe el build en CI, no en
+producción.
+
+`SyncPageLimit = 500` es un tope fijo, deliberadamente independiente del flag `--count` del CLI: `Sync` siempre
+puebla con las últimas 500 filas de DynamoDB; `--count`/`--limit` solo acotan cuántas filas se **muestran**
+(`List`/`Search LIMIT`). Pasar `count` a `Sync` habría hecho que `mail search` solo buscara en el subconjunto
+reciente que el usuario pidió ver la última vez — un bug de superficie de búsqueda silenciosamente incompleta.
+
+### Dependencia
+
+`modernc.org/sqlite v1.53.0` (SQLite embebido 3.53.2, FTS5 out-of-the-box sin build tag, CGO-free) — la primera
+dependencia de persistencia local del cliente. Trae 7 indirectas nuevas: `modernc.org/libc`, `modernc.org/mathutil`,
+`modernc.org/memory`, `github.com/ncruces/go-strftime`, `github.com/dustin/go-humanize`, `github.com/google/uuid`,
+`github.com/remyoudompheng/bigfft`. Total del módulo tras `go mod tidy`: ~45 dependencias. Driver registrado como
+`"sqlite"` (NO `"sqlite3"`) — `sql.Open("sqlite", dsn)`.
+
+### Hallazgos de auditoría que importaron
+
+**Permisos del archivo + sidecars WAL:** SQLite no controla permisos de archivo — los hereda del umask del
+proceso al crearlo. El cache guarda datos de correo (sender/subject), así que `Open` crea el archivo con
+`os.OpenFile(..., 0o600)` **antes** de que SQLite lo abra, y refuerza con `os.Chmod` por si el archivo ya
+existía con permisos más laxos. El modo WAL crea sidecars `-wal`/`-shm` que también contienen páginas de
+headers sin checkpoint — se les aplica el mismo `0o600` (best-effort, tolerando `ENOENT` si aún no existen).
+El directorio contenedor es `0700`.
+
+**`SetMaxOpenConns(1)` + `busy_timeout=5000` + `synchronous=NORMAL`:** el cache es de un solo proceso pero
+puede abrirse desde el CLI y la TUI casi simultáneamente (o dos invocaciones de CLI en paralelo). En vez de
+confiar en el silencio de la documentación del driver sobre concurrencia, se fuerza una sola conexión —
+serializa el acceso dentro del proceso — y `busy_timeout=5000` hace que cualquier lock de otro proceso se
+resuelva con espera-y-reintento (hasta 5s) en vez de un `SQLITE_BUSY` inmediato. `synchronous=NORMAL` acepta
+una pérdida de durabilidad ante corte de energía — irrelevante porque el cache es descartable por diseño.
+
+---
+
+## [mail v0.4] — TUI estética (2 paneles) — 2026-06-30
+
+Layout fluido de dos paneles vivos (lista izquierda + reader derecha) con focus alternador por **Tab**, reemplazando
+la arquitectura de 3 pantallas alternadas de v0.3. El reader es un viewport real de bubbles/viewport.Model con scroll
+pixel-perfect. La lista incorpora bubbles/list nativa con filtro fuzzy (`/`) y DefaultDelegate de renderizado. Spinner
+async (bubbles/spinner) durante cargas de S3. Tipografía: bordes AdaptiveColor de lipgloss, foco resaltado con color
+de acento, ancho real del terminal respetado (auditoría C1/C2 evitó overflow).
+
+### Added
+
+- **Layout 2-paneles LTR** — lipgloss.JoinHorizontal con bordes Ascii (AdaptiveColor), distancia proporcional
+  (33/67 del ancho del terminal). El foco visible alterna entre lista y reader sin redraw costoso — solo un flag
+  booleano `m.focused`.
+
+- **Viewport pager** — bubbles/viewport.Model con scroll suave (línea por línea, en el reader) y goto-top (`Home`).
+  Constructor personalizado `NewViewportReader` calibra alto como `height - 3` (input + separador + status).
+
+- **Filtro fuzzy nativo** (`sahilm/fuzzy`) — integración en bubbles/list — al presionar `/`, la lista entra en
+  modo filter. El FilterValue de messageItem es `From + Subject` (búsqueda por remitente o tema). La lista regenera
+  el índice al cambiar los items (audit B-1 trigger-stale: `Index()` se envenenaba si se abría el filtro con
+  headers[] viejo — FIJO: ahora la lista se regenera con `SetItems()` tras cargar).
+
+- **Spinner async** — bubbles/spinner durante `loadingBody` (`m.inflight > 0`). Cuando el user navega la lista,
+  la carga del correo es async (S3), y el spinner gira sin bloquear. Al llegar el body, el mensaje de tipo
+  `bodyLoadedMsg` dispara el render.
+
+- **Row state + debounce de nav** — auditoría C-debounce reveló un N+1 contra S3: navegar rápidamente por la lista
+  disparaba una carga por *cada* posición. Fix: debounce de 150ms (`tea.Tick`) antes de disparar el loadBody CMD.
+  El invariante es: solo UN loadBody en vuelo a la vez (`m.inflight == 1`).
+
+### Hallazgos de auditoría (portfolio evidence)
+
+**Spec-Audit (A-4 race, B-1 trigger, C1/C2 layout):**
+
+- **A-4 race stale-async** — Un body viejo (S3 key anterior) llegaba 50ms después de que el user saltaba a un
+  correo nuevo. El reader se sobrescribía con contenido stale. Caso: tabletop carga inbound/ABC, navega a inbound/DEF,
+  y 50ms después llega la respuesta de /ABC. Fix: la carga ahora incluye el `s3key` en el `bodyLoadedMsg`; el
+  update() descarta si no coincide con `m.currentKey`. Audit verificó con goroutine sleeper.
+
+- **B-1 trigger stale-index** — El index de bubbles/list se envenenaba al abrir el filtro. Problema: si el usuario
+  presionaba `/`, el FilterValue era correcto, pero `Index()` internamente retornaba la posición del item en la lista
+  original (no filtrante) — de ahí que al presionar Enter se seleccionase el correo equivocado. Fix: `SetItems()`
+  regenera el índice; ahora la lista siempre se reconstruye tras `envScanned`.
+
+- **C1/C2 layout overflow** — El ancho `left := w / 3; right := w - left` NO contaba los bordes (4 chars: `│`, 2×espacios,
+  `│`). Con 80 cols de terminal, 53+53 = 106, overflow. Fix: `left := w / 3 - 2; right := w - left - 2`, donde 2 es el
+  ancho de los bordes.
+
+**Plan-Audit (A-T4-panic refactor, C-debounce N+1):**
+
+- **A-T4-panic refactor atómico** — Task 4 refactor obligó a mover el state de model (del `Index` al `currentKey` + `currentHdr`).
+  Sin parar en medio, fue un commit atómico — no se podía partir (si se divide, CI falla). Auditoría declaró esto como
+  evidence de que el refactor fue integral, no patch-based.
+
+- **C-debounce N+1 contra S3** — Navegación rápida por la lista (j/k, Page Down) disparaba loadBody para CADA posición.
+  Con 100 correos, 100 GETs a S3 en 2 segundos. Fix: debounce de 150ms (`time.Tick`); solo la ÚLTIMA posición
+  en esos 150ms carga el body.
+
+**Invariante SAN-1..5 preservado:** Todos los `SetContent()` reciben HTML sanitizado (`m.sanitizedBody` o `body` post-`RenderRich`),
+nunca crudo (`m.rawHTML` solo se guarda, nunca se renderiza directamente).
+
+### ROB-1 resolved
+
+El reader arrancaba vacío en la primera apertura de la app (sin seleccionar un correo primero). Auditoría 6-ejes
+identificó esto como "ROB-1: startup context vacío". Fix: en `WindowSizeMsg`, si `m.inflight == 0` y el reader es
+vacío, auto-carga el correo actualmente seleccionado (línea 429).
+
+---
+
+## [mail v0.3] — Render rico HTML+imágenes sanitizado — 2026-06-26
+
+Render enriquecido de correo HTML directamente en el terminal: sanitización de seguridad con bluemonday
+(bloquea XSS + tracking pixels), imágenes `cid:` renderizadas vía chafa en el TUI, ancho dinámico de glamour,
+y el flag `--rich` en el CLI. El ciclo completo: el HTML se sanea primero (pass 1 + bluemonday como frontera de
+seguridad), luego se convierte a markdown con html-to-markdown, y finalmente glamour lo renderiza con estilo ANSI.
+
+### Added
+
+- **`SanitizeHTML(html, allowRemote bool) (SanitizeResult, error)`** (`internal/message/sanitize.go`) —
+  sanitización en dos pasadas: pass 1 con `x/net/html` para reemplazar imágenes remotas por placeholder de UX
+  (`[imagen remota bloqueada]`) y recolectar refs `cid:`; pass 2 con bluemonday como **frontera de seguridad**
+  (UGCPolicy + restricción `img.src` a `cid:` mediante regexp `^cid:` — SAN-2 HARD). `SanitizeResult` expone
+  `.CIDRefs` y `.BlockedRemotes` para la UI y telemetría interna.
+
+- **`InlineImages` en `Parsed`** (`internal/message/parse.go`) — enmime extrae `env.Inlines` y `env.OtherParts`
+  (imágenes referenciadas por `cid:` en el HTML); el parser los expone como `[]InlineImage{ContentID, ContentType, Data}`,
+  con los bytes ya decodificados (base64/QP) por enmime.
+
+- **Render en terminal vía chafa** (`internal/render/`) — wrapper de chafa (`-f symbols`, width dinámico) que
+  convierte `[]byte` de PNG/JPEG a arte de bloques Unicode para el TUI. La integración es async (`tea.Cmd`) para
+  no bloquear el event-loop de Bubble Tea.
+
+- **`RenderRich(p, width int)` actualizado** (`internal/message/render.go`) — la firma incluye `width` (P-7:
+  `termWidth` del TUI) para envolver glamour al ancho real del panel. `width<=0` cae a 80 (seguro). CRÍTICO
+  (P-1): html-to-markdown PRIMERO, glamour después — si glamour recibe HTML crudo, goldmark lo silencia sin error.
+
+- **TUI reader rico** (`cmd/mail-tui`) — al cargar un correo con `--rich`, el cuerpo se sanea y renderiza con
+  glamour. Tecla `i`: renderiza las imágenes `cid:` con chafa (on-demand, no bloquea). Tecla `R`: recarga el
+  cuerpo permitiendo imágenes remotas (`allowRemote=true`). El estado `rawHTML` se conserva para el toggle `R`
+  (P-5: sanitizar en body-load, no en render).
+
+- **CLI `--rich`** (`cmd/mail`, subcomando `read`) — `mail read <key> --rich` invoca `SanitizeHTML` +
+  `RenderRich` en lugar del render plano. `--load-remote` activa `allowRemote=true`.
+
+- **Fixture sintético + test SAN-5** (`internal/message/testdata/inline-image.eml`, `render_integration_test.go`) —
+  MIME `multipart/related` 100% sintético (sin material NDA) con un `<img src="cid:logo@test">` y un
+  `<img src="http://track.er/pixel.png">` (tracking pixel). `TestSAN5InlineImageFixture` verifica:
+  (a) `Parse(fixture).InlineImages` tiene 1 imagen con `ContentID="logo@test"` y `Data` no vacío (bytes reales del MIME);
+  (b) `SanitizeHTML(..., false)` bloqueó la URL remota (ningún `src=` apunta a `://`) y preservó el `cid:`.
+
+### Hallazgos de auditoría que importaron
+
+**SAN-2 bypass (P-2 + P-3) — majúsculas y protocol-relative silenciaban el bloqueo:**
+El primer borrador de `isRemoteURL` usaba `strings.HasPrefix(v, "http://")` — sensible a mayúsculas. Un
+`src="HTTP://track.er/p.png"` pasaba directamente. La auditoría identificó tres variantes de bypass:
+`HTTP://`, `HTTPS://`, y `//` (protocol-relative). Fix: `strings.ToLower(strings.TrimSpace(v))` antes de
+comparar (P-2), más un test `TestSanitizeBlocksRemoteImagesBypasses` (P-3) que cubre las cuatro formas.
+La frontera de seguridad real es bluemonday (pass 2), pero el placeholder UX de pass 1 también debía ser correcto.
+
+**P-1 CRÍTICO — htmltomd antes de glamour, sin excepción:**
+Si glamour recibe HTML directamente (sin conversión previa a markdown), goldmark lo procesa en modo "unsafe=false"
+y lo descarta silenciosamente — sin error, sin output visible. El test pasa en verde. El bug es invisible hasta
+que el usuario ve texto formateado que desaparece. `RenderRich` llama `htmltomd.NewConverter` PRIMERO, glamour
+DESPUÉS. La arquitectura es: `TextHTML → htmltomd → markdown → glamour → ANSI`.
+
+**P-5 — rawHTML para el toggle R (sanitize-on-load, no en render):**
+Si se sanitiza en cada render en vez de en body-load, el toggle `R` (cargar remotas) no puede funcionar —
+el HTML ya sería inmutable. La TUI conserva el `rawHTML` original y re-sanea con `allowRemote=true` cuando
+el usuario presiona `R`. Esta separación es también la que permite auditar qué fue bloqueado (`.BlockedRemotes`).
+
+**P-6 — imágenes async con `tea.Cmd`:**
+El render de chafa (llamada a proceso externo) no puede hacerse en el update loop síncrono de Bubble Tea —
+bloquearía la UI durante el decode+fork. Las imágenes se cargan como `tea.Cmd` y notifican con un `Msg`
+cuando terminan. Sin esto, el TUI se congela en correos con imágenes grandes.
+
+**P-9 — `<object>`, `<embed>`, `data:` (bluemonday UGCPolicy los bloquea — test lo asegura):**
+UGCPolicy ya bloquea `<object>` y `<embed>`. El test `TestSanitizeBlocksXSS` (SAN-1) verifica que
+la lista de vectores incluye esas etiquetas — sin el assert, una regresión de bluemonday o un cambio de policy
+los dejaría pasar desapercibidos.
+
+---
+
+## [mail v0.2] — config.toml multi-mailbox, CC/BCC con envelope privacy, reply-all, composer multi-campo — 2026-06-25
+
+El primer ciclo de features encima del lazo end-to-end de SP-4: configuración por archivo, destinatarios CC/BCC,
+reply-all completo, y el composer TUI con cuatro campos editables. El invariante de privacidad del BCC se verificó
+en dos capas (núcleo + TUI) antes del merge.
+
+### Added
+
+- **config.toml multi-mailbox** — `~/.config/erickaldama-mail/config.toml` (ruta XDG-explícita: `$XDG_CONFIG_HOME`
+  o `~/.config/`; NOT `~/Library/Application Support/` — en macOS `os.UserConfigDir()` retorna la ruta equivocada,
+  auditoría B-1b). Campos: `mailboxes`, `default_from`, `read_profile`, `send_profile`. La ruta es explícita en el
+  código (`internal/config.Path()`) — no hay sorpresa de plataforma.
+
+- **`mail ls` sin `--mailbox` itera todos los mailboxes del config**, combinados y ordenados por SK descendente
+  (ISO-8601: `ts#<RFC3339>#<MsgID>`). El orden por SK es correcto porque es lexicográfico sobre el timestamp ISO;
+  el campo `Date:` del header (RFC 1123Z) ordenaría incorrectamente — hallazgo de diseño documentado en el plan.
+  Sin config y sin `--mailbox`, error claro y accionable.
+
+- **CC/BCC en `mail send` y `mail reply`** — flags `--cc`/`--bcc` (listas separadas por comas, `addr-spec` pura).
+  El BCC viaja SOLO en el envelope SES (`Destinations: To+Cc+Bcc`) — nunca en el header MIME. enmime expone
+  `.BCC()` que escribiría un header `Bcc:` en el raw; el cliente NO lo llama (decisión explícita en `message.Build`).
+
+- **reply-all** — `mail reply <s3Key>` pre-llena `--cc` con `To+Cc` del original minus self (mismo algoritmo en CLI
+  y TUI: `replyAllCc()`). El usuario puede sobreescribir con `--cc` explícito.
+
+- **Composer TUI multi-campo** — cuatro campos editables (`To`, `Cc`, `Bcc`, `Subject`) con Tab para navegar,
+  Ctrl-S para enviar. El campo `Bcc` es VISIBLE en pantalla (UX estándar: el remitente ve lo que escribe, la
+  privacidad aplica al receptor). El envío usa `message.Build` — mismo invariante BCC que el CLI.
+
+### Hallazgos de auditoría que importaron
+
+**BCC-1 — invariante verificado en el núcleo y en la TUI:**
+enmime `.BCC()` escribe el header si se llama; la decisión de no llamarlo es intencional y no obvia. El invariante
+se verifica en dos tests independientes: `TestBuildCcInHeaderBccNot` (núcleo: Cc en header, Bcc NO, destinations
+completas) y `TestComposerBccNotInRaw` (TUI: mismo invariante en el path de envío del composer). Sin estos tests,
+una refactorización de enmime o del builder podría romper silenciosamente la privacidad del BCC.
+
+**XDG-explicit (B-1b) — `os.UserConfigDir()` no es XDG en macOS:**
+En macOS `os.UserConfigDir()` devuelve `~/Library/Application Support/`, no `~/.config/`. El cliente resuelve
+la ruta explícitamente: `$XDG_CONFIG_HOME` si existe, si no `~/.config/`. Cualquier futuro refactor que use
+`os.UserConfigDir()` rompería la ruta en macOS.
+
+**Sort-by-SK (no por `Date:`):**
+El campo `Date:` del header es RFC 1123Z, cuyo orden lexicográfico NO es cronológico. El SK de DynamoDB
+(`ts#<RFC3339>#<MsgID>`) sí es lexicográfico sobre el timestamp ISO-8601. La ordenación multi-mailbox usa
+`strings.Compare(b.SK, a.SK)` (descendente) — correcto y eficiente.
+
+**BCC-2 — campo Bcc visible en el composer TUI:**
+El campo Bcc es visible mientras el usuario lo escribe (comportamiento estándar de cualquier MUA). La privacidad
+del BCC aplica a los receptores, no al remitente. Documentado en el runbook (§10.4) para que sea una decisión
+consciente, no un malentendido.
+
+---
+
+## [mail tmux] — Integración tmux del cliente (cierra deuda SP-4 §5.3) — 2026-06-25
+
+El spec de SP-4 (§5.3) diseñó una glue de tmux para el cliente que v0.1 dejó sin implementar. Se cierra esa deuda
+para que la integración apunte a un subcomando real, no a un atajo.
+
+### Added
+- **`mail tmux popup`** — lanza `mail-tui` en un `tmux display-popup` (overlay flotante 90%×90%), forwarding
+  `--read-profile`/`--mailbox`. Guarda contra el env `TMUX` (error claro si se corre fuera de tmux). El argv lo
+  construye `tmuxPopupArgs()` (función pura, testeada) — un slice de argv, NUNCA un string de shell → sin inyección.
+- **`mail tmux status`** — imprime el conteo de mensajes (`📬 N`) para el `status-right` de tmux. Read-only; no toca
+  los caminos de AI ni de envío.
+- **Test** `TestTmuxPopupArgs` — verifica el forward de flags + que los valores son elementos de argv independientes
+  (no concatenación de shell). El paquete `cmd/mail` pasa de tener solo tests de `renderList` a cubrir el subcomando.
+
+### Integración del entorno (bindings sin colisión, verificados contra la config real)
+- **tmux** (`~/.tmux.conf`, prefix `C-a`): `bind e display-popup -E -w 90% -h 90% "mail-tui"` → `prefix+e` abre el
+  cliente en un popup. Tecla `e` verificada libre.
+- **nvim** (`~/.config/nvim/lua/config/keymaps.lua`, leader `\`): `<leader>ml` (TUI), `<leader>ms` (list),
+  `<leader>mc` (compose), `<leader>ma` (AI agent). Prefijo `<leader>m` verificado libre.
+
+### Notas
+- Ambos binarios (`mail`, `mail-tui`) instalados en `~/go/bin` (en PATH) — consumibles globalmente, no temporales.
+- Menor privilegio verificado en vivo: `mail-client-read` autoriza `Query` (el `mail ls`/`tmux status` funcionan)
+  pero niega `s3:ListBucket`/`Scan` (AccessDenied) — la policy es exactamente Query+GetItem + GetObject scoped.
+
+---
+
+## [CD] — Pipeline de CI/CD con OIDC — 2026-06-24
+
+Automatización del `cdk deploy` vía GitHub Actions con credenciales temporales OIDC — sin access keys de
+larga vida en el repo, con doble gate de aprobación humana independiente.
+
+### Added
+- **CdStack** (CDK Go, `internal/infra/cd_stack.go`) — 3 recursos desplegados en vivo en 48s, 7/7 CREATE_COMPLETE:
+  - `AWS::IAM::OIDCProvider` — `GithubOidc` (`token.actions.githubusercontent.com`), L1 `CfnOIDCProvider` nativo
+    (0 Lambda, 0 custom-resource — el L2 `NewOpenIdConnectProvider` añadiría un tercer rol sin boundary).
+  - `AWS::IAM::Role` `mail-cd-diff` — trust `sub=repo:esaldgut/erickaldama-mail:pull_request`, permisos solo
+    `sts:AssumeRole` sobre `cdk-hnb659fds-lookup-role` (read-only, preview de cambios en PRs).
+  - `AWS::IAM::Role` `mail-cd-deploy` — trust `StringEquals sub=repo:esaldgut/erickaldama-mail:environment:production`
+    (NUNCA wildcard), `sts:AssumeRole` sobre los 4 roles `cdk-hnb659fds-*`. Ambos roles con boundary
+    `erickaldama-boundary`. Stack ARN `arn:aws:cloudformation:us-east-1:367707589526:stack/CdStack/a8f59b10`.
+- **Workflow `.github/workflows/cd.yml`** — dos jobs:
+  - `diff` (on: pull_request): asume `mail-cd-diff` → `cdk diff` → comenta el resultado en el PR.
+    Fork-guard: `if: github.event.pull_request.head.repo.full_name == github.repository` (forks externos no
+    obtienen OIDC ni `pull-requests:write` en repos públicos — correcto por diseño, no un bug).
+  - `deploy` (on: push → main): PAUSA en estado "Waiting" por el Environment gate → tras aprobación humana,
+    asume `mail-cd-deploy` → `cdk deploy --all --require-approval never`.
+  - `concurrency: group: deploy-production, cancel-in-progress: false` — el deploy en curso termina; solo el
+    pending intermedio se cancela si llega un 3er push.
+- **Environment `production` configurado** — `required_reviewers: [esaldgut]`, branch policy `main`,
+  `can_admins_bypass: true` (single-dev; self-review habilitado). Verificado por API (`gh api`).
+- **Runbook** `docs/CD-DEPLOY.md` — pre-flight, canario, bootstrap out-of-band, gate CRÍTICO del environment,
+  verificación OIDC e2e, smoke de seguridad, kill-switch (4 opciones), notas de seguridad. 665 líneas.
+
+### Doble gate — diseño de seguridad
+
+El gate humano tiene dos capas independientes:
+
+1. **GitHub Environment `production`** — el job `deploy` queda en "Waiting" hasta aprobación en la UI de Actions.
+   **CRÍTICO:** GitHub auto-crea el environment cuando el workflow lo referencia por primera vez, pero lo crea
+   **vacío** — sin reviewers, sin branch rules — y el job corre inmediatamente. La configuración del environment
+   debe hacerse **antes** de cualquier push a main, no después.
+
+2. **Trust OIDC `StringEquals`** — AWS solo emite credenciales si `sub=environment:production` exacto. Un PR
+   (sub=`pull_request`) no puede asumir el rol de deploy, aunque alguien eludiera la capa 1.
+
+Si se desactiva la capa 1, la capa 2 sigue activa. Si se elimina el rol (kill-switch), la capa 1 ya no importa.
+
+### Verificación e2e en vivo
+
+El CD se verificó end-to-end **en su propio PR #6** antes de mergearse a develop (95ce3a3): el job `diff`
+asumió OIDC `mail-cd-diff`, corrió `cdk diff`, y publicó el comentario del diff directamente en el PR.
+Evidencia binaria visible en el PR — no declarado operativo hasta que el flujo OIDC completo funcionó en vivo.
+
+### Deploy findings — los 4 hallazgos reales del CD
+
+El CdStack es el stack que más ha exigido del boundary `erickaldama-boundary` — 2 versiones nuevas (v5, v6)
+en un solo subproyecto. Los findings #3 y #4 son del CLI y el diff flag, cazados por el CD en vivo en su
+propio PR. Son la 4ª y 5ª instancia del patrón "boundary intersecta" en el proyecto (SP-1 ssm,
+SP-2 events, SP-4 iam:CreateUser, CD v5, CD v6).
+
+**Finding B4 — boundary v5: `iam:PutRolePermissionsBoundary` (anticipado en la auditoría, confirmado en vivo)**
+
+El boundary tenía un `Deny iam:PutRolePermissionsBoundary` como anti-escalación (ningún rol bajo el boundary
+puede adjuntar boundaries arbitrarios a otros roles). El cfn-exec-role tiene `iam:*` en su exec-policy, pero el
+boundary INTERSECTA: el Deny explícito gana. Al crear `mail-cd-diff` y `mail-cd-deploy` con `PermissionsBoundary`
+adjunto, CloudFormation llama `CreateRole` + `PutRolePermissionsBoundary` → AccessDenied.
+
+Fix: boundary v5 con la excepción scoped `StringNotEqualsIfExists` — permite `PutRolePermissionsBoundary` SOLO
+cuando el boundary adjunto es `erickaldama-boundary` mismo. El anti-escalación se preserva para cualquier otro
+boundary. Confirmado: con v5 activo, el deploy creó los 2 roles con boundary sin error. Sin Task 0 (aplicar v5
+antes del deploy), el CdStack habría fallado con AccessDenied en el primer recurso.
+
+**Finding A1 — boundary v6: `sts:AssumeRole` (cazado por el smoke, NO anticipado)**
+
+El smoke de seguridad post-deploy (`simulate-principal-policy`) reveló que el boundary v5 no incluía
+`sts:AssumeRole`. Como effective perms = identity policy ∩ boundary, y el boundary no tenía `sts:AssumeRole`
+Allow, los roles OIDC no podían asumir los roles cdk-* en runtime — aunque la identity policy los permitiera.
+
+Síntoma sin el smoke: el CD habría fallado en el primer run real con `AccessDenied sts:AssumeRole` en el step
+`configure-aws-credentials` de GitHub Actions. Difícil de diagnosticar desde los logs de Actions porque el
+error vendría de AWS STS. El smoke lo cazó **antes del runtime** — `PermissionsBoundaryDecision.AllowedByPermissionsBoundary=false`.
+
+Fix: boundary v6 (commit `75c647d`) con `sts:AssumeRole` scoped exactamente a los 4 ARNs `cdk-hnb659fds-*`
+— no `sts:*`, no `Resource:*`. Menor privilegio: cualquier otro `sts:AssumeRole` sigue bloqueado. Smoke
+re-ejecutado post-v6: los 4 roles cdk-* → `allowed`; diff-role → deploy-role → `implicitDeny`. Pass.
+
+**Finding #3 — CLI version skew: `aws-cdk@2.258.1` no existe en npm**
+
+- **Evento:** primer run del CD (job `diff`) en GitHub Actions — `npm install -g aws-cdk@2.258.1`
+- **Error:** `npm error notarget No matching version found for aws-cdk@2.258.1`
+- **Causa raíz:** el CDK CLI npm y la librería Go `awscdk/v2` usan **esquemas de versión distintos**. La lib
+  Go es `v2.258.1`; el CLI npm sigue el esquema `2.1xxx.x` (actualmente `2.1128.1`). `aws-cdk@2.258.1` y
+  `aws-cdk@2.258.x` no existen en npm. Confundir ambos esquemas reproduce el hallazgo SP-1 "CLI vs lib
+  version skew" pero con un síntoma diferente (notarget en npm en vez de "not bootstrapped" en cdk).
+- **Fix:** `CDK_VERSION=2.1128.1` en el workflow (commit `faae10d`). Cazado por el CD en vivo en su propio
+  primer run — nunca fue visible en un entorno local donde el CLI ya estaba instalado.
+- **Resultado:** workflow corrige la versión y el `npm install -g aws-cdk@2.1128.1` pasa en Actions.
+- **Status:** RESUELTO (finding #3 — ver `docs/CD-DEPLOY.md` §11)
+
+**Finding #4 — `cdk diff --all` flag inválido en CLI 2.1xxx**
+
+- **Evento:** job `diff` del CD — el step `cdk diff --all` corrió pero su output incluía una advertencia
+- **Error/Síntoma:** el comentario del diff publicado en el PR mostraba `Unknown option(s): --all. These will
+  be ignored` al inicio del output
+- **Causa raíz:** en CLI 2.1xxx, `cdk diff` no acepta `--all` — el default ya difea todos los stacks del
+  app. En contraste, `cdk deploy --all` SÍ es flag válido (el subcomando `deploy` lo acepta). El flag `--all`
+  sobre `diff` es simplemente ignorado con advertencia, pero queda en el output como ruido y como señal falsa.
+- **Fix:** quitar `--all` del step `diff` en el workflow (commit `af98821`). `cdk deploy --all` sin cambios —
+  es correcto y válido. Cazado por el comentario del diff en el propio PR #6.
+- **Resultado:** el diff output queda limpio (sin advertencia); el deploy sigue usando `--all` correctamente.
+- **Status:** RESUELTO (finding #4 — ver `docs/CD-DEPLOY.md` §11)
+
+### Smoke de seguridad empírico (DoD #5 — PASS en vivo)
+
+Separación read/write verificada empíricamente via `aws iam simulate-principal-policy`:
+- `mail-cd-diff` → `cdk-hnb659fds-deploy-role`: **implicitDeny** (no puede escalar a deploy) ✓
+- `mail-cd-diff` → `cdk-hnb659fds-file-publishing-role`: **implicitDeny** ✓
+- `mail-cd-diff` → `cdk-hnb659fds-image-publishing-role`: **implicitDeny** ✓
+- `mail-cd-diff` → `cdk-hnb659fds-lookup-role`: **allowed** (solo lo que necesita) ✓
+- `mail-cd-deploy` → los 4 roles `cdk-hnb659fds-*`: **allowed** ✓
+
+Evidencia binaria: la separación no es solo en papel. El smoke es el gate que cierra el DoD antes de declarar
+el CD operativo — obligatorio en cualquier arquitectura con boundary estricto, donde los permisos efectivos
+(identity ∩ boundary) no son obvios al leer solo la identity policy.
+
+### Decisions
+- **L1 `CfnOIDCProvider` sobre el L2 `NewOpenIdConnectProvider`** — el L2 crea un custom resource (Lambda
+  nodejs22.x) que añade un tercer rol de ejecución sin boundary. Con un boundary estricto ese rol quedaría
+  fuera del control del boundary. El L1 es nativo de CloudFormation: 0 Lambda, 0 custom-resource.
+- **`can_admins_bypass: true`** — single-dev; con 1 reviewer y self-review habilitado, la única forma de
+  aprobar el deploy propio es que can_admins_bypass esté activo. Trade-off aceptado para el proyecto personal.
+- **Job `diff` NO marcado como required status check** — un PR de fork (sub=`pull_request`) hace skip por el
+  fork-guard; GitHub trata `skipped` distinto a `success` y bloquearía PRs de colaboradores externos. No es
+  un bug — es la barrera de seguridad funcionando. Solo no debe convertirse en un bloqueo de PR innecesario.
+- **`cancel-in-progress: false` en concurrency** — cancelar el deploy en curso deja el stack en rollback parcial;
+  con `false`, solo el pending intermedio se cancela; el deploy activo siempre termina limpio.
+
+---
+
+## [SP-4] — Cliente TUI/CLI/AI Go — 2026-06-24
+
+El primer componente que **consume** la infra en vez de aprovisionarla: cierra el lazo end-to-end del producto.
+
+### Added
+- **Cliente de correo terminal-native** en dos binarios sobre un núcleo de dominio compartido:
+  - `cmd/mail` — CLI Cobra (`ls`/`read`/`send`/`reply`/`ai`), stdout componible (`--json` para pipes/tmux/fzf).
+  - `cmd/mail-tui` — TUI Bubble Tea (list/reader/composer) con Vim-motions (`j/k/gg/G`), render HTML enriquecido.
+- **Agente AI de doble backend** sobre una interfaz `LLMProvider` neutral con un **agent-loop propio** (no el del SDK):
+  - `ollama` (local, **default seguro** — el correo nunca sale del Mac) — modelo de tool-use `qwen3:32b`.
+  - `claude` (API Opus 4.8, **opt-in con aviso** — el cuerpo cruza la red) — adaptive thinking.
+  - Capacidades: resumen/triage, draft de respuestas (humano-en-el-loop), y agente con tools **read-only** (sin tool de envío).
+- **`internal/redact`** — máscara NDA determinista (tokens secret-shaped + emails de terceros) antes de cualquier backend que cruza red, con golden corpus + canary.
+- **Núcleo de dominio puro**: `internal/message` (parse/build MIME via enmime/v2, threading RFC 5322, render html-to-markdown→glamour), `internal/mailbox` (Reader DynamoDB+S3 / Sender SES), `internal/awsconf`, `internal/wire` (punto único de instanciación — DRY).
+- **Dos principales IAM del cliente** (CDK, menor privilegio disjunto): `mail-client-read` (Query+GetObject scoped) y `mail-sender` (SendRawEmail scoped). `mail-readonly` (verificador de gobernanza) queda intacto.
+- Runbook `docs/SP-4-DEPLOY.md` con comandos AWS CLI reales + los 3 incidentes de deploy.
+
+### Engineering discipline
+- Plan ejecutado vía **subagent-driven-development**: un subagente fresco por tarea, con **auditoría de ingeniería de 6 ejes** (robustez · eficiencia · patrones · mantenibilidad · seguridad · deuda) como gate antes de cerrar cada tarea — cada hallazgo con evidencia binaria (archivo:línea), no opinión.
+- La auditoría cazó y corrigió **3 hallazgos MAYOR bloqueantes** antes del merge: un error de `DetectSandbox` silenciado (anti-silencing), una type-assertion frágil que descartaba campos `required` venidos de JSON, y un `reply` que impersonaba al remitente original. Más una variante de doble-envío SES en la TUI y un editor que corrompía el AltScreen (resueltos con `tea.ExecProcess`).
+- Stack verificado **compilando contra las librerías vivas** durante la auditoría del plan: anthropic-sdk-go v1.51.1, enmime/v2, aws-sdk-go-v2 (ses v1 SendRawEmail / sesv2 GetAccount), bubbletea v1.3.10, cobra, glamour.
+
+### Deploy findings (lo que solo apareció contra AWS real)
+- **El permissions boundary deniega `iam:CreateUser`** (anti-escalación, diseño SP-1). SP-4 es el primer stack que crea un `AWS::IAM::User` → primera intersección. Fix: ampliar el boundary (v4) con una excepción `NotResource` scoped a los 2 ARNs del cliente, preservando el deny para cualquier otro user.
+- **La policy de envío necesitaba el config-set además de la identidad**: `mail-config` es el config-set por defecto de la identidad, así que SES lo aplica a todo envío y exige `ses:SendRawEmail` sobre **ambos** recursos. Fix: `Resources: [identity, configuration-set]`.
+- **Una access key impresa en chat → rotación segura**: revocar + regenerar con `aws configure set` (la secret nunca toca la pantalla). Patrón documentado en el runbook.
+
+### Decisions
+- **Backends `:cloud` de Ollama descartados** (investigados): `deepseek-v4-pro:cloud` es inferencia remota sin DPA verificable → no NDA-safe. El modelo de tool-use local pasó a `qwen3:32b` (la referencia de tool-calling de Ollama), no `llama3.2` (no figura en la lista oficial de tool-support).
+- **Users con access keys de larga vida** (no STS temporal) por simplicidad de runtime — trade-off aceptado, mitigado por policies fuertemente scopeadas + rotación documentada.
+
+---
+
+## [SP-3] — Pipeline de recepción — 2026-06-18
+
+Recepción de correo entrante, end-to-end y verificada con un correo real.
+
+### Added
+- **MailStorageStack** — bucket S3 `erickaldama-mail-raw` (SSE-S3, BLOCK_ALL, EnforceSSL, lifecycle IA@90d, RETAIN).
+- **ReceivingStack** — SES v1 receipt rule set `erickaldama-inbound` (catch-all, TLS Require, ScanEnabled) → S3 → Go Lambda `mail-receive` (arm64, provided.al2023) → DynamoDB `mail-index` (on-demand) + SQS DLQ (SSE) vía OnFailure destination.
+- Rule set **activado por custom resource** (`SES.setActiveReceiptRuleSet` — no hay campo declarativo "active" en la API v1).
+- Apex MX, DMARC `rua` re-apuntado a `dmarc-reports@erickaldama.com` (dogfood, mismo dominio → sin autorización cross-domain), suscripción SNS al operador.
+- Handler idempotente: un item por destinatario del dominio (`Receipt.Recipients`, envelope autoritativo), idempotencia por el Message-ID RFC 5322 (`errors.As` + `ConditionalCheckFailedException` → continue).
+
+### Deploy findings
+- **Hallazgo #8 (3ª vez del patrón "observabilidad es parte del límite del agente")**: el `mail-readonly` no podía leer los logs del Lambda ni `sns:GetSubscriptionAttributes` — justo las 2 señales para diagnosticar un pipeline async. Ampliado con `logs:*` (read) + `sns:GetSubscriptionAttributes`.
+- **Dos "síntomas que no eran bugs"**: el email SNS no llegó (era `PendingConfirmation`, faltaba un clic); el correo de prueba "no indexó" (sí lo hizo, era falta de visibilidad del read-only). Diagnosticados con 3 agentes read-only.
+
+### Resolved by adversarial audit (antes de tocar AWS)
+- Ciclo cross-stack bucket↔rule (la resource policy del bucket importado cicla sobre el token del rule-ARN) → `NewBucketPolicy` en el stack consumidor.
+- La invocación SES→Lambda necesita `fn.AddPermission` explícito; el cuerpo NO viene en el evento (S3 se escribe primero) — el `Mail.MessageID` es la S3 key, distinto del `CommonHeaders.MessageID` (RFC 5322, clave de idempotencia).
+
+---
+
+## [SP-2] — Identidad SES + envío — 2026-06-16
+
+Capacidad de **enviar** correo firmado desde el dominio.
+
+### Added
+- **SendingStack** — `EmailIdentity erickaldama.com` (Easy DKIM RSA-2048, verificado vivo; MAIL FROM `mail.erickaldama.com`) → auto-publica 6 record sets (3 DKIM CNAME + MAIL FROM MX + SPF TXT; sin SPF duplicado — canario de la auditoría).
+- ConfigurationSet `mail-config` (FeedbackForwarding OFF) + EventBridge event destination (BOUNCE+COMPLAINT) → Rule → SNS al operador.
+- 2 alarmas de reputación (BounceRate ≥0.02, ComplaintRate ≥0.0005, treatMissingData IGNORE).
+- ManagedPolicy `mail-send` (solo `ses:SendEmail/SendRawEmail`, identidad verificada, Condition `From=erick@`) + `mail-sender-role` asumible.
+- Smoke al Mailbox Simulator: 3× OK.
+
+### Deploy findings
+- **El boundary necesita `events:*`** además de la exec-policy (INTERSECTA — la lección de SP-1 en un 2º servicio): el deploy falló en `SesEventRule` (5/18) hasta ampliar ambos.
+- **El read-only del agente no podía leer SNS/EventBridge** para verificar lo que despliega → ampliado con `sns:*`/`events:*` reads. "La observabilidad es parte del límite, no un extra."
+
+### Decisions
+- DMARC quedó `p=none` sin `rua` en SP-2 (un `rua` cross-domain a Gmail es no-funcional por RFC 7489 — el receptor debe publicar autorización; Gmail no la publica). El `rua` a un buzón propio se añadió en SP-3.
+
+---
+
+## [SP-1] — Fundación DNS + cuenta — 2026-06-10
+
+El primer subproyecto que aprovisiona infra real — el examen de la gobernanza SP-0.
+
+### Added
+- **FoundationStack** — PublicHostedZone `erickaldama.com` (+ CAA Amazon-only) + ManagedPolicy `mail-readonly` (allowlist puro, 4 statements verificados contra el Service Authorization Reference, con hard-deny de mutación + recon).
+- Re-delegación del registrar, gate post-deploy (identity + simulate 13/13).
+- El **permissions boundary `erickaldama-boundary`** se trata como artefacto de **bootstrap** (out-of-band), NO como recurso del stack.
+
+### Deploy findings (los 5 hallazgos del primer deploy real)
+1. **CLI-vs-lib version skew** — el `cdk` CLI debe ser ≥ el schema de la librería; síntoma engañoso "not bootstrapped".
+2. La exec-policy necesita `ssm:GetParameters`.
+3. El **boundary también** (INTERSECTA: effective = exec-policy ∩ boundary).
+4. El boundary da **409 AlreadyExists** si el stack intenta crearlo — es bootstrap-owned, no stack-owned.
+5. `ListHostedZonesByName` cae fuera del allowlist del read-only (el límite funcionando, no roto).
+
+---
+
+## [SP-0] — Gobernanza CDK-Go — 2026-06-08
+
+La premisa imperativa: **todo aprovisionamiento AWS vía AWS CDK en Go**, garantizado mecánicamente.
+
+### Added
+- **Hook `PreToolUse`** (`.claude/hooks/cdk-go-guard.sh`) — bloquea mecánicamente cualquier write AWS fuera de CDK-Go (no depende de juicio del agente → idempotente cada sesión).
+- **Plugin `cdk-go-aws-plugin`** — skill-receta CDK-Go (verifica la versión viva de aws-cdk-go, no hardcodea), skill-receta SES (patrón 4-fases verify-before-act), agente cdk-verifier, eval golden.
+- Límite IAM allowlist-puro `mail-readonly` verificado en vivo (gate 8/8 + simulate 13/13). Bootstrap del principal en la cuenta real (t=0).
+- Journal triple-capa: checkboxes en el plan + `EXECUTION-LOG.md` + framework de tareas.
+
+---
+
+## Infraestructura transversal
+
+### CI/CD
+- **2026-06-17** — repo público con **Git Flow**: `main`/`rc`/`develop` protegidos (PR obligatorio, 2 required status checks strict, no force-push/delete). Default `develop`. CI `.github/workflows/ci.yml` (gofmt + vet + build + test-race + shellcheck). El cierre de cada subproyecto es **PR a develop con CI verde**, no merge local.
+- Gate NDA sobre **todo el historial** antes del primer push público: `git-filter-repo` reescribió 89 commits para purgar marcas de material de ejemplo de SP-0.
+
+### Convenciones
+- Cada subproyecto vive su ciclo completo en un **worktree aislado** y cierra con su runbook `docs/SP-N-DEPLOY.md`.
+- Los artefactos IAM (policies, boundary, gates) se persisten como JSON en `iam/` — evidencia auditable.
+- Toda credencial fuera del binario/git/logs; los deploys mutantes los ejecuta el humano out-of-band con SSO Admin, mientras el agente trabaja read-only y verifica.
+
+---
+
+_Documentado de forma orgánica conforme el proyecto se construyó. Cada "deploy finding" es real — apareció al
+desplegar contra AWS, no en code review — y por eso es la parte más valiosa de esta historia._

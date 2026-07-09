@@ -154,9 +154,11 @@ func addSendIam(stack awscdk.Stack) {
 			ManagedPolicyName: jsii.String(SendPolicyName),
 			Statements: &[]awsiam.PolicyStatement{
 				awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-					Effect:    awsiam.Effect_ALLOW,
-					Actions:   jsii.Strings("ses:SendEmail", "ses:SendRawEmail"),
-					Resources: jsii.Strings(IdentityArn),
+					Effect:  awsiam.Effect_ALLOW,
+					Actions: jsii.Strings("ses:SendEmail", "ses:SendRawEmail"),
+					// Both the identity AND the default config set: SES applies mail-config to every send, so a
+					// send is authorized only when the policy covers the config-set resource too (deploy finding).
+					Resources: jsii.Strings(IdentityArn, ConfigSetArn),
 					Conditions: &map[string]interface{}{
 						"StringEquals": map[string]interface{}{"ses:FromAddress": FromAddress},
 					},
@@ -167,6 +169,13 @@ func addSendIam(stack awscdk.Stack) {
 	awsiam.NewRole(stack, jsii.String("MailSenderRole"), &awsiam.RoleProps{
 		RoleName:        jsii.String(SenderRoleName),
 		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String(Account)),
+		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
+	})
+
+	// SP-4 — mail-sender user: attaches the same mail-send policy directly for long-lived
+	// access key usage by the TUI client. Key generated out-of-band by the human after deploy.
+	awsiam.NewUser(stack, jsii.String("MailSenderUser"), &awsiam.UserProps{
+		UserName:        jsii.String(SenderUserName),
 		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
 	})
 }

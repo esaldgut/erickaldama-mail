@@ -1,0 +1,8 @@
+From: alice@example.com
+To: test@erickaldama.com
+Subject: Hola plano
+Message-ID: <plain-001@example.com>
+Date: Mon, 23 Jun 2026 10:00:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+Cuerpo en texto plano con acento: café.

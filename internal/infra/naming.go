@@ -27,6 +27,10 @@ const (
 	BounceRuleName       = "mail-ses-bounce-complaint"
 	// IdentityArn is the SES identity ARN used to scope the send policy.
 	IdentityArn = "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com"
+	// ConfigSetArn is the SES configuration-set ARN. mail-config is the identity's default config set, so SES
+	// applies it to every send — the send policy must authorize SendRawEmail on BOTH identity AND config-set
+	// (deploy finding: a send via a default config set is AccessDenied without this resource).
+	ConfigSetArn = "arn:aws:ses:us-east-1:367707589526:configuration-set/mail-config"
 	// HostedZoneID is the SP-1 hosted zone for erickaldama.com (CfnOutput of FoundationStack).
 	// Imported by SP-2+ stacks via HostedZone_FromHostedZoneAttributes.
 	HostedZoneID = "Z023932911KA6S98A6ZRW"
@@ -36,7 +40,38 @@ const (
 	// none (per-domain or wildcard) — so senders would not deliver reports there. rua is added in
 	// SP-3 pointing at a same-domain mailbox (dmarc-reports@erickaldama.com), which needs no
 	// cross-domain authorization. Verified 2026-06-11 via dig + RFC 7489.
-	DmarcValue = "v=DMARC1; p=none;"
+	DmarcValue = "v=DMARC1; p=none; rua=mailto:dmarc-reports@erickaldama.com"
+
+	// SP-3 — receive pipeline.
+	RawBucketName       = "erickaldama-mail-raw"
+	MailIndexTableName  = "mail-index"
+	ReceiveFunctionName = "mail-receive"
+	ReceiveLambdaRole   = "mail-receive-lambda-role"
+	ReceiptRuleSetName  = "erickaldama-inbound"
+	ReceiptRuleName     = "store-and-index"
+	ReceiveDlqName      = "mail-receive-dlq"
+	InboundObjectPrefix = "inbound/" // SES appends messageId verbatim; trailing slash required.
+	InboundMxHost       = "inbound-smtp.us-east-1.amazonaws.com"
+	DmarcReportsAddress = "dmarc-reports@erickaldama.com"
+	OperatorEmail       = "esaldgut@gmail.com" // publishable / benign
+	// ReceiptRuleArn is the ARN used to scope the SES S3 bucket policy and Lambda invoke permission.
+	ReceiptRuleArn = "arn:aws:ses:us-east-1:367707589526:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
+
+	// SP-4 — client principals (long-lived access keys generated out-of-band; never in CDK/git).
+	ClientReadUserName = "mail-client-read" // dynamodb:Query/GetItem on mail-index + s3:GetObject on inbound/*
+	SenderUserName     = "mail-sender"      // attaches mail-send policy directly (SendRawEmail)
+
+	// CD pipeline — OIDC + GitHub Actions roles (created by CdStack).
+	OidcProviderUrl = "https://token.actions.githubusercontent.com"
+	OidcAudience    = "sts.amazonaws.com"
+	GithubRepo      = "esaldgut/erickaldama-mail"
+	DiffRoleName    = "mail-cd-diff"
+	DeployRoleName  = "mail-cd-deploy"
+	// Bootstrap roles the CD roles may assume (verified to exist).
+	CdkLookupRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
+	CdkDeployRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1"
+	CdkFilePublishingRoleArn  = "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1"
+	CdkImagePublishingRoleArn = "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1"
 )
 
 // projectTags are applied to the stack so every resource is attributable.

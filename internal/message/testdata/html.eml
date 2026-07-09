@@ -1,0 +1,9 @@
+From: bob@example.com
+To: test@erickaldama.com
+Subject: Hola HTML
+Message-ID: <html-001@example.com>
+References: <thread-root@example.com>
+Date: Mon, 23 Jun 2026 11:00:00 +0000
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Hola <b>mundo</b> con <a href="https://x.test">link</a>.</p></body></html>

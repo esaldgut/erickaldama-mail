@@ -58,6 +58,37 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 	// is a BOOTSTRAP artifact managed out-of-band (iam/erickaldama-boundary.json), not owned by
 	// CFN. Having the stack create it caused a 409 AlreadyExists on the first deploy.
 
+	// SP-4 — mail-client-read user: scoped read access to mail-index (DynamoDB) and inbound
+	// bodies (S3). Long-lived access key generated out-of-band by the human after deploy.
+	clientReadPolicy := awsiam.NewManagedPolicy(stack, jsii.String("MailClientReadPolicy"),
+		&awsiam.ManagedPolicyProps{
+			ManagedPolicyName: jsii.String("mail-client-read"),
+			Statements: &[]awsiam.PolicyStatement{
+				awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+					Sid:       jsii.String("ReadMailIndex"),
+					Effect:    awsiam.Effect_ALLOW,
+					Actions:   jsii.Strings("dynamodb:Query", "dynamodb:GetItem"),
+					Resources: jsii.Strings("arn:aws:dynamodb:us-east-1:" + Account + ":table/" + MailIndexTableName),
+					Conditions: &map[string]any{
+						"StringEquals": map[string]any{"aws:RequestedRegion": "us-east-1"},
+					},
+				}),
+				awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+					Sid:       jsii.String("ReadInboundBodies"),
+					Effect:    awsiam.Effect_ALLOW,
+					Actions:   jsii.Strings("s3:GetObject"),
+					Resources: jsii.Strings("arn:aws:s3:::" + RawBucketName + "/" + InboundObjectPrefix + "*"),
+					Conditions: &map[string]any{
+						"StringEquals": map[string]any{"aws:RequestedRegion": "us-east-1"},
+					},
+				}),
+			},
+		})
+	awsiam.NewUser(stack, jsii.String("MailClientReadUser"), &awsiam.UserProps{
+		UserName:        jsii.String(ClientReadUserName),
+		ManagedPolicies: &[]awsiam.IManagedPolicy{clientReadPolicy},
+	})
+
 	return stack
 }
 
@@ -76,7 +107,7 @@ func readonlyStatements() *[]awsiam.PolicyStatement {
 		awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 			Sid:        jsii.String("AllowRegionalReadsUsEast1"),
 			Effect:     awsiam.Effect_ALLOW,
-			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTopics", "events:DescribeRule", "events:ListRules", "events:ListTargetsByRule"),
+			Actions:    jsii.Strings("ses:Get*", "ses:List*", "ses:Describe*", "cloudformation:Describe*", "cloudformation:List*", "cloudwatch:DescribeAlarms", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTopics", "events:DescribeRule", "events:ListRules", "events:ListTargetsByRule", "dynamodb:DescribeTable", "dynamodb:Query", "dynamodb:GetItem", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "sqs:GetQueueAttributes", "logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:FilterLogEvents", "logs:GetLogEvents", "sns:GetSubscriptionAttributes"),
 			Resources:  jsii.Strings("*"),
 			Conditions: usEast1,
 		}),

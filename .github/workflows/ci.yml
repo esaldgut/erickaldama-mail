@@ -1,0 +1,59 @@
+name: CI
+
+# Runs on every PR into a long-lived branch and on direct pushes to them.
+# Wired as a required status check on main / rc / develop, so a PR cannot merge red.
+on:
+  pull_request:
+    branches: [main, rc, develop]
+  push:
+    branches: [main, rc, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build & test (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Read the Go version from go.mod — the project's premise is "live version, never
+      # hardcoded". setup-go resolves the toolchain (including 1.26.x) from the go directive.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go version
+        run: go version
+
+      - name: gofmt (no unformatted files)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test -race ./...
+
+  # The PreToolUse hook is a bash script; guard_test.go exercises it via the Go suite above,
+  # but a shellcheck pass catches script-level regressions the Go test can't (quoting, etc.).
+  shellcheck-hook:
+    name: shellcheck (PreToolUse hook)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck the CDK-Go guard hook
+        run: shellcheck .claude/hooks/cdk-go-guard.sh

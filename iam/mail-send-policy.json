@@ -5,7 +5,10 @@
       "Sid": "SendOnlyFromErickAddressViaErickaldamaIdentity",
       "Effect": "Allow",
       "Action": ["ses:SendEmail", "ses:SendRawEmail"],
-      "Resource": "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com",
+      "Resource": [
+        "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com",
+        "arn:aws:ses:us-east-1:367707589526:configuration-set/mail-config"
+      ],
       "Condition": { "StringEquals": { "ses:FromAddress": "erick@erickaldama.com" } }
     }
   ]

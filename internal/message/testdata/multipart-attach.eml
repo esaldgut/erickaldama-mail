@@ -1,0 +1,19 @@
+From: carol@example.com
+To: test@erickaldama.com
+Subject: Con adjunto
+Message-ID: <attach-001@example.com>
+Date: Mon, 23 Jun 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+Mira el adjunto.
+--b1
+Content-Type: application/pdf; name="doc.pdf"
+Content-Disposition: attachment; filename="doc.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQK
+--b1--

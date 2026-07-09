@@ -20,6 +20,20 @@ func main() {
 		Env: env(),
 	})
 
+	storage, rawBucket := infra.NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{
+		Env: env(),
+	})
+	_ = storage
+
+	infra.NewReceivingStack(app, "ReceivingStack", &awscdk.StackProps{
+		Env: env(),
+	}, rawBucket)
+
+	infra.NewCdStack(app, "CdStack", &awscdk.StackProps{
+		Env:                 env(),
+		PermissionsBoundary: awscdk.PermissionsBoundary_FromName(jsii.String(infra.BoundaryManagedPolicyName)),
+	})
+
 	app.Synth(nil)
 }
 
