@@ -18,9 +18,9 @@ func ReadOnlyTools() []ToolSpec {
 		{Name: "read_message", Description: "Read one message body by s3Key.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{"s3Key": map[string]any{"type": "string"}}, "required": []string{"s3Key"}}},
 		{Name: "search_messages",
-			Description: "Search messages by sender or subject (full-text, ranked best-first, prefix match). Returns matching headers as JSON.",
+			Description: "Search messages by sender or subject and return matching headers as JSON, ranked best-first with prefix matching on the last word. Use plain search keywords, for example \"amazon\", \"payment receipt\", or a person's name. This tool does not support field operators like \"from:\" or \"subject:\": a query such as \"from:amazon\" is searched as the two literal words \"from\" and \"amazon\", not as a sender filter, so use plain keywords like \"amazon\" instead. Pass the terms you want to appear anywhere in the sender or subject.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "Search terms (sender or subject)."},
+				"query": map[string]any{"type": "string", "description": "Plain search keywords matched against the sender and subject text, e.g. \"amazon\" or \"invoice march\". A single keyword works best; multiple words are matched as an adjacent phrase, in order. Field-operator prefixes such as \"from:\" or \"subject:\" are searched as literal words, not as filters."},
 				"limit": map[string]any{"type": "integer", "description": "Max results (default 50)."},
 			}, "required": []string{"query"}}},
 	}
