@@ -12,6 +12,112 @@ Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [mail v0.7.1] — Endurecer el `Description` de `search_messages` contra operadores estilo Gmail — 2026-08-06
+
+Fast-follow declarativo de v0.7. El deploy finding §7 de v0.7 mostró que `qwen2.5:7b`, al pedírsele buscar
+correo por remitente, inventaba un operador de campo estilo Gmail — mandaba `query="from:amazon"` a
+`search_messages`, un operador que la tool no soporta ni documentaba, y FTS5 buscaba el token literal → 0 hits.
+No era un bug de código (AR-1 garantizaba "0 resultados honestos"), sino una brecha de *comportamiento de modelo*:
+nada en la tool le decía al modelo que usara términos simples. v0.7.1 cierra la primera de las dos mitigaciones
+que §8(c) del runbook de v0.7 había registrado.
+
+### Changed
+
+- **El `Description` de la tool `search_messages`** (`internal/aiassist/tools.go:21`) se reescribió de una oración
+  a ~4 (guía oficial de Anthropic: "at least 3-4 sentences", "extremely detailed descriptions"), con framing
+  **positivo primero** ("use plain search keywords") y un límite que describe el **mecanismo** de búsqueda, no un
+  resultado: *"a query such as `from:amazon` is searched as the two literal words `from` and `amazon`, not as a
+  sender filter, so use plain keywords like `amazon` instead."*
+- **El `description` del parámetro `query`** (`internal/aiassist/tools.go:23`) se endureció en paralelo (la doc
+  pide describir cada parámetro), también describiendo el mecanismo, no un resultado.
+
+Cambio **puramente declarativo, cero runtime**: solo dos literales de string; `search.go`, el wire y AR-1 quedan
+intactos. La query fluye igual (`execTool` → `Searcher` → FTS/substring). No se introdujo ningún guard de código
+nuevo, así que `mutation-test-must-have-teeth` no aplica (no hay invariante que mutar); el gate de merge es la
+capa estática (`go build/vet/test` verde). Los 4 tests behaviorales de `search_messages` siguieron verdes (no
+tocan el texto — verificado que no existe golden test que fije los strings).
+
+### Por qué NO se hizo el strip determinístico (Approach B)
+
+La deuda §8(c) registraba dos mitigaciones "y/o": endurecer el Description, y/o despojar prefijos de operador
+(`from:`/`subject:`) en el wire. Se eligió **solo la primera** por evidencia: AR-1 ya garantiza que el peor caso
+es "0 resultados honestos", nunca una respuesta incorrecta; el strip añadiría un mini-parser de
+operadores-para-negar-operadores con un modo de fallo semántico real (mutilar una query legítima cuyo texto
+contenga `from:`/`to:`, p.ej. un subject "News from: Berlin") y una cola infinita de operadores por perseguir.
+No se blinda contra un fallo no observado como persistente. Approach B queda como fast-follow condicionado a
+evidencia de un smoke donde un modelo siga inventando operadores *a pesar* del Description.
+
+### Investigación F0 — vara externa de doc oficial viva (evidencia binaria, verbatim)
+
+Cinco agentes recuperaron la vara externa antes de redactar el texto: Anthropic
+(`platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools`), SQLite FTS5 (`sqlite.org/fts5.html`), y
+el contrato de tool-schema de ambos backends (Ollama `docs.ollama.com/capabilities/tool-calling` + código real,
+Claude API + SDK pineado). Hallazgos que moldearon el texto:
+
+- **El Description llega verbatim al modelo en ambos backends** — Ollama lo marshala a `function.description`
+  (`ollama.go:78`, byte-idéntico al schema oficial); Claude a `ToolParam.Description` (`claude.go:58`).
+- **`input_examples` se descartó con fundamento** — es un campo real y actual del schema de Claude (verificado
+  en la página viva + SDK), pero **NO existe en Ollama** (3 fuentes oficiales), y `ToolSpec` es el tipo neutral
+  compartido por ambos backends. Como el deploy finding ocurrió en Ollama (qwen), añadirlo sería Claude-only y
+  asimétrico. Los ejemplos van como prosa dentro del Description, el único lever soportado en ambas rutas.
+
+### Auditoría adversarial del spec (F2) — dos MAJOR cazados que ninguna auto-revisión vio
+
+El spec pasó una auditoría adversarial de 3 frentes (agentes que verifican contra código real + doc oficial +
+coherencia interna). Cazó **dos defectos MAJOR que se introdujeron al redactar**, ambos en el string propuesto:
+
+1. **Em-dash U+2014.** La primera versión del Description usaba `—` (no-ASCII) — que toca la clase de defecto
+   documentada `downstream-write-api-stricter-than-template-generator` (un `description` con em-dash fue rechazado
+   por un API downstream contra su regex ASCII) y contradice el propio "cero runtime". Corregido a **ASCII puro**
+   (verificado con `LC_ALL=C grep -nP '[^\x00-\x7F]'` sobre el diff).
+2. **`"from:amazon" matches nothing` era un absoluto FALSO.** `EscapeFTS` produce la frase `"from:amazon"*` →
+   tokens `from` + `amazon*`, y FTS5 (§3.2 doc oficial: una frase matchea una sub-secuencia de tokens **adyacentes
+   y en orden**) SÍ matchearía un subject como "Order confirmation **from Amazon**". Era true solo para el corpus
+   del deploy finding. Hornear un resultado corpus-dependiente en un string permanente es exactamente la clase de
+   defecto que este frente busca eliminar. El texto final afirma el **mecanismo** (siempre verdadero), no el resultado.
+
+Es la lección `layered-audit-catches-distinct-defect-classes`: la capa adversarial caza el punto ciego del autor.
+
+### Smoke E2E real (2 capas) — la mitigación funcionó, y destapó un deploy finding pre-existente
+
+Corrido contra la cuenta real (`367707589526`, perfil `mail-client-read`) con `qwen2.5:7b` sobre Ollama e
+instrumentación temporal en `execTool` (loguear a stderr la `query` que el modelo envía; revertida con
+`git checkout`, nunca commiteada):
+
+- **Hallazgo primario — la mitigación cambió el comportamiento del modelo.** En **4 corridas consecutivas** del
+  mismo goal del deploy finding de v0.7 ("Find any message from a sender containing 'amazon'..."), qwen invocó
+  `search_messages` con `query="amazon"` — keyword limpia. **Nunca** `query="from:amazon"`. Con el Description
+  viejo, el mismo modelo inventaba el operador; con el endurecido, usó términos simples. Evidencia de SOPORTE (un
+  modelo pequeño es probabilístico → no prueba absoluta, pero el objetivo del frente se cumplió).
+
+- **Hallazgo secundario — deploy finding PRE-EXISTENTE de v0.7 (no de v0.7.1):** el agente reportó "sin
+  coincidencias" pese a que el buzón tiene 5 correos de "Amazon Web Services". La causa, confirmada con evidencia
+  binaria (`mail search --json "amazon"` → `"pk":"mailbox#erick+awsbridge@erickaldama.com"` en los 5): el wire de
+  `mail ai agent` (`cmd/mail/main.go:511`) pasa un **único** `mailboxName` a `RunAgent`, mientras `ls`
+  (`main.go:131`) y `search` (`main.go:537`) caen a `cfg.Mailboxes` (los 6 buzones del config) cuando `--mailbox`
+  no se pasó. El agente buscó en un solo mailbox; el correo vivía en otro. **AR-1 se comportó exactamente como se
+  diseñó** — 0 resultados sin error = respuesta honesta, nunca una respuesta inventada. Registrado como fast-follow
+  independiente (el wire del agent debería honrar `cfg.Mailboxes` como `ls`/`search`). Es la lección
+  `smoke-e2e-reveals-architecture-not-just-bugs`: un LLM real + datos reales revelaron una cuestión de
+  arquitectura que ningún test unitario ni la auditoría estática podían ver.
+
+### Fast-follows registrados (no bloquean)
+
+- **Wire de `mail ai agent` no honra `cfg.Mailboxes`** — con un buzón multi-mailbox, el agente solo ve un mailbox
+  (`main.go:511`). Candidato: iterar `cfg.Mailboxes` como `ls`/`search`, o que `RunAgent`/`Searcher` acepten
+  múltiples mailboxes. Descubierto por el smoke de v0.7.1; es su propio frente (pre-existente de v0.7).
+- **Approach B — strip determinístico de operadores** — diferido; solo se justifica con evidencia de un smoke
+  donde un modelo siga inventando operadores pese al Description endurecido.
+- **`input_examples` (Claude-only)** — añadir un campo a `ToolSpec` + plumbing en `claude.go`; asimétrico entre
+  backends (Ollama no lo soporta), no ayuda al backend donde ocurrió el finding.
+
+### Invariantes preservados
+
+`TestReadMessageRedactsBody` intacto; AR-1 (`search.go`, "0 resultados sin error = respuesta válida") intacto;
+default limit=50 intacto. La superficie de producción del cambio es exactamente dos strings en `tools.go`.
+
+---
+
 ## [mail v0.7] — FTS5 en las tools del agente AI — 2026-07-05
 
 v0.5 construyó un cache local SQLite+FTS5 que acelera `mail ls` y habilita búsqueda full-text rankeada

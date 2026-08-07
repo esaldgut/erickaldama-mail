@@ -21,6 +21,7 @@ sesión — todo lo que hay que recordar entre sesiones está aquí, versionado 
 | v0.5.1 | Fix reader vacío + refresh de la TUI (manual `g` + auto 30s); CRITICAL de fuga de `inflight` | `f917968` | #15 |
 | v0.6 | Render de enlaces del correo (OSC 8 + lista al pie), defensa de inyección terminal en 2 capas | `459d829` | #16 |
 | v0.7 | FTS5 en las tools del agente AI (`search_messages`, `Searcher`/`fallbackSearcher`, AR-1) | `7bef535` | #18 |
+| v0.7.1 | Endurecer el `Description` de `search_messages` contra operadores estilo Gmail (declarativo, ASCII, describe el mecanismo) | `<pendiente-merge>` | `<pendiente-PR>` |
 
 Los SHA son el commit de merge de cada PR (`gh pr list --state merged`), no el HEAD del branch de feature —
 la fuente de verdad si hace falta re-verificar es el historial de GitHub del repo.
@@ -41,12 +42,21 @@ Consolidados aquí para que sobrevivan a través de sesiones.
 - **BP-1 (MENOR)** — el clamp `[1, 1000]` de `limit` (evita overflow de `int32(limit)`) lo aplica el caller
   (`execTool`) por convención, no `substringSearcher` mismo — defensa en profundidad diferida, no urgente
   mientras haya un solo caller. Ver `docs/v0.7-AI-FTS5.md` §8(b).
-- **Endurecer el `Description` de `search_messages` / despojar operadores conocidos** — el deploy finding de
-  §7 mostró que un LLM local (`qwen2.5:7b`) puede inventar operadores estilo Gmail (`from:`, `subject:`) que
-  la tool no soporta, buscando el prefijo literalmente → 0 hits. El fallback ya devuelve `0` resultados
-  honestos (AR-1), así que no es urgente; mitigación candidata: declarar explícitamente "solo términos
-  simples, sin operadores de campo" en el `Description`, y/o despojar prefijos de operador conocidos antes de
-  pasar la query a FTS5. Ver `docs/v0.7-AI-FTS5.md` §7 y §8(c).
+- **~~Endurecer el `Description` de `search_messages`~~ — RESUELTO por v0.7.1** (la primera de las dos
+  mitigaciones de §8(c)). El Description se reescribió a ~4 oraciones ASCII que describen el mecanismo
+  ("`from:amazon` se busca como las dos palabras literales `from` y `amazon`, no como filtro"); el smoke E2E
+  con `qwen2.5:7b` confirmó `query="amazon"` limpia en 4 corridas (antes `from:amazon`). La segunda mitigación
+  —**despojar operadores en el wire (Approach B)**— sigue diferida, condicionada a evidencia de un smoke donde
+  un modelo siga inventando operadores pese al Description. Ver `CHANGELOG.md` §`[mail v0.7.1]` y
+  `docs/superpowers/specs/2026-07-28-search-messages-operator-hardening-design.md`.
+- **AGENT-MB-1 (deploy finding, descubierto por el smoke de v0.7.1)** — el wire de `mail ai agent`
+  (`cmd/mail/main.go:511`) pasa un **único** `mailboxName` a `RunAgent`, mientras `ls` (`main.go:131`) y
+  `search` (`main.go:537`) caen a `cfg.Mailboxes` (los 6 buzones del config) cuando `--mailbox` no se pasó. Con
+  un buzón multi-mailbox, el agente reporta "sin coincidencias" honesto (AR-1 correcto) aunque el correo exista
+  en otro mailbox del config — confirmado con evidencia binaria (`mail search --json` → los correos están en
+  `mailbox#erick+awsbridge@erickaldama.com`, no en el default). Candidato: el wire del agent debería iterar
+  `cfg.Mailboxes`, o `RunAgent`/`Searcher` aceptar múltiples mailboxes. Es su propio frente (pre-existente de
+  v0.7).
 
 ### v0.6
 
