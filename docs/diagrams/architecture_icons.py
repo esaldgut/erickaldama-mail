@@ -40,8 +40,9 @@ from diagrams.aws.network import Route53
 from diagrams.aws.management import Cloudwatch
 from diagrams.aws.security import IAM
 from diagrams.aws.general import User
-from diagrams.onprem.client import Client, Storage
+from diagrams.onprem.client import Client
 from diagrams.onprem.compute import Server
+from diagrams.generic.storage import Storage
 from diagrams.onprem.ci import GithubActions
 from diagrams.onprem.vcs import Github
 
