@@ -5,16 +5,19 @@ provisioned entirely with **AWS CDK (Go)**, consumed by a terminal-native Go cli
 
 > Region: `us-east-1` · Account: ErickSA (367707589526) · All resources provisioned via AWS CDK Go.
 >
-> **Status (2026-07-05):** the SEND path (SP-2), the RECEIVE path (SP-3), the Go terminal client
-> (SP-4, up to **v0.7**), and the CD pipeline (GitHub Actions → OIDC → AWS) are **all live and verified** —
+> **Status (2026-08-06):** the SEND path (SP-2), the RECEIVE path (SP-3), the Go terminal client
+> (SP-4, up to **v0.7.1**), and the CD pipeline (GitHub Actions → OIDC → AWS) are **all live and verified** —
 > send→receive→read exercised end-to-end against live AWS. The full loop is closed.
 >
 > **Client evolution (`internal/message` render pipeline):** v0.3 rich HTML render (bluemonday sanitize →
 > html-to-markdown → glamour) · v0.4 two-pane TUI · v0.5 SQLite+FTS5 cache · v0.6 legible link render
 > (OSC 8 hyperlinks + footer list) with a two-layer terminal-injection defense over untrusted email HTML ·
-> **v0.7 FTS5-backed AI search**. See [`METHODOLOGY.md`](METHODOLOGY.md) for how the layered audit caught
-> 8 distinct defect classes in v0.6, and [`v0.7-AI-FTS5.md`](v0.7-AI-FTS5.md) for the v0.7 runbook and
-> deploy finding.
+> v0.7 FTS5-backed AI search · **v0.7.1 hardened `search_messages` tool `description`** (describe the search
+> mechanism, ASCII-pure, so a local LLM stops inventing Gmail-style `from:` operators). See
+> [`METHODOLOGY.md`](METHODOLOGY.md) for how the layered audit caught 8 distinct defect classes in v0.6 and,
+> in the **8th fogueo** (v0.7.1), two MAJOR defects the *author* introduced while writing a two-string diff;
+> and [`v0.7-AI-FTS5.md`](v0.7-AI-FTS5.md) for the v0.7 runbook, the qwen deploy finding, and the v0.7.1
+> hardening note (§8c).
 >
 > **Client v0.2:** `config.toml` (XDG path) drives a multi-mailbox `mail ls` (merged, sorted by `SK`).
 > CC/BCC on send/reply + the TUI composer — the **BCC rides only the SES envelope, never the MIME header**
@@ -94,6 +97,70 @@ flowchart TB
     class read_iam,send_iam iam;
     class ai ai;
 ```
+
+## AI agent search flow — `search_messages` tool (v0.7 · hardened in v0.7.1)
+
+The `ai` node above is a black box in the infra diagram. This is the detail: how `mail ai agent` resolves a
+`search_messages` tool-call. The agent loop is **read-only** (no send tool — blast radius bounded by design);
+its search tool routes through the same v0.5 SQLite+FTS5 cache that `mail search` uses, with a live-DynamoDB
+substring fallback that fires **only** on real infrastructure failure (invariant **AR-1** — never blind, never
+mis-fired).
+
+```mermaid
+flowchart TB
+    llm(["🤖 LLM backend<br/>Ollama qwen3:32b (default) · Claude opus-4-8 (opt-in)"])
+    desc["📝 tool <b>search_messages</b> Description<br/>v0.7.1: describes the MECHANISM, ASCII-pure<br/>'from:amazon → the two literal words from + amazon,<br/>not a sender filter — use plain keywords'"]
+
+    subgraph loop["agent loop · internal/aiassist · READ-ONLY (no send tool)"]
+        direction TB
+        exec["execTool · case search_messages<br/>q := call.Args[query] · clamp limit [1,1000]"]
+        searcher["Searcher (interface)"]
+        fb["fallbackSearcher<br/>AR-1: 0 rows + no error = valid answer<br/>fallback ONLY on real infra error"]
+    end
+
+    subgraph backends["search backends"]
+        direction TB
+        fts["FTS5 · cache.Search<br/>EscapeFTS: quoted phrase + trailing *<br/>bm25 ranked · prefix on last token<br/>fts5(sender, subject)"]
+        sqlite["🗄️ SQLite cache<br/>~/.cache/erickaldama-mail/index.sqlite (0600)"]
+        sub["substringSearcher (degraded)<br/>reader.List + Contains(From OR Subject)"]
+    end
+
+    ddb2["🗄️ DynamoDB mail-index<br/>(source of truth)"]
+
+    desc -.->|"read verbatim in prompt<br/>steers the tool-call"| llm
+    llm -->|"tool-call query=amazon<br/>(v0.7.1: no longer from:amazon)"| exec
+    exec --> searcher
+    searcher --> fb
+    fb -->|"try FTS first (err==nil → return, incl. 0 rows)"| fts
+    fts --> sqlite
+    fb -.->|"ONLY on infra error (nil cache / DB locked)"| sub
+    sub -->|"live read"| ddb2
+    fts -->|"[]Header JSON"| exec
+    sub -->|"[]Header JSON"| exec
+    exec -->|"marshalHeaders → tool result"| llm
+
+    classDef ai fill:#1a2332,stroke:#7b68ee,stroke-width:1px,color:#fff;
+    classDef core fill:#1a2332,stroke:#3fb950,stroke-width:1px,color:#fff;
+    classDef store fill:#1a2332,stroke:#ff9900,stroke-width:1px,color:#fff;
+    classDef doc fill:#161b22,stroke:#58a6ff,stroke-width:1px,color:#fff;
+    class llm ai;
+    class exec,searcher,fb,fts,sub core;
+    class sqlite,ddb2 store;
+    class desc doc;
+```
+
+**Why the `Description` is in the diagram.** The v0.7.1 hardening changed only that one node (the tool
+`Description` + its `query` param), yet it is what steers the whole flow: the LLM reads it verbatim to decide the
+tool-call. Before v0.7.1 the model invented `query="from:amazon"` (a Gmail-style operator FTS5 does not support →
+0 hits); after, it sends `query="amazon"`. The change is **purely declarative** — no runtime code path changed;
+`Searcher`, `fallbackSearcher`, `EscapeFTS`, and AR-1 are untouched. See
+[`v0.7-AI-FTS5.md`](v0.7-AI-FTS5.md) and the design spec
+[`2026-07-28-search-messages-operator-hardening-design.md`](superpowers/specs/2026-07-28-search-messages-operator-hardening-design.md).
+
+> **Known fast-follow (AGENT-MB-1).** The agent wire (`cmd/mail/main.go:511`) passes a single `mailboxName` to
+> `RunAgent`, whereas `mail ls`/`mail search` fall back to all of `cfg.Mailboxes` when `--mailbox` is not given.
+> On a multi-mailbox config the agent searches only one mailbox — surfaced by the v0.7.1 smoke and registered in
+> [`ROADMAP.md`](ROADMAP.md), not a v0.7.1 regression.
 
 ## CD pipeline — GitHub Actions → OIDC → AWS
 

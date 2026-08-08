@@ -21,6 +21,13 @@ CD (2026-06-25 LIVE): added CI/CD cluster — GitHub Actions deploys the CDK-Go
 stacks to AWS via OIDC (no long-lived keys) with manual prod approval. CdStack
 (5th stack) provisions a native OIDC provider + two scoped roles: mail-cd-diff
 (read-only) and mail-cd-deploy (environment:production-gated).
+
+v0.7 / v0.7.1 (2026-08-06 LIVE): the AI agent's search_messages tool now routes
+through the v0.5 SQLite+FTS5 cache (bm25-ranked, prefix match) with a live-DynamoDB
+substring fallback that fires only on real infra failure (invariant AR-1). v0.7.1
+hardened the tool Description (describe the search MECHANISM, ASCII-pure) so a local
+LLM stops inventing Gmail-style from: operators — a purely declarative change (no
+runtime path altered). Added the FTS5 cache node + backend edges below.
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -33,7 +40,7 @@ from diagrams.aws.network import Route53
 from diagrams.aws.management import Cloudwatch
 from diagrams.aws.security import IAM
 from diagrams.aws.general import User
-from diagrams.onprem.client import Client
+from diagrams.onprem.client import Client, Storage
 from diagrams.onprem.compute import Server
 from diagrams.onprem.ci import GithubActions
 from diagrams.onprem.vcs import Github
@@ -74,6 +81,9 @@ with Diagram(
         send_iam = IAM("mail-sender\nSendRawEmail scoped")
         ollama = Server("Ollama local\nqwen3:32b\n(default · on-device)")
         claude_api = Client("Claude API\nclaude-opus-4-8\n(opt-in · explicit warning)")
+        fts_cache = Storage(
+            "SQLite+FTS5 cache\nindex.sqlite (0600)\nsearch_messages tool\nAR-1 · substring fallback"
+        )
 
     with Cluster("Observability"):
         cw = Cloudwatch("CloudWatch\nbounce/complaint/DLQ")
@@ -111,6 +121,14 @@ with Diagram(
     # AI dual-backend (read-only agent-loop, no send tool)
     tui >> Edge(label="ai subcommand\n(default · on-device)", style="dashed") >> ollama
     tui >> Edge(label="ai subcommand\n(opt-in · crosses net)", style="dashed") >> claude_api
+
+    # AI agent search_messages tool (v0.7 · hardened Description in v0.7.1):
+    # both LLM backends resolve the search tool through the FTS5 cache; the cache
+    # falls back to a live-DynamoDB substring read only on real infra failure (AR-1).
+    ollama >> Edge(label="search_messages\ntool-call", style="dashed") >> fts_cache
+    claude_api >> Edge(label="search_messages\ntool-call", style="dashed") >> fts_cache
+    fts_cache >> Edge(label="FTS5 bm25 · prefix match") >> index
+    fts_cache >> Edge(label="substring fallback\n(AR-1 · infra error only)", style="dashed") >> read_iam
 
     # Observability
     ses_out >> Edge(label="events", style="dashed") >> cw

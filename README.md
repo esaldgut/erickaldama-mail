@@ -228,6 +228,18 @@ cache infrastructure actually fails — never on a legitimate zero-result search
   [`docs/v0.7-AI-FTS5.md`](docs/v0.7-AI-FTS5.md) for the full runbook, the FTS-vs-substring decision
   logic, and the deploy finding.
 
+**v0.7.1 — hardened `search_messages` tool `description`** — closes the v0.7 deploy finding by rewriting the tool's
+`Description` (and its `query` param) so the local LLM stops inventing `from:`/`subject:` operators. The text now
+describes the **search mechanism** (`from:amazon` is searched as the two literal words `from` and `amazon`, not a
+sender filter) rather than a corpus-dependent result, and is **ASCII-pure**. A purely declarative change — two
+string literals, no runtime path altered, AR-1 untouched — yet it went through six audit layers: the adversarial
+spec-audit caught two MAJOR defects the *author* introduced while writing (a non-ASCII em-dash U+2014 that would
+travel to both LLM backends; an absolute "matches nothing" claim that FTS5 phrase semantics make false), and the
+smoke E2E (4/4 clean `query="amazon"`) also surfaced an orthogonal, pre-existing wire finding (the agent searches a
+single mailbox — [`AGENT-MB-1`](docs/ROADMAP.md)). The full story — how a two-string diff earns six audit layers —
+is the case study **[`docs/CASE-STUDY-v0.7.1.md`](docs/CASE-STUDY-v0.7.1.md)**, and the 8th "fogueo" of the
+project's layered-audit methodology in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md).
+
 Two IAM users provisioned via CDK with least-privilege disjoint scopes:
 
 | User | Scope |

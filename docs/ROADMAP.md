@@ -21,7 +21,7 @@ sesión — todo lo que hay que recordar entre sesiones está aquí, versionado 
 | v0.5.1 | Fix reader vacío + refresh de la TUI (manual `g` + auto 30s); CRITICAL de fuga de `inflight` | `f917968` | #15 |
 | v0.6 | Render de enlaces del correo (OSC 8 + lista al pie), defensa de inyección terminal en 2 capas | `459d829` | #16 |
 | v0.7 | FTS5 en las tools del agente AI (`search_messages`, `Searcher`/`fallbackSearcher`, AR-1) | `7bef535` | #18 |
-| v0.7.1 | Endurecer el `Description` de `search_messages` contra operadores estilo Gmail (declarativo, ASCII, describe el mecanismo) | `<pendiente-merge>` | #21 |
+| v0.7.1 | Endurecer el `Description` de `search_messages` contra operadores estilo Gmail (declarativo, ASCII, describe el mecanismo) | `b22449f` | #21 |
 
 Los SHA son el commit de merge de cada PR (`gh pr list --state merged`), no el HEAD del branch de feature —
 la fuente de verdad si hace falta re-verificar es el historial de GitHub del repo.

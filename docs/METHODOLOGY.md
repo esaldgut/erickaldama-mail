@@ -161,6 +161,48 @@ instrumentación con `git checkout` al terminar — nunca comitearla.
 
 ---
 
+## La auditoría en capas, 8º fogueo (caso v0.7.1, MERGEADA PR #21) — cuando el DEFECTO lo introduce el AUTOR al redactar
+
+v0.7.1 (endurecer el `Description` de la tool `search_messages` para que un modelo dejara de inventar operadores
+estilo Gmail) es el **octavo fogueo** de la metodología, y aporta un dato que las siete corridas anteriores no
+habían aislado con esta nitidez: **la capa de auditoría adversarial caza defectos que el propio AUTOR introduce al
+redactar el artefacto — no solo bugs en código de un tercero, ni supuestos falsos del spec, sino errores que el
+constructor mete y su modelo mental le oculta.** El cambio de producción eran DOS strings (un `description` de tool
+y el de su parámetro): un diff que "cualquiera aprobaría de un vistazo". Y sin embargo el borrador contenía dos
+defectos MAJOR, cada uno cazado por una capa distinta, cada uno invisible a la auto-revisión inline del autor:
+
+| Capa de review | Qué SOLO ella puede ver | Hallazgo v0.7.1 |
+|---|---|---|
+| **Spec-audit adversarial** (F2, verifica el texto contra el código real) | un carácter no-ASCII que el compilador acepta pero un consumidor downstream rechaza | **MAJOR em-dash U+2014**: el borrador del `Description` usaba `—`. `go build`/`go vet` lo aceptan, pero viaja a los backends LLM (Ollama `function.description`, Claude `ToolParam.Description`) — la misma clase de defecto que un em-dash rechazado por el regex de AWS SSO. Un cambio que se declara "cero runtime, ASCII puro" NO debe introducir una dependencia de encoding |
+| **Spec-audit adversarial** (F2, verifica el texto contra la doc del motor) | una afirmación que es verdadera para el corpus de hoy pero FALSA en general | **MAJOR "matches nothing"**: el borrador decía `"from:amazon" matches nothing`. `EscapeFTS` produce la frase `"from:amazon"*` → tokens `from` + `amazon*`, y FTS5 (§3.2 doc oficial: una frase matchea tokens **adyacentes y en orden**) SÍ matchearía "Order confirmation **from Amazon**". Era true solo para el corpus del deploy finding — hornear un resultado corpus-dependiente en un `description` permanente es la clase de defecto que el frente busca eliminar: una instrucción que la tool no honra siempre |
+| **External PR review** (F6, agente que NO construyó, ojos frescos) | el punto ciego del autor recién salido de corregir el hallazgo anterior | **NIT "anywhere"**: el param `query` decía que los términos matchean "anywhere in the sender or subject", pero `EscapeFTS` construye una frase ordenada adyacente, no dos palabras independientes en cualquier posición. El autor —recién salido de corregir el "matches nothing"— no re-escrutó esta segunda imprecisión del mismo tipo |
+
+**Sub-lección nueva — un `description` de tool es CÓDIGO, no prosa; se audita con las mismas capas.** Las siete
+corridas anteriores auditaron lógica (v0.7: shadowing, overflow, guard de cold-start; v0.6: O(n²), forja OSC 8,
+sink de plain-text). v0.7.1 probó que el mismo aparato de auditoría en capas es necesario para un artefacto que "no
+es código ejecutable": un `description` que un LLM lee es **input funcional** que altera el comportamiento del
+modelo y viaja verbatim al backend. Los tres defectos (em-dash, over-claim, under-claim) NO son de estilo — son de
+corrección: encoding que un consumidor rechaza, y afirmaciones falsas sobre el propio motor. La disciplina se
+codificó en un skill nuevo, [`llm-tool-description-mechanism-not-result`], con tres reglas duras: **describe el
+mecanismo (no un resultado corpus-dependiente), ASCII puro, y verifica la veracidad contra el motor real.**
+
+**Sub-lección — el smoke con un LLM real destapa DOS clases a la vez, y la colateral no contamina la primaria.** El
+smoke de v0.7.1 iba a probar una cosa: que el `Description` endurecido cambiara el comportamiento de `qwen2.5:7b`
+(lo confirmó — 4/4 `query="amazon"` limpia, nunca `from:amazon`). Pero al observar que el agente reportaba "sin
+coincidencias" pese a haber 5 correos de "Amazon Web Services" en el buzón, destapó un deploy finding **ortogonal e
+independiente** del cambio de v0.7.1: el wire de `mail ai agent` (`cmd/mail/main.go:511`) pasa un único
+`mailboxName` a `RunAgent`, mientras `ls` y `search` caen a `cfg.Mailboxes` cuando `--mailbox` no se pasó — el
+agente busca en un solo mailbox, el correo vivía en otro (confirmado por `mail search --json` → `pk =
+mailbox#erick+awsbridge@erickaldama.com`). **AR-1 se comportó exactamente como se diseñó** (0 resultados sin error
+= respuesta honesta, nunca un dato inventado). La disciplina: el finding colateral (AGENT-MB-1) se registró como
+fast-follow independiente, NO como bloqueante del merge — el objetivo del frente (que el modelo deje de inventar
+operadores) se cumplió y se cerró; la arquitectura del wire es su propio frente. Es la variante "el smoke destapa
+una arquitectura ortogonal a lo que iba a probar" de la lección de smokes en capas. Y el diagnóstico usó evidencia
+binaria (`search --json` mostró el `pk` real) para refutar la hipótesis fácil ("cache frío") y localizar el
+mismatch exacto — validar, no confiar, aplicado al propio diagnóstico.
+
+---
+
 ## Disciplinas transversales
 
 - **Validar, no confiar** — cada reporte de subagente (y cada prescripción de fix de un revisor) se verifica
