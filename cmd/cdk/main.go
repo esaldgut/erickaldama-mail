@@ -12,40 +12,48 @@ func main() {
 
 	app := awscdk.NewApp(nil)
 
-	// SPIKE (Task 1): Env resolved once from CDK_DEFAULT_ACCOUNT/REGION (placeholder offline).
-	// Task 3 threads this to all 5 stacks; the spike wires only SendingStack via the EnvStackProps wrapper.
+	// Env resolved ONCE from CDK_DEFAULT_ACCOUNT/CDK_DEFAULT_REGION (from the OIDC-assumed credentials in CI,
+	// or --profile locally; placeholder offline). Single source of truth — no account literal in this file.
+	// Injected to all 5 stacks via EnvStackProps (uniform threading; the 5 signatures are not homogeneous).
 	e := infra.NewEnv()
 
-	infra.NewFoundationStack(app, "FoundationStack", &awscdk.StackProps{
-		Env: env(),
-	})
-
-	infra.NewSendingStack(app, "SendingStack", &infra.EnvStackProps{
-		StackProps: &awscdk.StackProps{Env: env()},
+	infra.NewFoundationStack(app, "FoundationStack", &infra.EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: cdkEnv(e)},
 		Env:        e,
 	})
 
-	storage, rawBucket := infra.NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{
-		Env: env(),
+	infra.NewSendingStack(app, "SendingStack", &infra.EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: cdkEnv(e)},
+		Env:        e,
+	})
+
+	storage, rawBucket := infra.NewMailStorageStack(app, "MailStorageStack", &infra.EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: cdkEnv(e)},
+		Env:        e,
 	})
 	_ = storage
 
-	infra.NewReceivingStack(app, "ReceivingStack", &awscdk.StackProps{
-		Env: env(),
+	infra.NewReceivingStack(app, "ReceivingStack", &infra.EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: cdkEnv(e)},
+		Env:        e,
 	}, rawBucket)
 
-	infra.NewCdStack(app, "CdStack", &awscdk.StackProps{
-		Env:                 env(),
-		PermissionsBoundary: awscdk.PermissionsBoundary_FromName(jsii.String(infra.BoundaryManagedPolicyName)),
+	infra.NewCdStack(app, "CdStack", &infra.EnvStackProps{
+		StackProps: &awscdk.StackProps{
+			Env:                 cdkEnv(e),
+			PermissionsBoundary: awscdk.PermissionsBoundary_FromName(jsii.String(infra.BoundaryManagedPolicyName)),
+		},
+		Env: e,
 	})
 
 	app.Synth(nil)
 }
 
-// env pins the target account and region (SP-1 deploys only to ErickSA us-east-1).
-func env() *awscdk.Environment {
+// cdkEnv builds the CDK deploy environment from the resolved Env (account/region come from
+// CDK_DEFAULT_ACCOUNT/REGION at synth, not from a hardcoded literal — NDA/attack-surface reduction).
+func cdkEnv(e infra.Env) *awscdk.Environment {
 	return &awscdk.Environment{
-		Account: jsii.String("367707589526"),
-		Region:  jsii.String("us-east-1"),
+		Account: jsii.String(e.Account),
+		Region:  jsii.String(e.Region),
 	}
 }

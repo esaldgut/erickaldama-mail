@@ -8,17 +8,22 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
-func synthCd(t *testing.T) assertions.Template {
+// synthCd returns the template AND the Env it was built from, so assertions derive their expected ARNs
+// from the SAME Env instance (F2-Finding 6: one NewEnv() for both sides → template and assert agree on the
+// resolved account, the placeholder offline).
+func synthCd(t *testing.T) (assertions.Template, Env) {
 	t.Helper()
 	app := awscdk.NewApp(nil)
-	stack := NewCdStack(app, "CdStack", &awscdk.StackProps{
-		Env: &awscdk.Environment{Account: jsii.String(Account), Region: jsii.String(Region)},
+	e := NewEnv()
+	stack := NewCdStack(app, "CdStack", &EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: &awscdk.Environment{Account: jsii.String(e.Account), Region: jsii.String(e.Region)}},
+		Env:        e,
 	})
-	return assertions.Template_FromStack(stack, nil)
+	return assertions.Template_FromStack(stack, nil), e
 }
 
 func TestCdStackOidcProviderIsNative(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, _ := synthCd(t)
 	// L1 CfnOIDCProvider → native resource, NOT a custom resource + Lambda.
 	tpl.ResourceCountIs(jsii.String("AWS::IAM::OIDCProvider"), jsii.Number(1))
 	tpl.ResourceCountIs(jsii.String("AWS::Lambda::Function"), jsii.Number(0)) // L2 would add one
@@ -29,13 +34,13 @@ func TestCdStackOidcProviderIsNative(t *testing.T) {
 }
 
 func TestCdStackHasExactlyTwoRoles(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, _ := synthCd(t)
 	// L1 → exactly 2 roles (diff + deploy); L2 would add a 3rd (custom-resource provider role).
 	tpl.ResourceCountIs(jsii.String("AWS::IAM::Role"), jsii.Number(2))
 }
 
 func TestCdDeployRoleTrustIsScopedToProductionEnv(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, _ := synthCd(t)
 	tpl.HasResourceProperties(jsii.String("AWS::IAM::Role"), assertions.Match_ObjectLike(&map[string]any{
 		"RoleName": DeployRoleName,
 		"AssumeRolePolicyDocument": assertions.Match_ObjectLike(&map[string]any{
@@ -55,7 +60,7 @@ func TestCdDeployRoleTrustIsScopedToProductionEnv(t *testing.T) {
 }
 
 func TestCdDiffRoleTrustIsScopedToPullRequest(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, _ := synthCd(t)
 	tpl.HasResourceProperties(jsii.String("AWS::IAM::Role"), assertions.Match_ObjectLike(&map[string]any{
 		"RoleName": DiffRoleName,
 		"AssumeRolePolicyDocument": assertions.Match_ObjectLike(&map[string]any{
@@ -72,12 +77,12 @@ func TestCdDiffRoleTrustIsScopedToPullRequest(t *testing.T) {
 }
 
 func TestCdRolesHaveBoundary(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, e := synthCd(t)
 	// PermissionsBoundary in the synthesized template is NOT a plain string — CDK emits a
 	// Fn::Join that resolves to the full ARN. We assert the exact boundary name appears in the
 	// join array so the test fails if anyone swaps or removes the boundary policy.
 	// Shape verified by synth: {"Fn::Join":["",["arn:",{"Ref":"AWS::Partition"},":iam::<acct>:policy/<name>"]]}
-	boundaryArn := ":iam::" + Account + ":policy/" + BoundaryManagedPolicyName
+	boundaryArn := ":iam::" + e.Account + ":policy/" + BoundaryManagedPolicyName
 	tpl.AllResourcesProperties(jsii.String("AWS::IAM::Role"), assertions.Match_ObjectLike(&map[string]any{
 		"PermissionsBoundary": map[string]any{
 			"Fn::Join": []any{
@@ -92,14 +97,14 @@ func TestCdRolesHaveBoundary(t *testing.T) {
 // AWS::IAM::Policy separado. Shape VERIFICADO por synth real (2026-06-24): el diff role produce
 // Resource como STRING único (solo el lookup); el deploy role produce Resource como ARRAY de los 4.
 func TestCdDiffRoleCanOnlyAssumeLookupRole(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, e := synthCd(t)
 	// El diff role NO puede asumir los roles de deploy/publishing — solo el lookup (read-only).
 	tpl.HasResourceProperties(jsii.String("AWS::IAM::Policy"), assertions.Match_ObjectLike(&map[string]any{
 		"PolicyDocument": assertions.Match_ObjectLike(&map[string]any{
 			"Statement": []any{
 				assertions.Match_ObjectLike(&map[string]any{
 					"Action":   "sts:AssumeRole",
-					"Resource": CdkLookupRoleArn, // string exacto — NO un array, NO los 4
+					"Resource": e.CdkLookupRoleArn, // string exacto — NO un array, NO los 4
 				}),
 			},
 		}),
@@ -107,7 +112,7 @@ func TestCdDiffRoleCanOnlyAssumeLookupRole(t *testing.T) {
 }
 
 func TestCdDeployRoleAssumesTheFourBootstrapRoles(t *testing.T) {
-	tpl := synthCd(t)
+	tpl, e := synthCd(t)
 	// El deploy role asume exactamente los 4 roles cdk-* (array).
 	tpl.HasResourceProperties(jsii.String("AWS::IAM::Policy"), assertions.Match_ObjectLike(&map[string]any{
 		"PolicyDocument": assertions.Match_ObjectLike(&map[string]any{
@@ -115,7 +120,7 @@ func TestCdDeployRoleAssumesTheFourBootstrapRoles(t *testing.T) {
 				assertions.Match_ObjectLike(&map[string]any{
 					"Action": "sts:AssumeRole",
 					"Resource": []any{
-						CdkDeployRoleArn, CdkFilePublishingRoleArn, CdkImagePublishingRoleArn, CdkLookupRoleArn,
+						e.CdkDeployRoleArn, e.CdkFilePublishingRoleArn, e.CdkImagePublishingRoleArn, e.CdkLookupRoleArn,
 					},
 				}),
 			},

@@ -30,9 +30,10 @@ func awsRegion() string {
 // account ID no longer appears as a literal in the source (NDA / attack-surface reduction). The ARN strings
 // are byte-identical to the former literals when the real account/region are resolved from env.
 type Env struct {
-	Account, Region           string
-	IdentityArn, ConfigSetArn string
-	// Task 2 adds: ReceiptRuleArn, the 4 Cdk*RoleArn, DynamoTableArn, BounceTopicArn.
+	Account, Region                                                                        string
+	IdentityArn, ConfigSetArn, ReceiptRuleArn                                               string
+	CdkLookupRoleArn, CdkDeployRoleArn, CdkFilePublishingRoleArn, CdkImagePublishingRoleArn string
+	DynamoTableArn, BounceTopicArn                                                          string
 }
 
 // EnvStackProps wraps StackProps with the resolved Env. It is the uniform threading vehicle across all
@@ -49,7 +50,15 @@ func NewEnv() Env {
 	a, r := awsAccount(), awsRegion()
 	return Env{
 		Account: a, Region: r,
-		IdentityArn:  fmt.Sprintf("arn:aws:ses:%s:%s:identity/%s", r, a, DomainName),
-		ConfigSetArn: fmt.Sprintf("arn:aws:ses:%s:%s:configuration-set/%s", r, a, ConfigSetName),
+		IdentityArn:    fmt.Sprintf("arn:aws:ses:%s:%s:identity/%s", r, a, DomainName),
+		ConfigSetArn:   fmt.Sprintf("arn:aws:ses:%s:%s:configuration-set/%s", r, a, ConfigSetName),
+		ReceiptRuleArn: fmt.Sprintf("arn:aws:ses:%s:%s:receipt-rule-set/%s:receipt-rule/%s", r, a, ReceiptRuleSetName, ReceiptRuleName),
+		// The 4 cdk-hnb659fds-* bootstrap roles: the account appears TWICE per ARN (iam::<acct>:role/...-<acct>-<region>).
+		CdkLookupRoleArn:          fmt.Sprintf("arn:aws:iam::%s:role/cdk-hnb659fds-lookup-role-%s-%s", a, a, r),
+		CdkDeployRoleArn:          fmt.Sprintf("arn:aws:iam::%s:role/cdk-hnb659fds-deploy-role-%s-%s", a, a, r),
+		CdkFilePublishingRoleArn:  fmt.Sprintf("arn:aws:iam::%s:role/cdk-hnb659fds-file-publishing-role-%s-%s", a, a, r),
+		CdkImagePublishingRoleArn: fmt.Sprintf("arn:aws:iam::%s:role/cdk-hnb659fds-image-publishing-role-%s-%s", a, a, r),
+		DynamoTableArn:            fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", r, a, MailIndexTableName),
+		BounceTopicArn:            fmt.Sprintf("arn:aws:sns:%s:%s:%s", r, a, BounceTopicName),
 	}
 }

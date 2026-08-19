@@ -11,7 +11,7 @@ import (
 func synthStorage(t *testing.T) assertions.Template {
 	t.Helper()
 	app := awscdk.NewApp(nil)
-	stack, _ := NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{})
+	stack, _ := NewMailStorageStack(app, "MailStorageStack", &EnvStackProps{StackProps: &awscdk.StackProps{}, Env: NewEnv()})
 	return assertions.Template_FromStack(stack, nil)
 }
 

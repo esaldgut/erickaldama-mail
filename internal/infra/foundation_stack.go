@@ -12,8 +12,8 @@ import (
 // NewFoundationStack creates the SP-1 foundation: public hosted zone (+CAA) and the
 // read-only IAM managed policy attached to the imported mail-readonly user. The permissions
 // boundary is a bootstrap artifact (out-of-band), not a stack resource — see note below.
-func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.StackProps) awscdk.Stack {
-	stack := awscdk.NewStack(scope, jsii.String(id), props)
+func NewFoundationStack(scope constructs.Construct, id string, props *EnvStackProps) awscdk.Stack {
+	stack := awscdk.NewStack(scope, jsii.String(id), props.StackProps)
 
 	// Tag every resource in the stack for attribution.
 	for k, v := range projectTags() {
@@ -68,7 +68,7 @@ func NewFoundationStack(scope constructs.Construct, id string, props *awscdk.Sta
 					Sid:       jsii.String("ReadMailIndex"),
 					Effect:    awsiam.Effect_ALLOW,
 					Actions:   jsii.Strings("dynamodb:Query", "dynamodb:GetItem"),
-					Resources: jsii.Strings("arn:aws:dynamodb:us-east-1:" + Account + ":table/" + MailIndexTableName),
+					Resources: jsii.Strings(props.Env.DynamoTableArn),
 					Conditions: &map[string]any{
 						"StringEquals": map[string]any{"aws:RequestedRegion": "us-east-1"},
 					},

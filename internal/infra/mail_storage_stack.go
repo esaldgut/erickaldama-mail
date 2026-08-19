@@ -10,8 +10,10 @@ import (
 // NewMailStorageStack owns the raw inbound-mail bucket (SP-3). It deploys before ReceivingStack and
 // hands the bucket to it as a Go prop (Approach A: cross-stack object reference). SSE-S3 (not SES
 // message-encryption, which is Java/Ruby client-side only) so a Go reader can GetObject transparently.
-func NewMailStorageStack(scope constructs.Construct, id string, props *awscdk.StackProps) (awscdk.Stack, awss3.Bucket) {
-	stack := awscdk.NewStack(scope, jsii.String(id), props)
+// NewMailStorageStack is account-free (no ARN/account literal). It takes *EnvStackProps only for uniform
+// threading across all 5 stacks (F2-Finding 4); it does not read props.Env.
+func NewMailStorageStack(scope constructs.Construct, id string, props *EnvStackProps) (awscdk.Stack, awss3.Bucket) {
+	stack := awscdk.NewStack(scope, jsii.String(id), props.StackProps)
 
 	bucket := awss3.NewBucket(stack, jsii.String("RawMailBucket"), &awss3.BucketProps{
 		BucketName:        jsii.String(RawBucketName),
