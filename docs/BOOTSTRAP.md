@@ -3,6 +3,16 @@
 The MCP `aws-api` needs a read-only IAM principal. Creating it IS an AWS write, but the CDK-Go governance
 does not exist yet at t=0 (chicken-and-egg). This is the one-time manual exception (like Terraform's state bucket).
 
+> **NDA placeholder — `<ACCOUNT_ID>`.** This is a PUBLIC repo, so the real 12-digit AWS account id does NOT appear
+> in any committed file (verified: `grep -rn <account> .` = 0). The `iam/*.json` policy/trust docs and the
+> `iam/*.sh` scripts carry `<ACCOUNT_ID>` (and the scripts read `$EXPECTED_ACCOUNT`) as a placeholder. Before
+> applying any of them out-of-band, substitute the real account: `export EXPECTED_ACCOUNT=<the ErickSA account id>`
+> for the scripts, and replace `<ACCOUNT_ID>` in the JSON (e.g.
+> `sed "s/<ACCOUNT_ID>/$EXPECTED_ACCOUNT/g" iam/mail-send-policy.json | aws iam ... --policy-document file:///dev/stdin`).
+> The CDK app itself needs NO substitution — it resolves the account from `CDK_DEFAULT_ACCOUNT` (the OIDC-assumed
+> role in CI, or `--profile AdministratorAccess-<the account>` locally). See `internal/infra/env.go` and the skill
+> `iac-inject-env-never-hardcode-account`.
+
 ## Procedure (human, with ADMIN credentials the agent NEVER sees)
 1. Create an IAM user/role `mail-readonly` and attach `iam/readonly-policy.json` (inline), using profile
    `AdministratorAccess-<ACCOUNT_ID>`. Do this in the Console or `aws iam ... --profile AdministratorAccess-<ACCOUNT_ID>`.

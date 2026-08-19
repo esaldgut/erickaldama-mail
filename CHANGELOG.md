@@ -12,6 +12,77 @@ Cuenta AWS `<ACCOUNT_ID>` · región `us-east-1` · repo público con Git Flow (
 
 ---
 
+## [infra · NDA] — Parametrizar el Account ID + ARNs del repo público (Env struct inyectado) — 2026-08-09
+
+El repo es **público** y exponía el AWS Account ID (`<ACCOUNT_ID>`), ARNs y nombres de recurso como literales en
+el source Go, el workflow de CI y los docs. Este frente los saca del código versionado **sin romper el CI/CD ni el
+CDK que ya despliega** — parametrización 100%, verificada con `grep -rn <account> .` = 0 en todo el repo.
+
+### Encuadre — identificadores, NO credenciales
+
+Inventario exhaustivo (3 agentes, lectura directa por el hook SP-0 que deniega grep): **CERO credenciales en git**
+— ni `AKIA`/`ASIA`, secret keys, session tokens, API keys, DB URIs, bearer tokens. Cada string tipo-secreto es una
+regex de redacción, un nombre de env var, o un placeholder de runbook. **Nada que rotar.** Lo expuesto son
+*identificadores* (Account ID, ARNs) — no otorgan acceso sin un principal autenticado (el OIDC trust
+`sub: repo:esaldgut/erickaldama-mail:environment:production` es el boundary real, intacto). Tráfico GitHub
+(2026-08-07): 0 forks, 0 views, ~5 clones dispersos de terceros/bots (indistinguibles). Higiene de superficie de
+reconocimiento hacia adelante, no contención de brecha.
+
+### Approach #3 — Env struct inyectado (no #4 tokens CDK), por byte-identidad
+
+Se evaluaron 4 alternativas (regla universal destilada en el skill `iac-inject-env-never-hardcode-account`):
+#1 `const→var` con `os.Getenv` en init (PROHIBIDO — estado global capturado temprano, frágil); #2 funciones;
+**#3 un `Env` struct construido 1× e inyectado via un `EnvStackProps` wrapper** (ELEGIDO); #4 tokens CDK nativos
+(`Fn::Sub`/`AWS::AccountId`). Se eligió #3 sobre #4 porque **se exige byte-identidad del template** (no arriesgar
+el CD ya vivo) y los 4 `cdk-hnb659fds-*` role ARNs llevan el account DENTRO del nombre (obligarían a `Fn::Sub`
+igual). #3 preserva los ARN como los mismos strings, solo compuestos desde `Env.Account` con `fmt.Sprintf` en vez
+de literales — `cdk diff` vacío, tests intactos.
+
+- **`internal/infra/env.go` (nuevo):** `NewEnv()` resuelve account/region de `CDK_DEFAULT_ACCOUNT`/
+  `CDK_DEFAULT_REGION` (del rol OIDC en CI, `--profile` local; placeholder `000000000000` offline para synth/test
+  determinista) y compone los 10 identificadores con-account. `EnvStackProps` wrappea `StackProps` — threading
+  uniforme para las 5 firmas de stack (que NO son homogéneas: `NewReceivingStack` tiene un param `bucket`,
+  `NewMailStorageStack` retorna 2 valores).
+- **`naming.go`:** eliminadas las 9 constantes con-account (`Account`, `Region`, las 3 SES ARN, las 4 Cdk role
+  ARN); conservados los nombres de recurso/rol/dominio (no sensibles). **Cerró 2 deudas pre-existentes:**
+  `cmd/cdk/main.go` re-hardcodeaba el account (2ª fuente de verdad) y los ARN se recomponían inline duplicando
+  `us-east-1` — ahora una sola fuente (`NewEnv`).
+- **`.github/workflows/cd.yml`:** los 2 `role-to-assume` → GitHub secrets (`AWS_CD_DIFF_ROLE_ARN` repo,
+  `AWS_CD_DEPLOY_ROLE_ARN` environment `production`) + un step nuevo en ambos jobs que **exporta
+  `CDK_DEFAULT_ACCOUNT` explícito** desde el rol OIDC asumido (`aws sts get-caller-identity`). Este export es el
+  fix del CRIT de la auditoría del plan: `configure-aws-credentials` NO setea `CDK_DEFAULT_ACCOUNT`; sin el export
+  el synth del CI usaría el placeholder → diff gigante / deploy a la cuenta equivocada.
+- **`iam/*.json` (5) + `iam/*.sh` (3) + docs (25):** redactados a `<ACCOUNT_ID>` (JSON = espejos de auditoría
+  out-of-band, 0 `go:embed`/`os.ReadFile` verificado; scripts parametrizados a `${EXPECTED_ACCOUNT}`).
+
+### La auditoría adversarial del plan cazó 3 CRIT + 4 MAJOR antes de tocar código
+
+El plan pasó una auditoría de 3 frentes (byte-identidad vs literales reales · blast-radius · coherencia+CI). Cazó
+3 CRIT (2 consumidores omitidos: `sending_stack.go:171` `NewAccountPrincipal`, `receiving_stack.go:142,151`
+`ReceiptRuleArn`; y el `CDK_DEFAULT_ACCOUNT` frágil en CI) + 4 MAJOR (threading no-uniforme → wrapper, baseline
+all-stacks faltante, trampa de consistencia `NewEnv` en tests, 5º test omitido) — todos corregidos ANTES de la
+ejecución. `layered-audit-catches-distinct-defect-classes` aplicado a un plan.
+
+### El spike descubrió la regla `--profile` imperativa (evidencia viva del CRIT del CI)
+
+El spike (1 stack antes de propagar) sintetizó los ARN con `288761749126`/`us-west-2` (cuenta yaan-development) —
+porque la CDK CLI popula `CDK_DEFAULT_ACCOUNT` de las credenciales ACTIVAS de la shell, y el default apuntaba a
+otra cuenta. Con `cdk synth --profile AdministratorAccess-<ACCOUNT_ID>` explícito, el diff fue vacío
+(byte-identidad). **Regla del frente (`aws-cli-pre-flight-canonical`): `--profile` explícito es imperativo — nunca
+confiar en el default.** El diff equivocado no fue un fallo: fue el spike cazando en vivo exactamente el CRIT que
+la auditoría del plan había señalado sobre `CDK_DEFAULT_ACCOUNT`. Por eso el spike es el go/no-go antes de propagar.
+
+### Verificación (el gate)
+
+Byte-identidad de los 5 stacks (`diff` de los `*.template.json` contra el baseline capturado antes de editar) =
+vacío, **salvo** el `S3Key`/`aws:asset:path` del bundle del Lambda (varía por hash del build Go, ajeno al frente —
+nota de método: al verificar byte-identidad de un template con un Lambda bundleado, excluir el asset del diff).
+`go build`/`vet`/`test -count=1 ./...` verde. `grep -rn <account> .` = **0** en todo el repo. Gate end-to-end: el
+`cdk-diff` job del PR (con el rol OIDC real vía secret + el export de `CDK_DEFAULT_ACCOUNT`) debe comentar un diff
+vacío. Skill universal producido: `iac-inject-env-never-hardcode-account` (#3 piso, #4 techo, #1 prohibido).
+
+---
+
 ## [mail v0.7.1] — Endurecer el `Description` de `search_messages` contra operadores estilo Gmail — 2026-08-06
 
 Fast-follow declarativo de v0.7. El deploy finding §7 de v0.7 mostró que `qwen2.5:7b`, al pedírsele buscar
