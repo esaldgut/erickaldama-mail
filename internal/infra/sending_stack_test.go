@@ -11,7 +11,11 @@ import (
 func synthSending(t *testing.T) assertions.Template {
 	t.Helper()
 	app := awscdk.NewApp(nil)
-	stack := NewSendingStack(app, "TestSending", nil)
+	// F2-Finding 6: build the stack's Env from the SAME NewEnv() any assertion would use, so template and
+	// assert derive from one account value (the placeholder offline). NewSendingStack now dereferences
+	// props.StackProps/props.Env, so a nil props would panic — pass a real EnvStackProps.
+	e := NewEnv()
+	stack := NewSendingStack(app, "TestSending", &EnvStackProps{StackProps: &awscdk.StackProps{}, Env: e})
 	return assertions.Template_FromStack(stack, nil)
 }
 
@@ -89,8 +93,10 @@ func TestReputationAlarms(t *testing.T) {
 
 func TestSendingStackHasSenderUser(t *testing.T) {
 	app := awscdk.NewApp(nil)
-	stack := NewSendingStack(app, "SendingStack", &awscdk.StackProps{
-		Env: &awscdk.Environment{Account: jsii.String(Account), Region: jsii.String(Region)},
+	e := NewEnv()
+	stack := NewSendingStack(app, "SendingStack", &EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: &awscdk.Environment{Account: jsii.String(e.Account), Region: jsii.String(e.Region)}},
+		Env:        e,
 	})
 	template := assertions.Template_FromStack(stack, nil)
 	template.HasResourceProperties(jsii.String("AWS::IAM::User"), map[string]any{

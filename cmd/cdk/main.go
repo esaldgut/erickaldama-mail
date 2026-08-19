@@ -12,12 +12,17 @@ func main() {
 
 	app := awscdk.NewApp(nil)
 
+	// SPIKE (Task 1): Env resolved once from CDK_DEFAULT_ACCOUNT/REGION (placeholder offline).
+	// Task 3 threads this to all 5 stacks; the spike wires only SendingStack via the EnvStackProps wrapper.
+	e := infra.NewEnv()
+
 	infra.NewFoundationStack(app, "FoundationStack", &awscdk.StackProps{
 		Env: env(),
 	})
 
-	infra.NewSendingStack(app, "SendingStack", &awscdk.StackProps{
-		Env: env(),
+	infra.NewSendingStack(app, "SendingStack", &infra.EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: env()},
+		Env:        e,
 	})
 
 	storage, rawBucket := infra.NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{
