@@ -5,7 +5,7 @@ does not exist yet at t=0 (chicken-and-egg). This is the one-time manual excepti
 
 ## Procedure (human, with ADMIN credentials the agent NEVER sees)
 1. Create an IAM user/role `mail-readonly` and attach `iam/readonly-policy.json` (inline), using profile
-   `AdministratorAccess-367707589526`. Do this in the Console or `aws iam ... --profile AdministratorAccess-367707589526`.
+   `AdministratorAccess-<ACCOUNT_ID>`. Do this in the Console or `aws iam ... --profile AdministratorAccess-<ACCOUNT_ID>`.
 2. Configure a NAMED profile `mail-readonly` in ~/.aws/config for that principal — NEVER `[default]`.
 3. Run the ACCEPTANCE GATE (`iam/bootstrap-gate.sh`) BEFORE pointing the agent at it. It must pass fully.
 4. Only then set the MCP's `AWS_API_MCP_PROFILE_NAME=mail-readonly` (already in .mcp.json) live.
@@ -32,7 +32,7 @@ NON-ESCALATION of the minted token rather than an (unenforceable) outright deny.
 ## Acceptance record (T13, 2026-06-08 — sanitized)
 
 Principal created by the human with admin creds (out of the agent): IAM user `mail-readonly`,
-ARN `arn:aws:iam::367707589526:user/mail-readonly`, inline policy `mail-readonly-boundary` =
+ARN `arn:aws:iam::<ACCOUNT_ID>:user/mail-readonly`, inline policy `mail-readonly-boundary` =
 `iam/readonly-policy.json` (4-statement, verified vs SAR). Named profile `mail-readonly` configured
 (region us-east-1; never `[default]`).
 
@@ -46,7 +46,7 @@ ARN `arn:aws:iam::367707589526:user/mail-readonly`, inline policy `mail-readonly
   - allowed: ses:GetAccount, cloudformation:DescribeStacks (regional, with region context); sts:GetCallerIdentity, route53:ListHostedZones (global).
   - explicitDeny: ses:SendEmail, sts:AssumeRole, sts:GetSessionToken, sts:GetFederationToken, s3:GetObject, cloudformation:GetTemplate, ses:GetIdentityPolicies, iam:ListAccessKeys.
   - implicitDeny: lambda:InvokeFunction (allowlist-pure confirmed).
-- Pre-flight confirmed: account 367707589526, ARN .../user/mail-readonly (not admin).
+- Pre-flight confirmed: account <ACCOUNT_ID>, ARN .../user/mail-readonly (not admin).
 
 **Latent-bug fix confirmed live:** `sts:GetCallerIdentity` succeeded under the mail-readonly profile (CLI v2
 regional STS endpoint) — proving the move to the UNCONDITIONED statement fixed the region-pin bug that would
@@ -68,7 +68,7 @@ Regla: el CLI debe ser ≥ que la librería CDK-Go — verificar AMBOS antes de 
 
 
 The agent NEVER runs these. The human runs them out-of-band with SSO
-`AdministratorAccess-367707589526`. The agent prepares the exact commands and verifies after.
+`AdministratorAccess-<ACCOUNT_ID>`. The agent prepares the exact commands and verifies after.
 (Note: the SP-0 "Deferred to SP-1" note above mentioned a `mail-deploy` principal — that was
 removed in the SP-1 design. The human deploys with SSO Admin; no long-lived deploy keys exist.)
 
@@ -79,26 +79,26 @@ For the FIRST bootstrap, create them from the JSON mirrors:
 
     aws iam create-policy --policy-name erickaldama-boundary \
       --policy-document file://iam/erickaldama-boundary.json \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
     aws iam create-policy --policy-name erickaldama-deploy-exec \
       --policy-document file://iam/deploy-exec-policy.json \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
 
 ### 2. Bootstrap the environment (one-time)
-    cdk bootstrap aws://367707589526/us-east-1 \
+    cdk bootstrap aws://<ACCOUNT_ID>/us-east-1 \
       --custom-permissions-boundary erickaldama-boundary \
-      --cloudformation-execution-policies arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
-      --profile AdministratorAccess-367707589526
+      --cloudformation-execution-policies arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-deploy-exec \
+      --profile AdministratorAccess-<ACCOUNT_ID>
 
 ### 3. Deploy the FoundationStack
-    cdk deploy FoundationStack --profile AdministratorAccess-367707589526
+    cdk deploy FoundationStack --profile AdministratorAccess-<ACCOUNT_ID>
     # Note the CfnOutput "NameServers" (4 NS) and "HostedZoneId".
 
 ### 4. Update the registrar with the new name servers
     aws route53domains update-domain-nameservers --region us-east-1 \
       --domain-name erickaldama.com \
       --nameservers Name=<ns1> Name=<ns2> Name=<ns3> Name=<ns4> \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
     # Async — poll: aws route53domains get-operation-detail --operation-id <id> --region us-east-1
 
 ### Deferred SP-0/T13 test satisfied here
@@ -111,19 +111,19 @@ The full runbook with real commands AND outputs (including the two deploy failur
 lives in [`docs/SP-2-DEPLOY.md`](SP-2-DEPLOY.md). Summary of the human out-of-band steps:
 
 ### 1. Re-apply the exec-policy with `events:*` (the EventBridge rule needs it)
-    aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
+    aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-deploy-exec \
       --policy-document file://iam/deploy-exec-policy.json --set-as-default \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
 
 ### 2. Re-apply the boundary with `events:*` (FINDING #6 — boundary INTERSECTS the exec-policy)
 The first deploy failed at `SesEventRule` with "no permissions boundary allows events:DescribeRule".
 The boundary needs the SAME permission the exec-policy gained — widening one is not enough.
-    aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+    aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
       --policy-document file://iam/erickaldama-boundary.json --set-as-default \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
 
 ### 3. Deploy the SendingStack
-    cdk deploy SendingStack --profile AdministratorAccess-367707589526
+    cdk deploy SendingStack --profile AdministratorAccess-<ACCOUNT_ID>
     # Returns CREATE_COMPLETE with DKIM PENDING — verification is asynchronous, decoupled from deploy.
 
 ### 4. Agent waits for DKIM, then smoke (human) via the Mailbox Simulator
@@ -131,13 +131,13 @@ The boundary needs the SAME permission the exec-policy gained — widening one i
     # human: aws ses send-email --from erick@erickaldama.com \
     #   --destination ToAddresses=success@simulator.amazonses.com \
     #   --message 'Subject={Data=smoke},Body={Text={Data=hi}}' \
-    #   --configuration-set-name mail-config --region us-east-1 --profile AdministratorAccess-367707589526
+    #   --configuration-set-name mail-config --region us-east-1 --profile AdministratorAccess-<ACCOUNT_ID>
     #   (repeat with bounce@ and complaint@simulator.amazonses.com)
 
 ### 5. FINDING #7 — widen mail-readonly so the agent can verify what it deployed
 The agent could not read SNS/EventBridge to confirm the event path. FoundationStack's read-only policy
 gained sns:Get*/List* + events:Describe*/List* reads (us-east-1 scoped, hard-deny intact). Redeploy:
-    cdk deploy FoundationStack --profile AdministratorAccess-367707589526
+    cdk deploy FoundationStack --profile AdministratorAccess-<ACCOUNT_ID>
 Then the agent verifies the rule → SNS target, the lit-up AWS/SES metrics, and the reputation alarms
 (INSUFFICIENT_DATA + treatMissingData=ignore is the correct idle state with no sustained traffic).
 

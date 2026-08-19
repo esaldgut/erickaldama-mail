@@ -13,7 +13,7 @@
 | SP-1..SP-4 | (pendientes) | (cada uno su worktree) | (pendientes) | pending |
 
 Repo base: `~/dev/src/go/src/erickaldama-mail` (main, commit base 725fb88). worktree.baseRef=head (sin remoto).
-Cuenta AWS: ErickSA 367707589526, us-east-1.
+Cuenta AWS: ErickSA <ACCOUNT_ID>, us-east-1.
 
 ---
 
@@ -81,7 +81,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
   cero weakening (comm old-vs-new vacío). PUNTO DE RETOMA: T13 = gate humano, el humano crea mail-readonly.
 - 2026-06-08 — T13 ✅ EN VIVO. El humano creó el IAM user mail-readonly con la policy verificada. Corrí las
   verificaciones read-only: bootstrap-gate.sh → GATE PASS (8/8); simulate-matrix.sh → SIMULATE MATRIX PASS
-  (13/13). EL LÍMITE IAM ESTÁ VERIFICADO EN VIVO CONTRA LA CUENTA REAL 367707589526. Hallazgo de la corrida:
+  (13/13). EL LÍMITE IAM ESTÁ VERIFICADO EN VIVO CONTRA LA CUENTA REAL <ACCOUNT_ID>. Hallazgo de la corrida:
   sts:GetSessionToken sobre el self-token NO se deniega observablemente (comportamiento AWS documentado) pero
   el token hereda read-only y NO escala (verificado en vivo: no iam, no assume-role, ni siquiera reads) → probe
   re-calibrada a verificar NO-ESCALADA, Deny en policy se mantiene como defensa-en-profundidad. Bug latente del
@@ -96,7 +96,7 @@ Fase 1 (hook bash, offline) · Fase 2 (plugin, sin AWS) · Fase 3 (IAM read-only
 
 Worktree aislado `sp-1-foundation` (rama worktree-sp-1-foundation, base d4ab603). Flujo: brainstorm → spec
 (auditada por 4 agentes adversariales) → plan → subagent-driven-development (9 tareas) → deploy out-of-band
-humano → verificación. Cuenta 367707589526, us-east-1.
+humano → verificación. Cuenta <ACCOUNT_ID>, us-east-1.
 
 ## Tareas (subagent-driven, spec+quality review por tarea)
 - T1 (d2ef0b5): CDK-Go module scaffold (awscdk v2.258.1, jsii v1.134.0, constructs v10.6.0). DONE+reviews.
@@ -198,19 +198,19 @@ real out-of-band. 5 hallazgos productivizados (EXECUTION-LOG + 3 memorias feedba
 ## 1 ConfigSetEventDestination, 1 SNS Topic, 1 SNS TopicPolicy, 1 Events::Rule, 2 Alarm, 1 ManagedPolicy, 1 Role.
 
 ## ⏩ PUNTO EXACTO DE RETOMA: Task 10 (GATE HUMANO — deploy out-of-band con SSO Admin)
-El agente ya hizo el pre-flight (identity 367707589526 OK, tests verdes, synth inventory correcto, DMARC fix).
-FALTA que el HUMANO ejecute (todo --profile AdministratorAccess-367707589526, desde el worktree):
+El agente ya hizo el pre-flight (identity <ACCOUNT_ID> OK, tests verdes, synth inventory correcto, DMARC fix).
+FALTA que el HUMANO ejecute (todo --profile AdministratorAccess-<ACCOUNT_ID>, desde el worktree):
 
-  ① aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
-       --policy-document file://iam/deploy-exec-policy.json --set-as-default --profile AdministratorAccess-367707589526
-  ② cdk deploy SendingStack --profile AdministratorAccess-367707589526   (confirmar 'y' IAM; termina con DKIM PENDING)
+  ① aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-deploy-exec \
+       --policy-document file://iam/deploy-exec-policy.json --set-as-default --profile AdministratorAccess-<ACCOUNT_ID>
+  ② cdk deploy SendingStack --profile AdministratorAccess-<ACCOUNT_ID>   (confirmar 'y' IAM; termina con DKIM PENDING)
   → avisar al agente
 
 LUEGO el AGENTE corre:
   ③ ./iam/ses-dkim-wait.sh   (polling hasta DKIM=SUCCESS — minutos típico Route53 same-account)
 
 LUEGO el HUMANO corre el smoke (tras DKIM=SUCCESS):
-  ④ aws sesv2 send-email --region us-east-1 --profile AdministratorAccess-367707589526 \
+  ④ aws sesv2 send-email --region us-east-1 --profile AdministratorAccess-<ACCOUNT_ID> \
        --from-email-address erick@erickaldama.com \
        --destination ToAddresses=success@simulator.amazonses.com \
        --content '{"Simple":{"Subject":{"Data":"SP-2 smoke success"},"Body":{"Text":{"Data":"hello"}}}}' \
@@ -279,7 +279,7 @@ brainstorm → spec (9f3d6f8) → auditoría adversarial 4 agentes + compilació
 subagent-driven-development (subagente fresco/tarea + spec+quality review + final review APPROVED).
 PRIMERA vez con remoto + Git Flow → cierre vía PR a develop (no merge --no-ff local).
 
-### Arquitectura desplegada (2 stacks nuevos, us-east-1, cuenta 367707589526)
+### Arquitectura desplegada (2 stacks nuevos, us-east-1, cuenta <ACCOUNT_ID>)
 MailStorageStack: S3 erickaldama-mail-raw (SSE-S3, BLOCK_ALL, EnforceSSL, lifecycle IA@90d, RETAIN).
 ReceivingStack (Approach A — bucket como prop Go): SES v1 receipt rule set erickaldama-inbound (catch-all,
 TlsPolicy REQUIRE, ScanEnabled) con acciones S3[0]→Lambda[1]; bucket policy via NewBucketPolicy EN ReceivingStack

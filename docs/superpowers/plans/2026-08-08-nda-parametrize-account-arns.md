@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Sacar el AWS Account ID `367707589526` y los ARNs con account embebido del source del repo público
+**Goal:** Sacar el AWS Account ID `<ACCOUNT_ID>` y los ARNs con account embebido del source del repo público
 (`internal/infra`, `.github/workflows/cd.yml`, `iam/`, `docs/`), inyectándolos vía un `Env` struct (approach #3)
 resuelto de `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION`, **sin cambiar el template sintetizado** (byte-identidad) ni
 romper el CI/CD.
@@ -24,9 +24,23 @@ universal: skill `iac-inject-env-never-hardcode-account`.
   comando `go`/`git`/`gh`/`cdk` lo ejecuta el HUMANO** (con `!` o a mano); el agente redacta edits y VERIFICA el
   output binario que el humano pega. `cdk synth`/`cdk diff` (read-only) el hook los PERMITE, pero pasan por Bash
   del humano igual. De a UNO (el hook deniega compound `&&`/`;`/`|`).
-- **BYTE-IDENTIDAD es el gate.** El objetivo es que `cdk synth` con `CDK_DEFAULT_ACCOUNT=367707589526`
-  `CDK_DEFAULT_REGION=us-east-1` produzca un template IDÉNTICO al de HEAD. Cualquier diff ≠ 0 es un fallo del
-  approach, no una mejora — PARAR y ajustar el `fmt.Sprintf` hasta que el string derivado == el literal.
+- **`--profile AdministratorAccess-<ACCOUNT_ID>` EXPLÍCITO es IMPERATIVO en TODO comando `cdk`/`aws` del frente.**
+  (Descubierto empíricamente en el spike, 2026-08-09.) La CDK CLI popula `CDK_DEFAULT_ACCOUNT` desde las
+  credenciales ACTIVAS de la shell — y el default de esta máquina apunta a `288761749126`/`us-west-2` (cuenta
+  yaan-development). Sin `--profile`, el spike sintetizó los ARN con `288761749126`/`us-west-2` (diff FALLÓ). Con
+  `cdk synth SendingStack --profile AdministratorAccess-<ACCOUNT_ID>` el diff fue VACÍO (byte-identidad). El
+  prefijo `CDK_DEFAULT_ACCOUNT=...` de env var NO es suficiente/confiable (la CLI lo deriva del profile). Regla:
+  `aws-cli-pre-flight-canonical` — nombrar el profile explícito que matchea la cuenta esperada, nunca confiar en
+  el default. Verificar antes con `aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID>` → debe
+  dar `Account: <ACCOUNT_ID>`.
+- **BYTE-IDENTIDAD es el gate.** El objetivo es que `cdk synth --profile AdministratorAccess-<ACCOUNT_ID>`
+  produzca un template IDÉNTICO al baseline `/tmp/cdk-out-head/*.template.json`. Cualquier diff ≠ 0 (más allá del
+  account/region resueltos) es un fallo del approach — PARAR y ajustar el `fmt.Sprintf` hasta que el string
+  derivado == el literal. **Diff SOBRE los `*.template.json`, NO sobre `cdk.out/` completo** (los `asset.*` +
+  `*.assets.json` varían por hash del bundle Go, ajeno al frente). **Spike VERIFICADO 2026-08-09** (`86f78de`):
+  SendingStack byte-idéntico (`diff /tmp/cdk-out-head/SendingStack.template.json cdk.out/SendingStack.template.json`
+  = vacío; `grep -c <ACCOUNT_ID>` baseline = 4, reproducidas exactas). El approach #3 está PROBADO — Tasks 2-4
+  propagan el patrón ya validado.
 - **El account real NUNCA en `.go`/`.yml`.** Solo puede quedar en docs redactadas como `<ACCOUNT_ID>`. Gate 3
   (grep) lo verifica.
 - **El cliente Go NO se toca** — desacoplado de `internal/infra` (usa `internal/awsconf`). Cero blast radius ahí.
@@ -74,7 +88,7 @@ está mutado. Capturar el baseline COMPLETO **antes de cualquier edit**, con el 
 git rev-parse HEAD
 ```
 ```
-CDK_DEFAULT_ACCOUNT=367707589526 CDK_DEFAULT_REGION=us-east-1 cdk synth > /tmp/all-head.json
+CDK_DEFAULT_ACCOUNT=<ACCOUNT_ID> CDK_DEFAULT_REGION=us-east-1 cdk synth > /tmp/all-head.json
 ```
 (Sin nombre de stack = los 5 stacks; el hook permite `cdk synth` read-only.) Guardar `/tmp/all-head.json` (baseline
 de los 5) Y `/tmp/sending-head.json` (`cdk synth SendingStack > ...` para el gate del spike). El humano pega la
@@ -155,7 +169,7 @@ Expected: verde. Los tests de SendingStack pasan (usan `NewEnv()` → placeholde
 
 - [ ] **Step 5: EL GATE DEL SPIKE — byte-identidad.** (HUMANO)
 ```
-CDK_DEFAULT_ACCOUNT=367707589526 CDK_DEFAULT_REGION=us-east-1 cdk synth SendingStack > /tmp/sending-new.json
+CDK_DEFAULT_ACCOUNT=<ACCOUNT_ID> CDK_DEFAULT_REGION=us-east-1 cdk synth SendingStack > /tmp/sending-new.json
 ```
 ```
 diff /tmp/sending-head.json /tmp/sending-new.json
@@ -300,7 +314,7 @@ ambos lados (corren sin env).
 
 - [ ] **Step 3: GATE 1 — byte-identidad de los 5 stacks contra el baseline capturado en Task 1 Step 1.** (HUMANO)
 ```
-CDK_DEFAULT_ACCOUNT=367707589526 CDK_DEFAULT_REGION=us-east-1 cdk synth > /tmp/all-new.json
+CDK_DEFAULT_ACCOUNT=<ACCOUNT_ID> CDK_DEFAULT_REGION=us-east-1 cdk synth > /tmp/all-new.json
 ```
 ```
 diff /tmp/all-head.json /tmp/all-new.json
@@ -312,7 +326,7 @@ no reproduce el literal — ajustar hasta diff=0. Este es el gate local de byte-
 
 - [ ] **Step 4: GATE 3 — grep de fuga en código.** (HUMANO)
 ```
-grep -rn 367707589526 internal/ cmd/
+grep -rn <ACCOUNT_ID> internal/ cmd/
 ```
 Expected: **cero hits** en `.go`. El account solo vive ahora en el runtime (env) y en docs (Task 6, redactadas).
 
@@ -344,8 +358,8 @@ git commit -m "feat(nda): Env struct inyectado — account/ARNs desde CDK_DEFAUL
 
 - [ ] **Step 1 (HUMANO, GitHub settings — ANTES de editar): crear los 2 secrets.**
   En repo Settings → Secrets and variables → Actions:
-  - `AWS_CD_DIFF_ROLE_ARN` = `arn:aws:iam::367707589526:role/mail-cd-diff`
-  - `AWS_CD_DEPLOY_ROLE_ARN` = `arn:aws:iam::367707589526:role/mail-cd-deploy` (idealmente como secret del
+  - `AWS_CD_DIFF_ROLE_ARN` = `arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff`
+  - `AWS_CD_DEPLOY_ROLE_ARN` = `arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-deploy` (idealmente como secret del
     Environment `production`, que el job ya usa como gate).
   El humano confirma que existen ANTES de continuar.
 
@@ -363,7 +377,7 @@ git commit -m "feat(nda): Env struct inyectado — account/ARNs desde CDK_DEFAUL
       echo "CDK_DEFAULT_REGION=${AWS_REGION:-us-east-1}" >> "$GITHUB_ENV"
   ```
   Esto puebla `CDK_DEFAULT_ACCOUNT` de forma explícita y auto-evidente desde las credenciales ya asumidas — el
-  `cdk synth` del CI SIEMPRE ve el account real (367707589526), nunca el placeholder. Convierte la dependencia
+  `cdk synth` del CI SIEMPRE ve el account real (<ACCOUNT_ID>), nunca el placeholder. Convierte la dependencia
   implícita de la CDK CLI en una garantía leíble en el propio workflow. (`aws sts get-caller-identity` es una
   lectura — no muta nada; el rol OIDC ya tiene permiso implícito de leer su propia identidad.)
 
@@ -384,9 +398,9 @@ git commit -m "feat(nda): cd.yml role-to-assume desde GitHub secrets + export ex
   (líneas 18-21,41-43,52), `iam/deploy-exec-policy.json` (27), `iam/mail-send-policy.json` (9-10),
   `iam/cd-deploy-trust.json` (6), `iam/cd-diff-trust.json` (6). (`iam/readonly-policy.json` NO tiene account — no
   se toca su account; verificar si tiene otros identificadores.)
-- `iam/*.sh` — los **4 scripts**: `iam/bootstrap-gate.sh` (guard `367707589526` en 11,12,60 + role ARN),
-  `iam/simulate-matrix.sh` (default de perfil `AdministratorAccess-367707589526` en :5),
-  `iam/post-deploy-identity-check.sh` (default `arn:aws:iam::367707589526:user/mail-readonly` en :24),
+- `iam/*.sh` — los **4 scripts**: `iam/bootstrap-gate.sh` (guard `<ACCOUNT_ID>` en 11,12,60 + role ARN),
+  `iam/simulate-matrix.sh` (default de perfil `AdministratorAccess-<ACCOUNT_ID>` en :5),
+  `iam/post-deploy-identity-check.sh` (default `arn:aws:iam::<ACCOUNT_ID>:user/mail-readonly` en :24),
   `iam/ses-dkim-wait.sh` (verificar — región no-secreta, quizá sin account).
 - docs: `README.md`, `CHANGELOG.md`, `docs/architecture.md`, `docs/BOOTSTRAP.md`, `docs/SP-1-DEPLOY.md`,
   `docs/SP-2-DEPLOY.md`, `docs/SP-3-DEPLOY.md`, `docs/SP-4-DEPLOY.md`, `docs/CD-DEPLOY.md` (el más denso, ~40),
@@ -397,26 +411,26 @@ git commit -m "feat(nda): cd.yml role-to-assume desde GitHub secrets + export ex
 **Interfaces:** ninguno — sanitización de prosa/artefactos out-of-band. Cero consumo runtime (verificado: 0
 `go:embed`/`os.ReadFile` de `iam/`). Los `.sh`/`.json` los aplica un HUMANO out-of-band, nunca el código ni el CI.
 
-- [ ] **Step 1: `iam/*.json` (los 5 con account, nombrados arriba)** — reemplazar `367707589526` por `<ACCOUNT_ID>`
+- [ ] **Step 1: `iam/*.json` (los 5 con account, nombrados arriba)** — reemplazar `<ACCOUNT_ID>` por `<ACCOUNT_ID>`
   en CADA ARN. Añadir al header de cada JSON (o a BOOTSTRAP.md) una nota: "sustituir `<ACCOUNT_ID>` por la cuenta
   real al aplicar con `aws iam ... file://`". Verificar también `iam/readonly-policy.json` por si tiene ARNs con
   account (el inventario dijo que su bucket-scope es `arn:aws:s3:::*erickaldama*`, sin account — pero confirmar).
 
 - [ ] **Step 2: `iam/*.sh` (los 4, nombrados arriba)** — `bootstrap-gate.sh`: el guard
-  `[[ "$acct" == "367707589526" ]]` → `[[ "$acct" == "${EXPECTED_ACCOUNT:?set EXPECTED_ACCOUNT}" ]]` y el role ARN
+  `[[ "$acct" == "<ACCOUNT_ID>" ]]` → `[[ "$acct" == "${EXPECTED_ACCOUNT:?set EXPECTED_ACCOUNT}" ]]` y el role ARN
   del probe (`:60`) a placeholder/env. `simulate-matrix.sh:5` y `post-deploy-identity-check.sh:24`: los defaults de
-  perfil/ARN `AdministratorAccess-367707589526` / `arn:aws:iam::367707589526:user/mail-readonly` →
+  perfil/ARN `AdministratorAccess-<ACCOUNT_ID>` / `arn:aws:iam::<ACCOUNT_ID>:user/mail-readonly` →
   `AdministratorAccess-${EXPECTED_ACCOUNT}` / `${EXPECTED_ACCOUNT}`-derivado, con la env var documentada en el
   header del script. `ses-dkim-wait.sh`: verificar; probablemente solo región (no-secreta), sin cambio de account.
 
-- [ ] **Step 3: docs `*.md` + diagramas** — redactar `367707589526` → `<ACCOUNT_ID>` y los ARN a forma placeholder,
+- [ ] **Step 3: docs `*.md` + diagramas** — redactar `<ACCOUNT_ID>` → `<ACCOUNT_ID>` y los ARN a forma placeholder,
   en README, CHANGELOG, architecture.md, todos los `*-DEPLOY.md`, BOOTSTRAP.md, CD-DEPLOY.md, EXECUTION-LOG.md, y
   los labels del `.py`. Sanitización pura — no rompe nada. (El PNG del diagrama se regenera si sus labels llevaban
   el account — verificar; probablemente no.)
 
 - [ ] **Step 4: GATE 3 final — grep de fuga en TODO el repo.** (HUMANO)
 ```
-grep -rn 367707589526 .
+grep -rn <ACCOUNT_ID> .
 ```
 Expected: **cero hits** en cualquier archivo versionado (el account ya no vive en ninguna parte del source; solo
 en el runtime env de CI/deploy). Si queda alguno, redactarlo.
@@ -506,7 +520,7 @@ coherencia+CI+gates), cada uno contra el código real + doc oficial viva. Hallaz
 
 **Verificado TRUE por la auditoría (no defectos):** los 9 `fmt.Sprintf` son byte-idénticos char-por-char a los
 literales (incluidos los 4 `Cdk*RoleArn` con account-doble, args `a,a,r`); nada se vuelve token CDK (el template
-queda literal); ningún test hardcodea `367707589526` (todos derivan de constantes → se mueven con la fuente);
+queda literal); ningún test hardcodea `<ACCOUNT_ID>` (todos derivan de constantes → se mueven con la fuente);
 redactar docs/iam NO rompe ningún test (0 `os.ReadFile` de docs/iam); sin broken-commit (el estado no-compilable
 Task 2→3 nunca se commitea; `ci.yml` no corre en `feature/*`); los 8 iam files con account nombrados completos;
 `mail_storage_stack.go` account-free; el cliente Go totalmente desacoplado. **Cero defectos de byte-identidad; los

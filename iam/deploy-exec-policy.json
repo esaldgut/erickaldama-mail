@@ -24,7 +24,7 @@
       "Sid": "AllowCdkBootstrapVersionCheck",
       "Effect": "Allow",
       "Action": "ssm:GetParameters",
-      "Resource": "arn:aws:ssm:*:367707589526:parameter/cdk-bootstrap/*"
+      "Resource": "arn:aws:ssm:*:<ACCOUNT_ID>:parameter/cdk-bootstrap/*"
     },
     {
       "Sid": "DenyOutOfScopeServices",

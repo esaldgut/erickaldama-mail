@@ -8,7 +8,7 @@ aparecieron al desplegar contra AWS de verdad — no un volcado de commits. El p
 subproyectos (SP-0 → SP-4), cada uno con su ciclo **brainstorm → spec → auditoría adversarial → plan → ejecución
 subagent-driven → deploy verificado en vivo**. El formato se inspira en [Keep a Changelog](https://keepachangelog.com).
 
-Cuenta AWS `367707589526` · región `us-east-1` · repo público con Git Flow (`main`/`rc`/`develop` protegidos).
+Cuenta AWS `<ACCOUNT_ID>` · región `us-east-1` · repo público con Git Flow (`main`/`rc`/`develop` protegidos).
 
 ---
 
@@ -80,7 +80,7 @@ Es la lección `layered-audit-catches-distinct-defect-classes`: la capa adversar
 
 ### Smoke E2E real (2 capas) — la mitigación funcionó, y destapó un deploy finding pre-existente
 
-Corrido contra la cuenta real (`367707589526`, perfil `mail-client-read`) con `qwen2.5:7b` sobre Ollama e
+Corrido contra la cuenta real (`<ACCOUNT_ID>`, perfil `mail-client-read`) con `qwen2.5:7b` sobre Ollama e
 instrumentación temporal en `execTool` (loguear a stderr la `query` que el modelo envía; revertida con
 `git checkout`, nunca commiteada):
 
@@ -178,7 +178,7 @@ del cliente que no se beneficiaba del cache. v0.7 cierra esa brecha.
 
 ### Smoke E2E — 2 capas, contra el sistema real (la parte más valiosa de esta entrega)
 
-Corrido contra la cuenta AWS real `367707589526` (perfil `mail-client-read`) con un cache FTS5 tibio y
+Corrido contra la cuenta AWS real `<ACCOUNT_ID>` (perfil `mail-client-read`) con un cache FTS5 tibio y
 el backend local Ollama corriendo **`qwen2.5:7b`** — no el modelo por defecto del cliente (`qwen3:32b`),
 pasado explícito con `--agent-model qwen2.5:7b`.
 
@@ -725,7 +725,7 @@ larga vida en el repo, con doble gate de aprobación humana independiente.
     `sts:AssumeRole` sobre `cdk-hnb659fds-lookup-role` (read-only, preview de cambios en PRs).
   - `AWS::IAM::Role` `mail-cd-deploy` — trust `StringEquals sub=repo:esaldgut/erickaldama-mail:environment:production`
     (NUNCA wildcard), `sts:AssumeRole` sobre los 4 roles `cdk-hnb659fds-*`. Ambos roles con boundary
-    `erickaldama-boundary`. Stack ARN `arn:aws:cloudformation:us-east-1:367707589526:stack/CdStack/a8f59b10`.
+    `erickaldama-boundary`. Stack ARN `arn:aws:cloudformation:us-east-1:<ACCOUNT_ID>:stack/CdStack/a8f59b10`.
 - **Workflow `.github/workflows/cd.yml`** — dos jobs:
   - `diff` (on: pull_request): asume `mail-cd-diff` → `cdk diff` → comenta el resultado en el PR.
     Fork-guard: `if: github.event.pull_request.head.repo.full_name == github.repository` (forks externos no

@@ -3,7 +3,7 @@
 Este documento es la **bitácora versionada** de la evolución del cliente de correo `erickaldama-mail`: qué
 versión se entregó, qué quedó diferido a propósito (fast-follow) dentro de cada versión, y qué candidatos de
 versión todavía no arrancan. El backend (SP-0 … SP-4, provisionado con AWS CDK en Go) está desplegado y estable
-en la cuenta `367707589526` (`us-east-1`); el cliente evoluciona en capas sucesivas encima de ese backend
+en la cuenta `<ACCOUNT_ID>` (`us-east-1`); el cliente evoluciona en capas sucesivas encima de ese backend
 (CLI → render rico → TUI → cache local → render de enlaces → FTS5 en el agente AI). El objetivo de este archivo
 es que ningún hallazgo o próximo paso viva **solo** en un comentario de PR o en la conversación efímera de una
 sesión — todo lo que hay que recordar entre sesiones está aquí, versionado en el repo.

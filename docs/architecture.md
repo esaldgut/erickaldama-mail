@@ -3,7 +3,7 @@
 A serverless email system on AWS — receive and send for the `erickaldama.com` domain —
 provisioned entirely with **AWS CDK (Go)**, consumed by a terminal-native Go client.
 
-> Region: `us-east-1` · Account: ErickSA (367707589526) · All resources provisioned via AWS CDK Go.
+> Region: `us-east-1` · Account: ErickSA (<ACCOUNT_ID>) · All resources provisioned via AWS CDK Go.
 >
 > **Status (2026-08-06):** the SEND path (SP-2), the RECEIVE path (SP-3), the Go terminal client
 > (SP-4, up to **v0.7.1**), and the CD pipeline (GitHub Actions → OIDC → AWS) are **all live and verified** —
@@ -167,7 +167,7 @@ tool-call. Before v0.7.1 the model invented `query="from:amazon"` (a Gmail-style
 Automates `cdk deploy` without long-lived access keys in the repository.
 
 ```
-GitHub Actions                       AWS (us-east-1 / 367707589526)
+GitHub Actions                       AWS (us-east-1 / <ACCOUNT_ID>)
 ─────────────────────────────────    ──────────────────────────────────────────────────────
                                      IAM OIDCProvider
                                      token.actions.githubusercontent.com
@@ -219,7 +219,7 @@ before declaring the CD operational. Two boundary findings caught and fixed befo
   (`PermissionsBoundaryDecision.AllowedByPermissionsBoundary=false`) before any GitHub Actions run.
   Fixed with `sts:AssumeRole` scoped to exactly the 4 `cdk-hnb659fds-*` ARNs (least privilege).
 
-CdStack live: `arn:aws:cloudformation:us-east-1:367707589526:stack/CdStack/a8f59b10` (7/7 CREATE_COMPLETE, 48s).
+CdStack live: `arn:aws:cloudformation:us-east-1:<ACCOUNT_ID>:stack/CdStack/a8f59b10` (7/7 CREATE_COMPLETE, 48s).
 
 ## Provisioning & governance
 

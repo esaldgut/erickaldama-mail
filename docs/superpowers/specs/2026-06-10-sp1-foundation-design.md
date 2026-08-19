@@ -1,7 +1,7 @@
 # SP-1 — Fundación DNS + cuenta — Diseño (spec)
 
 > Fecha: 2026-06-10. Subproyecto: SP-1 (tarea #15). Worktree aislado: `sp-1-foundation`.
-> Cuenta ErickSA `367707589526`, región **us-east-1**. Aprovisionamiento exclusivo vía **AWS CDK Go**.
+> Cuenta ErickSA `<ACCOUNT_ID>`, región **us-east-1**. Aprovisionamiento exclusivo vía **AWS CDK Go**.
 > Es el **examen inaugural de la gobernanza SP-0**: primer recurso AWS real vía CDK-Go deploy
 > out-of-band, demostrando en vivo que el límite IAM (`mail-readonly`) aguanta.
 
@@ -13,7 +13,7 @@ honesto: una hosted zone + la base de identidad (IAM) formalizada como código. 
 zona —es trivial— sino **ejercitar el flujo de deploy out-of-band y verificar que el boundary de
 SP-0 aguanta un deploy real**.
 
-## Estado real verificado en vivo (2026-06-10, cuenta 367707589526, reads only)
+## Estado real verificado en vivo (2026-06-10, cuenta <ACCOUNT_ID>, reads only)
 
 | Hecho | Valor verificado |
 |---|---|
@@ -22,7 +22,7 @@ SP-0 aguanta un deploy real**.
 | Delegación del registrar | Apunta a un delegation set **muerto** (`ns-1390.awsdns-45.org`, `ns-1918.awsdns-47.co.uk`, `ns-46.awsdns-05.com`, `ns-527.awsdns-01.net`); `dig NS erickaldama.com` devuelve **vacío** → la zona detrás de esos NS fue borrada |
 | `esaldgut.com` | Hosted zone viva (`Z01407861IBJBBDKJ7N6V`, 2 records) — **pre-existente, NO se toca** |
 | SES v2 us-east-1 | Sandbox (`ProductionAccessEnabled=false`), `SendingEnabled=true`, `EnforcementStatus=HEALTHY`, 200/día @ 1/s, **cero identidades** |
-| `mail-readonly` | Existe (`arn:aws:iam::367707589526:user/mail-readonly`, creado 2026-06-08 en bootstrap t=0 de SP-0), inline policy `mail-readonly-boundary`, sin managed policies |
+| `mail-readonly` | Existe (`arn:aws:iam::<ACCOUNT_ID>:user/mail-readonly`, creado 2026-06-08 en bootstrap t=0 de SP-0), inline policy `mail-readonly-boundary`, sin managed policies |
 
 **Implicación crítica del estado:** crear una hosted zone NUEVA vía CDK hace que Route53 asigne
 4 NS aleatorios DISTINTOS de los que el registrar tiene. Hay que actualizar el registrar con
@@ -55,7 +55,7 @@ out-of-band (ver Flujo). El reusable delegation set viejo NO se puede recuperar 
    evitar drift de allows; el boundary queda como código versionado en CDK (fuente única de verdad).
 5. **`mail-deploy` ELIMINADO** (hallazgo auditoría, IMPORTANTE). Tras `cdk bootstrap`, CUALQUIER principal
    de la cuenta con `sts:AssumeRole` sobre los roles `cdk-*` puede deployar — y el SSO
-   `AdministratorAccess-367707589526` ya lo cumple. Un IAM user con access keys de larga vida no habilita
+   `AdministratorAccess-<ACCOUNT_ID>` ya lo cumple. Un IAM user con access keys de larga vida no habilita
    nada nuevo y es justo el anti-patrón de secreto-de-larga-vida que el proyecto evita. **El humano deploya
    out-of-band con su SSO Admin.** Si futuro CI sin-humano: un ROLE vía OIDC (nunca user con keys), añadido
    vía `--trust` en re-bootstrap, no como recurso del stack.
@@ -74,8 +74,8 @@ out-of-band (ver Flujo). El reusable delegation set viejo NO se puede recuperar 
    la hace el deploy-role del bootstrap). **NO usar `sesv2:*`** (no existe; `ses:` cubre v1+v2). `logs:*`
    se añade al llegar a SP-3 (LogGroups de Lambda).
 8. **Bootstrap: humano one-time con SSO Admin + boundary + exec-policy scoped.** El humano corre
-   `cdk bootstrap aws://367707589526/us-east-1 --custom-permissions-boundary erickaldama-boundary
-   --cloudformation-execution-policies <exec-policy-arn> --profile AdministratorAccess-367707589526`
+   `cdk bootstrap aws://<ACCOUNT_ID>/us-east-1 --custom-permissions-boundary erickaldama-boundary
+   --cloudformation-execution-policies <exec-policy-arn> --profile AdministratorAccess-<ACCOUNT_ID>`
    UNA VEZ. El bootstrap moderno separa dos capas (verificado): setup one-time (crea CDKToolkit: S3+ECR+4
    roles, necesita casi-admin) y deploy (asume el exec-role, permisos = `--cloudformation-execution-policies`,
    default `AdministratorAccess`). La least-privilege real vive en el boundary + la exec-policy, no en el humano.
@@ -83,7 +83,7 @@ out-of-band (ver Flujo). El reusable delegation set viejo NO se puede recuperar 
 ## Arquitectura del stack `FoundationStack` (CDK-Go)
 
 ```
-FoundationStack (account=367707589526, region=us-east-1)
+FoundationStack (account=<ACCOUNT_ID>, region=us-east-1)
 ├── PublicHostedZone "erickaldama.com"   → Route53 (global); NS+SOA + CAA Amazon-only
 │   └── CfnOutput NameServers = Fn::Join(",", zone.HostedZoneNameServers())  [token de lista]
 │   └── CfnOutput HostedZoneId
@@ -155,12 +155,12 @@ AGENTE (mail-readonly, reads):
   4. go test ./internal/infra → asserts template
   → ENTREGA los comandos exactos al humano
 
-HUMANO (out-of-band, excepciones t=0, todo con SSO AdministratorAccess-367707589526):
-  5. cdk bootstrap aws://367707589526/us-east-1 \
+HUMANO (out-of-band, excepciones t=0, todo con SSO AdministratorAccess-<ACCOUNT_ID>):
+  5. cdk bootstrap aws://<ACCOUNT_ID>/us-east-1 \
        --custom-permissions-boundary erickaldama-boundary \
        --cloudformation-execution-policies <exec-policy-arn> \
-       --profile AdministratorAccess-367707589526     [UNA VEZ]
-  6. cdk deploy FoundationStack --profile AdministratorAccess-367707589526
+       --profile AdministratorAccess-<ACCOUNT_ID>     [UNA VEZ]
+  6. cdk deploy FoundationStack --profile AdministratorAccess-<ACCOUNT_ID>
   7. aws route53domains update-domain-nameservers --region us-east-1 \
        --domain-name erickaldama.com --nameservers Name=<ns1> ... [×4]   [registrar, una vez]
   → pega outputs (stack outputs, NS) al agente

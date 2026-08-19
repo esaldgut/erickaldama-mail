@@ -2,7 +2,7 @@
 
 > Subproyecto SP-4: el primer componente que **consume** la infra (no la aprovisiona). El único cambio de
 > infra es Task 0: dos IAM users que el cliente usa en runtime (`mail-client-read`, `mail-sender`).
-> Cuenta ErickSA **367707589526** / **us-east-1**. Repo público — este runbook NO contiene secrets.
+> Cuenta ErickSA **<ACCOUNT_ID>** / **us-east-1**. Repo público — este runbook NO contiene secrets.
 > Documenta comandos y **outputs reales** del deploy del 2026-06-24 (incluidos los 3 incidentes reales).
 
 ---
@@ -12,17 +12,17 @@
 Antes de cualquier `aws`/`cdk` que toque recursos, verificar la identity:
 
 ```bash
-aws sts get-caller-identity --profile AdministratorAccess-367707589526 --output json
+aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID> --output json
 ```
 ```json
 {
-    "Account": "367707589526",
-    "Arn": "arn:aws:sts::367707589526:assumed-role/AWSReservedSSO_AdministratorAccess_.../admin@esaldgut"
+    "Account": "<ACCOUNT_ID>",
+    "Arn": "arn:aws:sts::<ACCOUNT_ID>:assumed-role/AWSReservedSSO_AdministratorAccess_.../admin@esaldgut"
 }
 ```
 Si la sesión SSO expiró (`InvalidClientTokenId` / `no credentials have been configured`):
 ```bash
-aws sso login --profile AdministratorAccess-367707589526
+aws sso login --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 ---
@@ -53,7 +53,7 @@ is not attached so we are unable to get a confirmation from the user
 quedó en review). **Fix:** como el diff ya fue auditado (synth/diff + review 6-ejes), desplegar con
 `--require-approval never`:
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy FoundationStack SendingStack --require-approval never
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk deploy FoundationStack SendingStack --require-approval never
 ```
 
 ---
@@ -63,8 +63,8 @@ AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy FoundationStack SendingS
 Segundo intento → `CREATE_FAILED` en `MailClientReadUser`:
 ```
 User: arn:aws:sts::...:assumed-role/cdk-hnb659fds-cfn-exec-role-...  is not authorized to perform:
-iam:CreateUser on resource: arn:aws:iam::367707589526:user/mail-client-read with an explicit deny
-in a permissions boundary: arn:aws:iam::367707589526:policy/erickaldama-boundary (Status Code: 403)
+iam:CreateUser on resource: arn:aws:iam::<ACCOUNT_ID>:user/mail-client-read with an explicit deny
+in a permissions boundary: arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary (Status Code: 403)
 ```
 El stack hizo **rollback limpio** (los recursos parciales se borraron; AWS quedó consistente).
 
@@ -86,8 +86,8 @@ manteniendo el deny para cualquier otro user — el límite anti-escalación se 
   "Effect": "Deny",
   "Action": ["iam:CreateUser", "iam:CreateAccessKey"],
   "NotResource": [
-    "arn:aws:iam::367707589526:user/mail-client-read",
-    "arn:aws:iam::367707589526:user/mail-sender"
+    "arn:aws:iam::<ACCOUNT_ID>:user/mail-client-read",
+    "arn:aws:iam::<ACCOUNT_ID>:user/mail-sender"
   ]
 }
 ```
@@ -95,14 +95,14 @@ manteniendo el deny para cualquier otro user — el límite anti-escalación se 
 Aplicar el boundary como nueva versión (es bootstrap, out-of-band — el stack NO lo posee, cf. hallazgo SP-1 #4):
 ```bash
 # 1. ¿cuántas versiones hay? (límite 5)
-aws iam list-policy-versions --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --profile AdministratorAccess-367707589526 \
+aws iam list-policy-versions --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Versions[].{V:VersionId,Default:IsDefaultVersion}' --output table
 
 # 2. crear la nueva versión y hacerla default
-aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
   --policy-document file://iam/erickaldama-boundary.json --set-as-default \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 ```json
 { "PolicyVersion": { "VersionId": "v4", "IsDefaultVersion": true, "CreateDate": "2026-06-24T22:44:16+00:00" } }
@@ -115,8 +115,8 @@ descriptivo, que sí es válido).
 
 **Verificación read-only antes del re-deploy** (validar, no asumir):
 ```bash
-aws iam get-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --version-id v4 --profile AdministratorAccess-367707589526 \
+aws iam get-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
+  --version-id v4 --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'PolicyVersion.Document.Statement[?Sid==`DenyCreateUserExceptMailClientPrincipals`]' --output json
 # + confirmar que iam:CreateUser ya NO está en el deny general DenyEscalationAndOutOfScope
 ```
@@ -129,10 +129,10 @@ SendingStack | CREATE_COMPLETE | AWS::IAM::User | MailSenderUser
  ✅  SendingStack
 ```
 ```bash
-aws iam get-user --user-name mail-client-read --profile AdministratorAccess-367707589526 --query 'User.Arn'
-# → arn:aws:iam::367707589526:user/mail-client-read
-aws iam get-user --user-name mail-sender --profile AdministratorAccess-367707589526 --query 'User.Arn'
-# → arn:aws:iam::367707589526:user/mail-sender
+aws iam get-user --user-name mail-client-read --profile AdministratorAccess-<ACCOUNT_ID> --query 'User.Arn'
+# → arn:aws:iam::<ACCOUNT_ID>:user/mail-client-read
+aws iam get-user --user-name mail-sender --profile AdministratorAccess-<ACCOUNT_ID> --query 'User.Arn'
+# → arn:aws:iam::<ACCOUNT_ID>:user/mail-sender
 ```
 
 ---
@@ -146,9 +146,9 @@ de bajo privilegio. (Mismo principio que la revocación de la API key de Anthrop
 **Revocar la key expuesta:**
 ```bash
 aws iam delete-access-key --user-name mail-client-read --access-key-id <AKIA-expuesta> \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 # verificar que quedó en cero:
-aws iam list-access-keys --user-name mail-client-read --profile AdministratorAccess-367707589526 \
+aws iam list-access-keys --user-name mail-client-read --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'AccessKeyMetadata[].{Id:AccessKeyId,Status:Status}'   # → []
 ```
 
@@ -156,7 +156,7 @@ aws iam list-access-keys --user-name mail-client-read --profile AdministratorAcc
 `~/.aws/credentials` con `aws configure set`):
 ```bash
 NEWKEY=$(aws iam create-access-key --user-name mail-client-read --output json \
-  --profile AdministratorAccess-367707589526) && \
+  --profile AdministratorAccess-<ACCOUNT_ID>) && \
 aws configure set aws_access_key_id     "$(echo "$NEWKEY" | python3 -c 'import json,sys;print(json.load(sys.stdin)["AccessKey"]["AccessKeyId"])')"     --profile mail-client-read && \
 aws configure set aws_secret_access_key "$(echo "$NEWKEY" | python3 -c 'import json,sys;print(json.load(sys.stdin)["AccessKey"]["SecretAccessKey"])')" --profile mail-client-read && \
 aws configure set region us-east-1 --profile mail-client-read && \
@@ -174,7 +174,7 @@ El agente verifica read-only que cada profile resuelve y puede SU operación (as
 ```bash
 # mail-client-read resuelve a su user y puede Query
 aws sts get-caller-identity --profile mail-client-read --query Arn
-# → arn:aws:iam::367707589526:user/mail-client-read
+# → arn:aws:iam::<ACCOUNT_ID>:user/mail-client-read
 aws dynamodb query --table-name mail-index --key-condition-expression "PK = :pk" \
   --expression-attribute-values '{":pk":{"S":"mailbox#test@erickaldama.com"}}' \
   --region us-east-1 --profile mail-client-read --max-items 1
@@ -182,7 +182,7 @@ aws dynamodb query --table-name mail-index --key-condition-expression "PK = :pk"
 
 # mail-sender resuelve a su user
 aws sts get-caller-identity --profile mail-sender --query Arn
-# → arn:aws:iam::367707589526:user/mail-sender
+# → arn:aws:iam::<ACCOUNT_ID>:user/mail-sender
 ```
 
 ---
@@ -246,14 +246,14 @@ vs STS temporal). Mitigación: ambas policies fuertemente scopeadas → blast ra
 
 | Acción | Comando |
 |---|---|
-| Pre-flight identity | `aws sts get-caller-identity --profile AdministratorAccess-367707589526` |
+| Pre-flight identity | `aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID>` |
 | Deploy users | `cdk deploy FoundationStack SendingStack --require-approval never` |
 | Aplicar boundary nueva versión | `aws iam create-policy-version --policy-arn <boundary> --policy-document file://iam/erickaldama-boundary.json --set-as-default` |
 | Revocar key | `aws iam delete-access-key --user-name <u> --access-key-id <AKIA>` |
 | Crear key segura | ver §4 (capturar a var + `aws configure set`) |
 | Verificar profile | `aws sts get-caller-identity --profile mail-client-read` |
 
-**Cuenta** 367707589526 · **región** us-east-1 · **boundary activo** v6 (CD: +sts:AssumeRole scoped) · **SES** sandbox (200/día).
+**Cuenta** <ACCOUNT_ID> · **región** us-east-1 · **boundary activo** v6 (CD: +sts:AssumeRole scoped) · **SES** sandbox (200/día).
 Documentado 2026-06-24 con los 3 incidentes reales del deploy. NDA: este repo es público; sin secrets ni marcas internas.
 
 ---

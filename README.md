@@ -50,7 +50,7 @@ diagram is the eagle-eye view.
 
 ## What's deployed (live)
 
-Five CDK-Go stacks plus a Go terminal client are live in `367707589526` / `us-east-1`:
+Five CDK-Go stacks plus a Go terminal client are live in `<ACCOUNT_ID>` / `us-east-1`:
 
 **`FoundationStack` (SP-1)** — the public Route 53 hosted zone for `erickaldama.com`
 (`Z023932911KA6S98A6ZRW`, CAA pinned to Amazon), plus the `mail-readonly` managed policy that scopes

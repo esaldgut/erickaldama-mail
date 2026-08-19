@@ -21,7 +21,7 @@ esac
 
 echo "=== (2) SP-0 boundary still holds ==="
 ./iam/bootstrap-gate.sh
-RO_PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:-arn:aws:iam::367707589526:user/mail-readonly}" \
+RO_PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:-arn:aws:iam::${EXPECTED_ACCOUNT:?set EXPECTED_ACCOUNT or RO_PRINCIPAL_ARN}:user/mail-readonly}" \
   ./iam/simulate-matrix.sh
 
 echo "=== (3) hosted zone exists + NS propagated ==="

@@ -22,7 +22,7 @@ prepare it and hand it to the human (out-of-band). You reason and GENERATE; the 
   is BEST-EFFORT — you must choose to do it; it is not mechanically enforced (only the IAM boundary is). Write
   the returned verdict back into `docs/cdk-verified.json`. `--force-verify` invalidates the whole cache.
 
-**F2 — READ STATE.** `aws sts get-caller-identity` (confirm account 367707589526). `cdk diff` (read-only delta).
+**F2 — READ STATE.** `aws sts get-caller-identity` (confirm account <ACCOUNT_ID>). `cdk diff` (read-only delta).
 
 **F3 — ACT (prepare, do not execute).** Generate the stack code + the exact `cdk deploy` command + the diff.
 HAND IT TO THE HUMAN. The human runs it out-of-band with a named profile the agent never selects. Do NOT run

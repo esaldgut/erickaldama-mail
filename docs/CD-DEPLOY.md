@@ -2,7 +2,7 @@
 
 > Subproyecto transversal (tarea #23): el CD que automatiza `cdk deploy` a AWS vía OIDC sin access keys
 > de larga vida, con approval manual a producción.
-> **Cuenta** ErickSA `367707589526` / **región** `us-east-1`. **Repo** `esaldgut/erickaldama-mail` (público, Git Flow).
+> **Cuenta** ErickSA `<ACCOUNT_ID>` / **región** `us-east-1`. **Repo** `esaldgut/erickaldama-mail` (público, Git Flow).
 > **Worktree:** `worktree-cd-pipeline` / rama `worktree-cd-pipeline`.
 > **Runbook documentado:** 2026-06-24. Canario verificado previo al primer deploy.
 
@@ -56,7 +56,7 @@ scope limitado, el SES sender de SP-4).
 Disciplina: `aws-cli-pre-flight-canonical`.
 
 ```bash
-aws sts get-caller-identity --profile AdministratorAccess-367707589526 --output json
+aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID> --output json
 ```
 
 Salida esperada:
@@ -64,20 +64,20 @@ Salida esperada:
 ```json
 {
     "UserId": "AROA...",
-    "Account": "367707589526",
-    "Arn": "arn:aws:sts::367707589526:assumed-role/AWSReservedSSO_AdministratorAccess_.../admin@esaldgut"
+    "Account": "<ACCOUNT_ID>",
+    "Arn": "arn:aws:sts::<ACCOUNT_ID>:assumed-role/AWSReservedSSO_AdministratorAccess_.../admin@esaldgut"
 }
 ```
 
 Si la sesión SSO expiró (`InvalidClientTokenId` / `no credentials have been configured`):
 
 ```bash
-aws sso login --profile AdministratorAccess-367707589526
+aws sso login --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 Volver a verificar con `get-caller-identity` antes de continuar.
 
-**Condiciones de abort:** si `Account` no es `367707589526`, detener. El deploy en la cuenta equivocada es
+**Condiciones de abort:** si `Account` no es `<ACCOUNT_ID>`, detener. El deploy en la cuenta equivocada es
 irreversible para varios recursos.
 
 ---
@@ -107,7 +107,7 @@ ok      github.com/esaldgut/erickaldama-mail/test/hook          0.XXXs
 ### cdk diff (stacks existentes — canario de no-regresión)
 
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk diff FoundationStack SendingStack MailStorageStack ReceivingStack
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk diff FoundationStack SendingStack MailStorageStack ReceivingStack
 ```
 
 Resultado: **"There were no differences"** en los 4 stacks existentes. El CdStack NO los toca — canario
@@ -116,7 +116,7 @@ correcto: el diff del nuevo stack está aislado.
 ### cdk diff CdStack (preview del deploy)
 
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk diff CdStack
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk diff CdStack
 ```
 
 Recursos que **se crearán** (exactamente estos, nada más):
@@ -155,9 +155,9 @@ tiene `iam:*` Allow en su exec-policy, el boundary **intersecta** (no une) — e
 **Error observado en el primer `cdk deploy CdStack`:**
 
 ```
-User: arn:aws:sts::367707589526:assumed-role/cdk-hnb659fds-cfn-exec-role-... is not authorized to perform:
-iam:PutRolePermissionsBoundary on resource: arn:aws:iam::367707589526:role/mail-cd-diff
-with an explicit deny in a permissions boundary: arn:aws:iam::367707589526:policy/erickaldama-boundary
+User: arn:aws:sts::<ACCOUNT_ID>:assumed-role/cdk-hnb659fds-cfn-exec-role-... is not authorized to perform:
+iam:PutRolePermissionsBoundary on resource: arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff
+with an explicit deny in a permissions boundary: arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary
 ```
 
 **Fix — boundary v5:** añadir el statement `DenyPutRoleBoundaryExceptErickaldamaBoundary` que convierte el Deny
@@ -190,10 +190,10 @@ scoped exactamente a los 4 ARNs `cdk-hnb659fds-*` (menor privilegio — no wildc
   "Effect": "Allow",
   "Action": "sts:AssumeRole",
   "Resource": [
-    "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1",
-    "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1",
-    "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1",
-    "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
+    "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-deploy-role-<ACCOUNT_ID>-us-east-1",
+    "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-file-publishing-role-<ACCOUNT_ID>-us-east-1",
+    "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-image-publishing-role-<ACCOUNT_ID>-us-east-1",
+    "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-us-east-1"
   ]
 }
 ```
@@ -204,9 +204,9 @@ hay que borrar la más vieja no-default antes de crear la nueva:
 ```bash
 # Borrar la versión más vieja no-default (ejemplo: v1)
 aws iam delete-policy-version \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
   --version-id v1 \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 **Resultado tras v6:** el smoke pasó — `mail-cd-deploy` puede asumir los 4 roles cdk-* (`allowed`);
@@ -223,17 +223,17 @@ El archivo `iam/erickaldama-boundary.json` en disco ya contiene tanto `DenyPutRo
 ```bash
 # 1. Verificar cuántas versiones hay (límite 5; si hay 5, borrar la más vieja no-default)
 aws iam list-policy-versions \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --profile AdministratorAccess-367707589526 \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Versions[].{V:VersionId,Default:IsDefaultVersion}' \
   --output table
 
 # 2. Crear la nueva versión con ambos statements y hacerla default
 aws iam create-policy-version \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
   --policy-document file://iam/erickaldama-boundary.json \
   --set-as-default \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 Salida esperada (la versión resultante depende del historial; será la siguiente secuencial disponible):
@@ -246,9 +246,9 @@ Salida esperada (la versión resultante depende del historial; será la siguient
 
 ```bash
 aws iam get-policy-version \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
   --version-id vN \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'PolicyVersion.Document.Statement[*].Sid' \
   --output json
 # Debe incluir AMBOS:
@@ -276,7 +276,7 @@ CdStack lo despliega el humano la primera vez. Es el patrón bootstrap canónico
 ### Comando de bootstrap
 
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk deploy CdStack --require-approval never
 ```
 
 Por qué `--require-approval never`: el CDK con el flag default `broadening` exige un TTY para confirmar cambios
@@ -300,24 +300,24 @@ CdStack | CREATE_COMPLETE    | AWS::IAM::Role          | DeployRole
 ```bash
 # El OIDC provider existe
 aws iam list-open-id-connect-providers \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'OpenIDConnectProviderList[].Arn'
-# Debe incluir: arn:aws:iam::367707589526:oidc-provider/token.actions.githubusercontent.com
+# Debe incluir: arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com
 
 # Los roles existen
 aws iam get-role --role-name mail-cd-diff \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Role.Arn'
-# → arn:aws:iam::367707589526:role/mail-cd-diff
+# → arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff
 
 aws iam get-role --role-name mail-cd-deploy \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Role.Arn'
-# → arn:aws:iam::367707589526:role/mail-cd-deploy
+# → arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-deploy
 
 # Los trust policies son los esperados (auditables en iam/)
 aws iam get-role --role-name mail-cd-deploy \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Role.AssumeRolePolicyDocument' \
   --output json
 # Debe coincidir con iam/cd-deploy-trust.json: StringEquals environment:production
@@ -469,10 +469,10 @@ Disciplina: los permisos correctos se verifican empíricamente, no solo en el pa
 ```bash
 # Simular que mail-cd-diff intenta asumir mail-cd-deploy
 aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --policy-source-arn arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff \
   --action-names sts:AssumeRole \
-  --resource-arns arn:aws:iam::367707589526:role/mail-cd-deploy \
-  --profile AdministratorAccess-367707589526 \
+  --resource-arns arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-deploy \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'EvaluationResults[].{Action:EvalActionName,Decision:EvalDecision}' \
   --output table
 ```
@@ -483,10 +483,10 @@ Resultado esperado: `implicitDeny` (o `explicitDeny`). Si dice `allowed`: revisa
 
 ```bash
 aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --policy-source-arn arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff \
   --action-names sts:AssumeRole \
-  --resource-arns arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1 \
-  --profile AdministratorAccess-367707589526 \
+  --resource-arns arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-us-east-1 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'EvaluationResults[].{Action:EvalActionName,Decision:EvalDecision}' \
   --output table
 ```
@@ -496,13 +496,13 @@ Resultado esperado: `allowed`.
 ### 6c. `mail-cd-deploy` puede asumir los 4 roles cdk-*
 
 ```bash
-for ROLE in deploy-role-367707589526-us-east-1 file-publishing-role-367707589526-us-east-1 \
-            image-publishing-role-367707589526-us-east-1 lookup-role-367707589526-us-east-1; do
+for ROLE in deploy-role-<ACCOUNT_ID>-us-east-1 file-publishing-role-<ACCOUNT_ID>-us-east-1 \
+            image-publishing-role-<ACCOUNT_ID>-us-east-1 lookup-role-<ACCOUNT_ID>-us-east-1; do
   aws iam simulate-principal-policy \
-    --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-deploy \
+    --policy-source-arn arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-deploy \
     --action-names sts:AssumeRole \
-    --resource-arns "arn:aws:iam::367707589526:role/cdk-hnb659fds-${ROLE}" \
-    --profile AdministratorAccess-367707589526 \
+    --resource-arns "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-${ROLE}" \
+    --profile AdministratorAccess-<ACCOUNT_ID> \
     --query "EvaluationResults[].{Role:'${ROLE}',Decision:EvalDecision}" \
     --output table
 done
@@ -517,7 +517,7 @@ El trust de `mail-cd-deploy` usa `StringEquals` (no `StringLike`) en el `sub`. U
 
 ```bash
 aws iam get-role --role-name mail-cd-deploy \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition' \
   --output json
 ```
@@ -577,11 +577,11 @@ Si se detecta un compromiso del CD o se necesita revocar el acceso de GitHub Act
 aws iam update-assume-role-policy \
   --role-name mail-cd-deploy \
   --policy-document '{"Version":"2012-10-17","Statement":[]}' \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 
 # Verificar que el trust quedó vacío
 aws iam get-role --role-name mail-cd-deploy \
-  --profile AdministratorAccess-367707589526 \
+  --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'Role.AssumeRolePolicyDocument.Statement'
 # → []
 ```
@@ -593,15 +593,15 @@ El CD no puede emitir credenciales de deploy de inmediato. El job fallará en el
 ```bash
 # Primero, desadjuntar las policies inline
 aws iam list-role-policies --role-name mail-cd-deploy \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 
 aws iam delete-role-policy --role-name mail-cd-deploy \
   --policy-name <inline-policy-name> \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 
 # Luego borrar el rol
 aws iam delete-role --role-name mail-cd-deploy \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 Para recuperarlo: `cdk deploy CdStack` (out-of-band, como en §3).
@@ -689,19 +689,19 @@ no reconoce el schema de la lib más nueva.
 
 | Acción | Comando |
 |---|---|
-| Pre-flight identity | `aws sts get-caller-identity --profile AdministratorAccess-367707589526` |
-| Sesión SSO expirada | `aws sso login --profile AdministratorAccess-367707589526` |
-| Aplicar boundary (v5→v6, ambos findings) | `aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --policy-document file://iam/erickaldama-boundary.json --set-as-default --profile AdministratorAccess-367707589526` |
-| Ver versiones del boundary | `aws iam list-policy-versions --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary --profile AdministratorAccess-367707589526` |
-| Bootstrap CdStack | `AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never` |
+| Pre-flight identity | `aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Sesión SSO expirada | `aws sso login --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Aplicar boundary (v5→v6, ambos findings) | `aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary --policy-document file://iam/erickaldama-boundary.json --set-as-default --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Ver versiones del boundary | `aws iam list-policy-versions --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Bootstrap CdStack | `AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk deploy CdStack --require-approval never` |
 | Verificar Environment gate | `gh api repos/esaldgut/erickaldama-mail/environments/production --jq '.protection_rules'` |
-| Verificar OIDC provider | `aws iam list-open-id-connect-providers --profile AdministratorAccess-367707589526` |
-| Smoke diff-role no puede deploy | `aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff --action-names sts:AssumeRole --resource-arns arn:aws:iam::367707589526:role/mail-cd-deploy --profile AdministratorAccess-367707589526` |
-| Kill-switch rápido | `aws iam update-assume-role-policy --role-name mail-cd-deploy --policy-document '{"Version":"2012-10-17","Statement":[]}' --profile AdministratorAccess-367707589526` |
-| Kill-switch rol completo | `aws iam delete-role --role-name mail-cd-deploy --profile AdministratorAccess-367707589526` |
+| Verificar OIDC provider | `aws iam list-open-id-connect-providers --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Smoke diff-role no puede deploy | `aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff --action-names sts:AssumeRole --resource-arns arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-deploy --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Kill-switch rápido | `aws iam update-assume-role-policy --role-name mail-cd-deploy --policy-document '{"Version":"2012-10-17","Statement":[]}' --profile AdministratorAccess-<ACCOUNT_ID>` |
+| Kill-switch rol completo | `aws iam delete-role --role-name mail-cd-deploy --profile AdministratorAccess-<ACCOUNT_ID>` |
 | Deshabilitar workflow | `gh workflow disable cd.yml --repo esaldgut/erickaldama-mail` |
 
-**Cuenta** `367707589526` · **región** `us-east-1` · **boundary** v6 live (2 deploy findings: v5=B4/PutRolePermissionsBoundary, v6=A1/sts:AssumeRole; ver §2) · **repo** `esaldgut/erickaldama-mail` (público).
+**Cuenta** `<ACCOUNT_ID>` · **región** `us-east-1` · **boundary** v6 live (2 deploy findings: v5=B4/PutRolePermissionsBoundary, v6=A1/sts:AssumeRole; ver §2) · **repo** `esaldgut/erickaldama-mail` (público).
 
 ---
 
@@ -749,6 +749,6 @@ no reconoce el schema de la lib más nueva.
 
 ---
 
-> **Repo público** · Cuenta `367707589526` publicable · Sin secrets ni marcas internas.
+> **Repo público** · Cuenta `<ACCOUNT_ID>` publicable · Sin secrets ni marcas internas.
 > Documentado 2026-06-24 con los resultados reales del canario pre-deploy.
 > Patrón de referencia: `SP-4-DEPLOY.md` (mismo proyecto, mismo estilo).

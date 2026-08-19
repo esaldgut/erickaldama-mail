@@ -2,7 +2,7 @@
 
 **Estado:** aprobado, listo para plan.
 **Frente:** NDA / reducción de superficie de reconocimiento. El repo `esaldgut/erickaldama-mail` es **público** y
-expone el AWS Account ID `367707589526`, ARNs y nombres de recurso en el source, el CI, y los docs. Este frente los
+expone el AWS Account ID `<ACCOUNT_ID>`, ARNs y nombres de recurso en el source, el CI, y los docs. Este frente los
 saca del código versionado **sin romper el CI/CD ni el CDK que ya despliega**.
 **Approach:** #3 (Env struct inyectado) para el CDK, GitHub secrets para el CI, redacción a placeholders para docs.
 Regla universal codificada en el skill `iac-inject-env-never-hardcode-account`.
@@ -48,7 +48,7 @@ Cuatro superficies distintas; ningún mecanismo único las cubre todas:
   concat (`foundation_stack.go:71`, `receiving_stack.go:196`) duplicando el literal `us-east-1` en vez de reusar
   `Region`.
 - **Los template-assertion tests** (`cd_stack_test.go`, `foundation_stack_test.go`, etc.) **ya derivan todo de las
-  constantes** (`Account`, `CdkLookupRoleArn`, `":iam::" + Account + ":..."`) — ninguno hardcodea `367707589526`.
+  constantes** (`Account`, `CdkLookupRoleArn`, `":iam::" + Account + ":..."`) — ninguno hardcodea `<ACCOUNT_ID>`.
   Consecuencia clave: si las constantes pasan a derivarse del `Env`, template y assert se mueven juntos → **los
   tests pasan sin cambiar sus expectativas** (byte-identidad por construcción).
 
@@ -68,7 +68,7 @@ Se evaluaron 4 alternativas (detalle y árbol de decisión en el skill `iac-inje
   rompe los template-assertion tests que asertan el string ARN exacto. Se exige byte-identidad para **no arriesgar
   el CD ya vivo** (`b22449f` y anteriores desplegados).
 - Los 4 `cdk-hnb659fds-*` role ARNs llevan el account **DENTRO del nombre**
-  (`cdk-hnb659fds-lookup-role-367707589526-us-east-1`), no solo en el campo ARN → `*stack.Account()` no basta,
+  (`cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-us-east-1`), no solo en el campo ARN → `*stack.Account()` no basta,
   obligarían a `Fn::Sub` de todos modos. #4 no sería limpio aquí.
 - **#3 preserva byte-identidad** — los ARN siguen siendo los mismos strings, solo construidos desde `Env.Account`
   en vez de literales. `cdk diff` vacío, tests intactos.
@@ -168,16 +168,16 @@ plaintext basta). Decisión menor; se puede dejar el literal `us-east-1` (no es 
   Redactar el account a `<ACCOUNT_ID>` en los ARN. **Riesgo: cero en CI/CD** (nadie los lee en runtime). Nota: si
   un humano los aplica con `aws iam ... file://`, tendrá que sustituir el placeholder — documentarlo en el header
   de cada JSON o en BOOTSTRAP.md.
-- **`iam/*.sh` (4 scripts):** el guard `[[ "$acct" == "367707589526" ]]` de `bootstrap-gate.sh` y los defaults de
-  perfil `AdministratorAccess-367707589526` — parametrizar a una env var (`${EXPECTED_ACCOUNT}`) con el account
+- **`iam/*.sh` (4 scripts):** el guard `[[ "$acct" == "<ACCOUNT_ID>" ]]` de `bootstrap-gate.sh` y los defaults de
+  perfil `AdministratorAccess-<ACCOUNT_ID>` — parametrizar a una env var (`${EXPECTED_ACCOUNT}`) con el account
   inyectado al correr, o redactar a placeholder documentado. Estos scripts son out-of-band (el humano los corre).
-- **docs `*.md` (~100 ocurrencias):** redactar `367707589526` → `<ACCOUNT_ID>` y los ARN completos → forma
+- **docs `*.md` (~100 ocurrencias):** redactar `<ACCOUNT_ID>` → `<ACCOUNT_ID>` y los ARN completos → forma
   placeholder. Es sanitización pura de prosa; no rompe nada. Incluye README, CHANGELOG, architecture.md, todos los
   `*-DEPLOY.md`, BOOTSTRAP.md, CD-DEPLOY.md, EXECUTION-LOG.md, y los diagramas (labels).
 
 ## 5. Verificación (el gate — byte-identidad)
 
-- **Gate 1 (byte-identidad del template) — el más importante:** con `CDK_DEFAULT_ACCOUNT=367707589526` y
+- **Gate 1 (byte-identidad del template) — el más importante:** con `CDK_DEFAULT_ACCOUNT=<ACCOUNT_ID>` y
   `CDK_DEFAULT_REGION=us-east-1` exportados, `cdk synth` debe producir un template **byte-idéntico** al de HEAD
   antes del cambio → `cdk diff` **VACÍO** contra el stack desplegado. Ese diff vacío prueba que #3 no cambió infra
   real, solo de dónde salen los valores. Procedimiento: `cdk synth` en HEAD → guardar `cdk.out/*.template.json`;
@@ -185,7 +185,7 @@ plaintext basta). Decisión menor; se puede dejar el literal `us-east-1` (no es 
 - **Gate 2 (tests) — sin credenciales, determinista:** `go build ./... && go vet ./... && go test -count=1 ./...`
   verde. Los template-assertion tests corren SIN env (usan el placeholder `000000000000` en ambos lados) → pasan.
   Los tests del cliente (`awsconf`) intactos (desacoplado).
-- **Gate 3 (grep de fuga):** `LC_ALL=C grep -rn '367707589526' --include=*.go --include=*.yml` sobre el source de
+- **Gate 3 (grep de fuga):** `LC_ALL=C grep -rn '<ACCOUNT_ID>' --include=*.go --include=*.yml` sobre el source de
   código = **cero** (el account solo puede quedar en docs redactadas como `<ACCOUNT_ID>`, nunca en `.go`/`.yml`).
 - **Gate 4 (CI real):** el `cdk-diff` job del PR (que corre con el rol OIDC real) debe salir con diff vacío — es la
   prueba end-to-end de que el CD sigue funcionando con los secrets nuevos y el account de la env.
@@ -196,7 +196,7 @@ plaintext basta). Decisión menor; se puede dejar el literal `us-east-1` (no es 
    construir los ARN desde `Env.Account` (via `fmt.Sprintf`) produce strings **byte-idénticos** a los literales de
    hoy → template idéntico. Esto NO está verificado — es la premisa de todo el frente. Probarlo con UN solo stack
    primero (p.ej. `SendingStack`, que usa `IdentityArn`+`ConfigSetArn`): parametrizar solo ese, correr Gate 1
-   (diff de `cdk synth` HEAD vs cambiado con `CDK_DEFAULT_ACCOUNT=367707589526`) = 0. Si el diff NO es vacío
+   (diff de `cdk synth` HEAD vs cambiado con `CDK_DEFAULT_ACCOUNT=<ACCOUNT_ID>`) = 0. Si el diff NO es vacío
    (p.ej. `fmt.Sprintf` mete un espacio, o el orden de un campo cambia), PARAR y ajustar el patrón antes de
    propagarlo. Cómo threadear el `Env` a los stacks (campo en un `StackProps` custom vs parámetro extra en
    `NewXxxStack`) lo decide este spike mirando las firmas reales — el plan lo fija con el código enfrente.

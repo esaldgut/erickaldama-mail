@@ -19,7 +19,7 @@ spf13/cobra v1.10.2 · Ollama HTTP (net/http) a localhost:11434 · CDK-Go v2.258
 ## Global Constraints
 
 - **Go 1.26.4** (go.mod del repo). Aplicar modern-go-guidelines (errors.As, slog, etc.).
-- **Cuenta AWS `367707589526`, región `us-east-1`** (constantes, nunca adivinadas).
+- **Cuenta AWS `<ACCOUNT_ID>`, región `us-east-1`** (constantes, nunca adivinadas).
 - **Repo PÚBLICO con Git Flow:** cierre = PR a develop con CI verde, NO merge local. Gate NDA sobre todo el output.
 - **El cliente Go NO aprovisiona infra** → el hook CDK-Go NO aplica a `internal/{mailbox,message,aiassist,awsconf}`
   ni a `cmd/`. SOLO Task 0 (users CDK) es infra → hook aplica + deploy humano out-of-band.
@@ -191,8 +191,8 @@ Expected: PASS (incl. los asserts SP-1/2/3 existentes).
 
 Run (los 4 stacks reales del repo — Foundation, Sending, MailStorage, Receiving — para que el canario cubra todo):
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk synth --all >/dev/null && echo "synth OK"
-AWS_PROFILE=AdministratorAccess-367707589526 cdk diff --all 2>&1 | grep -B2 -A3 "AWS::IAM::User"
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk synth --all >/dev/null && echo "synth OK"
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk diff --all 2>&1 | grep -B2 -A3 "AWS::IAM::User"
 ```
 Expected: synth OK; el diff muestra exactamente `+ AWS::IAM::User` para mail-client-read (FoundationStack) y mail-sender (SendingStack), más sus dos managed policies. Canario: MailStorageStack y ReceivingStack NO cambian (los users referencian sus recursos por ARN-string, no por import cross-stack); NO se toca HostedZone, identity, rule, ni la mailSendPolicy existente.
 
@@ -207,9 +207,9 @@ git commit -m "feat(sp-4): CDK users mail-client-read + mail-sender (Task 0 infr
 
 El usuario ejecuta out-of-band (SSO Admin):
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy FoundationStack SendingStack --require-approval any-change
-AWS_PROFILE=AdministratorAccess-367707589526 aws iam create-access-key --user-name mail-client-read
-AWS_PROFILE=AdministratorAccess-367707589526 aws iam create-access-key --user-name mail-sender
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk deploy FoundationStack SendingStack --require-approval any-change
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> aws iam create-access-key --user-name mail-client-read
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> aws iam create-access-key --user-name mail-sender
 # Guardar cada par en ~/.aws/credentials bajo [mail-client-read] y [mail-sender] (region us-east-1).
 ```
 **El agente NO ejecuta esto** (hook bloquea writes). Espera confirmación del humano.

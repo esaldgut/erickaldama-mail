@@ -1,6 +1,6 @@
 # SP-1 — Foundation: deploy runbook & the five first-deploy findings
 
-> First real AWS provisioning of the project (2026-06-10), account `367707589526` (ErickSA),
+> First real AWS provisioning of the project (2026-06-10), account `<ACCOUNT_ID>` (ErickSA),
 > `us-east-1`. This is the bootstrap-and-first-deploy story — the procedure lives in
 > [`BOOTSTRAP.md`](BOOTSTRAP.md); this file distills the **five findings from the very first `cdk
 > bootstrap`/`cdk deploy`**, the ones that only surface when you scope IAM tightly instead of using
@@ -22,8 +22,8 @@ The permissions boundary `erickaldama-boundary` and the cfn-exec-policy `erickal
 
 See [`BOOTSTRAP.md`](BOOTSTRAP.md) §"SP-1 bootstrap" for the exact commands:
 1. Create the boundary + exec-policy managed policies (first time only).
-2. `cdk bootstrap aws://367707589526/us-east-1 --custom-permissions-boundary erickaldama-boundary
-   --cloudformation-execution-policies arn:aws:iam::367707589526:policy/erickaldama-deploy-exec`.
+2. `cdk bootstrap aws://<ACCOUNT_ID>/us-east-1 --custom-permissions-boundary erickaldama-boundary
+   --cloudformation-execution-policies arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-deploy-exec`.
 3. `cdk deploy FoundationStack`.
 4. Update the registrar with the four NS from the `NameServers` output.
 5. Agent runs `iam/post-deploy-identity-check.sh` — confirms its identity is still `mail-readonly`.
@@ -44,7 +44,7 @@ live library version" implies "CLI @latest". (`feedback_cdk_cli_vs_library_versi
 ### #2 — The exec-policy needs `ssm:GetParameters`
 A scoped cfn-exec-policy got `AccessDenied ssm:GetParameters` on the BootstrapVersion check that runs on
 *every* deploy. **Fix:** add `ssm:GetParameters` on
-`arn:aws:ssm:*:367707589526:parameter/cdk-bootstrap/*`. AdministratorAccess (the bootstrap default)
+`arn:aws:ssm:*:<ACCOUNT_ID>:parameter/cdk-bootstrap/*`. AdministratorAccess (the bootstrap default)
 covers this silently — it only appears when you scope.
 
 ### #3 — The boundary INTERSECTS the exec-policy (so it needs ssm too)

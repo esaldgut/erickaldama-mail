@@ -51,7 +51,7 @@
 	OperatorEmail       = "esaldgut@gmail.com" // publishable / benign
 	// ReceiptRuleArn is the ARN used to scope the SES S3 bucket policy and Lambda invoke permission.
 	// Format verified against the SES docs: receipt-rule-set/<set>:receipt-rule/<rule>.
-	ReceiptRuleArn = "arn:aws:ses:us-east-1:367707589526:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
+	ReceiptRuleArn = "arn:aws:ses:us-east-1:<ACCOUNT_ID>:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
 ```
 
 - [x] **Step 2: Re-point the DMARC rua** — in `internal/infra/naming.go`, change the existing `DmarcValue`:
@@ -665,7 +665,7 @@ func TestReceiptRuleAndBucketPolicy(t *testing.T) {
 					"Principal": map[string]any{"Service": "ses.amazonaws.com"},
 					"Condition": map[string]any{
 						"StringEquals": assertions.Match_ObjectLike(&map[string]any{
-							"AWS:SourceAccount": "367707589526",
+							"AWS:SourceAccount": "<ACCOUNT_ID>",
 						}),
 					},
 				}),
@@ -1010,22 +1010,22 @@ git commit -m "feat(sp-3): register MailStorageStack + ReceivingStack; SendingSt
 
 ## Task 11 (HUMAN-EXECUTED): deploy + verify
 
-The agent never deploys. The human runs the mutations out-of-band with SSO `AdministratorAccess-367707589526`; the agent prepares exact commands and verifies read-only after.
+The agent never deploys. The human runs the mutations out-of-band with SSO `AdministratorAccess-<ACCOUNT_ID>`; the agent prepares exact commands and verifies read-only after.
 
 - [x] **Step 1: Agent — pre-flight (read-only, hook-allowed)**
 
 ```bash
-aws sts get-caller-identity --profile AdministratorAccess-367707589526   # expect 367707589526
+aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID>   # expect <ACCOUNT_ID>
 go build ./... && go test ./...                                          # all green
 ```
 
 - [x] **Step 2: HUMAN — deploy in order, paste outputs back**
 
 ```bash
-cdk deploy MailStorageStack --profile AdministratorAccess-367707589526   # bucket first
-cdk deploy ReceivingStack   --profile AdministratorAccess-367707589526   # rule set + Lambda + table + DLQ + activation
-cdk deploy SendingStack     --profile AdministratorAccess-367707589526   # re-pointed DMARC rua
-cdk deploy FoundationStack  --profile AdministratorAccess-367707589526   # mail-readonly reads
+cdk deploy MailStorageStack --profile AdministratorAccess-<ACCOUNT_ID>   # bucket first
+cdk deploy ReceivingStack   --profile AdministratorAccess-<ACCOUNT_ID>   # rule set + Lambda + table + DLQ + activation
+cdk deploy SendingStack     --profile AdministratorAccess-<ACCOUNT_ID>   # re-pointed DMARC rua
+cdk deploy FoundationStack  --profile AdministratorAccess-<ACCOUNT_ID>   # mail-readonly reads
 ```
 (No exec-policy/boundary change needed — audit finding I3: Go bundling is a zip asset, no new service.)
 

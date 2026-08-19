@@ -1,6 +1,6 @@
 # SP-3 — Receive pipeline: design
 
-> Account `367707589526` (ErickSA), `us-east-1`. Provisioned via AWS CDK (Go). The agent works
+> Account `<ACCOUNT_ID>` (ErickSA), `us-east-1`. Provisioned via AWS CDK (Go). The agent works
 > read-only as `mail-readonly`; the human deploys out-of-band with SSO Admin. This is the first time
 > the project RECEIVES email — a new pattern (SES receiving lives only in the v1 `ses` API, never
 > ported to `sesv2`), so a full adversarial audit (exploration agents + a CDK-compiling agent against
@@ -34,7 +34,7 @@ INBOUND (all us-east-1)
     │        action[0] S3Action     → s3://erickaldama-mail-raw/inbound/   (S3 FIRST)
     │        action[1] LambdaAction → mail-receive, invocationType Event   (Lambda SECOND, async)
     ├─ bucket policy (on the imported bucket): Principal ses.amazonaws.com, s3:PutObject,
-    │     Condition aws:SourceAccount=367707589526 + aws:SourceArn=<receipt-rule-arn>
+    │     Condition aws:SourceAccount=<ACCOUNT_ID> + aws:SourceArn=<receipt-rule-arn>
     ├─ Lambda Go (provided.al2023, ARM64): event has NO body → reads from S3, parses headers,
     │     idempotent PutItem per recipient
     ├─ DynamoDB mail-index (on-demand): PK=mailbox#addr, SK=ts#message-id
@@ -87,7 +87,7 @@ inherits the corrected design — not the original assumptions.
 ### Important (confirmations + hardening)
 
 - **I1 — SES→Lambda invoke permission, or silent loss.** The receipt rule's Lambda action needs a
-  resource-based `lambda:InvokeFunction` (Principal `ses.amazonaws.com`, `SourceAccount=367707589526`,
+  resource-based `lambda:InvokeFunction` (Principal `ses.amazonaws.com`, `SourceAccount=<ACCOUNT_ID>`,
   `SourceArn=<receipt-rule ARN>`). If missing, the S3 object still lands but the invoke is denied → no
   DynamoDB item AND the async DLQ stays empty (the DLQ only catches post-invocation failures). Worst
   failure mode — must be present and SourceArn-scoped. Use `fn.AddPermission`.
@@ -216,7 +216,7 @@ Rule set + rule live in the v1 API. CDK-Go: `awsses.NewReceiptRuleSet` + `Receip
   `arn:...:erickaldama-mail-raw/inbound/*` (read-only, prefix only) + `dynamodb:PutItem` on `mail-index`
   + `sqs:SendMessage` to the DLQ + `logs:*` scoped to the Lambda log group. Nothing else.
 - **Bucket policy** (resource-based): Principal `ses.amazonaws.com`, `s3:PutObject`, Condition
-  `StringEquals aws:SourceAccount=367707589526` + `ArnLike aws:SourceArn=<receipt-rule-arn>`.
+  `StringEquals aws:SourceAccount=<ACCOUNT_ID>` + `ArnLike aws:SourceArn=<receipt-rule-arn>`.
 - **SES→Lambda permission**: `lambda:InvokeFunction` for the SES principal with the same SourceAccount
   condition (CDK `addPermission`/`grantInvoke`).
 

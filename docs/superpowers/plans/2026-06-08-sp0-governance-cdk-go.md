@@ -10,7 +10,7 @@
 
 **Source spec:** `docs/superpowers/specs/2026-06-07-sp0-governance-cdk-go-design.md` (commit 6717e72). Audit findings: `~/.claude/plans/email-project-research/08-sp0-audit-findings.md`.
 
-**Account/region:** ErickSA `367707589526`, `us-east-1`. Apply `aws-cli-pre-flight-canonical` before any `aws` command (verify `get-caller-identity` Account == 367707589526 via `--profile AdministratorAccess-367707589526`).
+**Account/region:** ErickSA `<ACCOUNT_ID>`, `us-east-1`. Apply `aws-cli-pre-flight-canonical` before any `aws` command (verify `get-caller-identity` Account == <ACCOUNT_ID> via `--profile AdministratorAccess-<ACCOUNT_ID>`).
 
 ---
 
@@ -632,7 +632,7 @@ prepare it and hand it to the human (out-of-band). You RAZONA and GENERATE; the 
   list + target version. This dispatch is BEST-EFFORT (you must choose to do it; it is not enforced). Write the
   returned verdict back into `docs/cdk-verified.json`. `--force-verify` invalidates the whole cache.
 
-**F2 — READ STATE.** `aws sts get-caller-identity` (confirm account 367707589526). `cdk diff` (read-only delta).
+**F2 — READ STATE.** `aws sts get-caller-identity` (confirm account <ACCOUNT_ID>). `cdk diff` (read-only delta).
 
 **F3 — ACT (prepare, do not execute).** Generate the stack code + the exact `cdk deploy` command + the diff.
 HAND IT TO THE HUMAN. The human runs it out-of-band with a named profile the agent never selects. Do NOT run
@@ -1113,7 +1113,7 @@ does not exist yet at t=0 (chicken-and-egg). This is the one-time manual excepti
 
 ## Procedure (human, with ADMIN credentials the agent NEVER sees)
 1. Create an IAM user/role `mail-readonly` and attach `iam/readonly-policy.json` (inline), using profile
-   `AdministratorAccess-367707589526`. Do this in the Console or `aws iam ... --profile AdministratorAccess-367707589526`.
+   `AdministratorAccess-<ACCOUNT_ID>`. Do this in the Console or `aws iam ... --profile AdministratorAccess-<ACCOUNT_ID>`.
 2. Configure a NAMED profile `mail-readonly` in ~/.aws/config for that principal — NEVER `[default]`.
 3. Run the ACCEPTANCE GATE (`iam/bootstrap-gate.sh`) BEFORE pointing the agent at it. It must pass fully.
 4. Only then set the MCP's `AWS_API_MCP_PROFILE_NAME=mail-readonly` (already in .mcp.json) live.
@@ -1145,8 +1145,8 @@ fail=0
 
 echo "== aws-cli-pre-flight-canonical =="
 acct="$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text 2>/dev/null)"
-[[ "$acct" == "367707589526" ]] || { echo "FAIL: wrong/empty account: '$acct' (expected 367707589526)"; exit 1; }
-echo "ok: account 367707589526"
+[[ "$acct" == "<ACCOUNT_ID>" ]] || { echo "FAIL: wrong/empty account: '$acct' (expected <ACCOUNT_ID>)"; exit 1; }
+echo "ok: account <ACCOUNT_ID>"
 
 # expect_denied <description> <aws args...>
 expect_denied() {
@@ -1169,7 +1169,7 @@ expect_allowed() {
 
 # --- DENY: mutation / credential-minting / recon (HardDeny + implicit-deny) ---
 expect_denied  "ses send-email"        sesv2 send-email --region us-east-1 --from-email-address a@b.com --destination ToAddresses=c@d.com --content '{"Simple":{"Subject":{"Data":"x"},"Body":{"Text":{"Data":"y"}}}}'
-expect_denied  "sts assume-role"       sts assume-role --role-arn arn:aws:iam::367707589526:role/none --role-session-name s
+expect_denied  "sts assume-role"       sts assume-role --role-arn arn:aws:iam::<ACCOUNT_ID>:role/none --role-session-name s
 expect_denied  "sts get-session-token" sts get-session-token   # Read-classified but credential-minting → explicit Deny by name
 expect_denied  "s3 get-object (mail)"  s3api get-object --bucket erickaldama-mail-raw --key any /dev/null
 expect_denied  "iam list-access-keys"  iam list-access-keys
@@ -1213,7 +1213,7 @@ false implicitDeny; the GLOBAL allows of Statement 1 and the explicit denies use
 # Falsifiability of the allowlist (SEC2-I2): simulate the read-only principal's policy and assert the matrix.
 # Run with an ADMIN/separate profile (simulate-principal-policy needs iam:Simulate*, NOT in the read-only set).
 set -uo pipefail
-ADMIN="${ADMIN_PROFILE:-AdministratorAccess-367707589526}"
+ADMIN="${ADMIN_PROFILE:-AdministratorAccess-<ACCOUNT_ID>}"
 PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:?set RO_PRINCIPAL_ARN to the mail-readonly user/role arn}"
 fail=0
 
@@ -1282,17 +1282,17 @@ git commit -m "feat(sp-0): simulate-principal-policy falsifiability matrix"
 
 - [x] **Step 1: Human creates the principal (out-of-band, admin cred)**
 
-Prompt the human (via the chat): "Create the `mail-readonly` IAM principal with `iam/readonly-policy.json` attached, using profile `AdministratorAccess-367707589526`, and a named `mail-readonly` profile in ~/.aws/config (never [default]). See docs/BOOTSTRAP.md." Wait for confirmation. **The agent does NOT run this** (it's an admin write).
+Prompt the human (via the chat): "Create the `mail-readonly` IAM principal with `iam/readonly-policy.json` attached, using profile `AdministratorAccess-<ACCOUNT_ID>`, and a named `mail-readonly` profile in ~/.aws/config (never [default]). See docs/BOOTSTRAP.md." Wait for confirmation. **The agent does NOT run this** (it's an admin write).
 
 - [x] **Step 2: Run the acceptance gate (read-only probes)**
 
-Run (after pre-flight `aws sts get-caller-identity --profile mail-readonly` confirms account 367707589526):
+Run (after pre-flight `aws sts get-caller-identity --profile mail-readonly` confirms account <ACCOUNT_ID>):
 `MAIL_RO_PROFILE=mail-readonly bash iam/bootstrap-gate.sh`
 Expected: `GATE PASS` — 5 HardDeny probes (ses send-email, sts assume-role, sts get-session-token, s3 get-object, iam list-access-keys) + 2 allow probes (ses get-account in us-east-1 = regional, route53 list-hosted-zones = global/unconditioned) + 1 region-pin deny (ses get-account in eu-west-1 must be DENIED). If any FAIL → the hand-typed policy is wrong; fix in AWS, re-run. Do NOT proceed until PASS.
 
 - [x] **Step 3: Run the simulate matrix (separate admin principal)**
 
-Run: `RO_PRINCIPAL_ARN=arn:aws:iam::367707589526:user/mail-readonly ADMIN_PROFILE=AdministratorAccess-367707589526 bash iam/simulate-matrix.sh`
+Run: `RO_PRINCIPAL_ARN=arn:aws:iam::<ACCOUNT_ID>:user/mail-readonly ADMIN_PROFILE=AdministratorAccess-<ACCOUNT_ID> bash iam/simulate-matrix.sh`
 Expected: `SIMULATE MATRIX PASS` — regional intended-allows (ses:GetAccount, cloudformation:DescribeStacks) evaluated WITH `aws:RequestedRegion=us-east-1` context = allowed; global intended-allows (sts:GetCallerIdentity, route53:ListHostedZones) WITHOUT context = allowed; intended-deny set (incl. sts:GetSessionToken/GetFederationToken) = *Deny.
 
 - [x] **Step 4: Negative out-of-band test (SEC2-C3)**

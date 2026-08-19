@@ -1,9 +1,9 @@
 # SP-3 — Receive pipeline: deploy runbook & evidence
 
-> Live deploy executed 2026-06-18, account `367707589526` (ErickSA), `us-east-1`.
+> Live deploy executed 2026-06-18, account `<ACCOUNT_ID>` (ErickSA), `us-east-1`.
 > The reproducible runbook plus the **real commands and outputs** from the actual deploy and the
 > post-deploy diagnostic — including two "symptoms that weren't bugs". The agent works read-only as
-> `mail-readonly`; the human runs every mutating step out-of-band with SSO `AdministratorAccess-367707589526`.
+> `mail-readonly`; the human runs every mutating step out-of-band with SSO `AdministratorAccess-<ACCOUNT_ID>`.
 
 ## What SP-3 provisions (two stacks)
 
@@ -46,12 +46,12 @@ order is clearest):
 
 ```bash
 cd .../erickaldama-mail   # the worktree at deploy time
-aws sts get-caller-identity --profile AdministratorAccess-367707589526   # expect 367707589526
+aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID>   # expect <ACCOUNT_ID>
 
-cdk deploy MailStorageStack --profile AdministratorAccess-367707589526
-cdk deploy ReceivingStack   --profile AdministratorAccess-367707589526
-cdk deploy SendingStack     --profile AdministratorAccess-367707589526
-cdk deploy FoundationStack  --profile AdministratorAccess-367707589526
+cdk deploy MailStorageStack --profile AdministratorAccess-<ACCOUNT_ID>
+cdk deploy ReceivingStack   --profile AdministratorAccess-<ACCOUNT_ID>
+cdk deploy SendingStack     --profile AdministratorAccess-<ACCOUNT_ID>
+cdk deploy FoundationStack  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 All four reached `CREATE/UPDATE_COMPLETE` (2026-06-18 ~18:22–18:30 UTC). `ReceivingStack` ran the Go
@@ -107,7 +107,7 @@ NOT bounce the iCloud sender — it delivered over TLS as required.
 ### ⑤ Agent — SNS subscription confirmed
 
 ```bash
-aws sns get-topic-attributes --topic-arn arn:aws:sns:us-east-1:367707589526:mail-bounce-complaint \
+aws sns get-topic-attributes --topic-arn arn:aws:sns:us-east-1:<ACCOUNT_ID>:mail-bounce-complaint \
   --profile mail-readonly --region us-east-1 --query 'Attributes.{Confirmed:SubscriptionsConfirmed,Pending:SubscriptionsPending}'
 # → {"Confirmed":"1","Pending":"0"}   (after the operator clicked the confirm link)
 ```
