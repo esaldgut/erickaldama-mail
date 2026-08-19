@@ -36,8 +36,15 @@ jobs:
       - run: npm install -g aws-cdk@${{ env.CDK_VERSION }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::367707589526:role/mail-cd-diff
+          role-to-assume: ${{ secrets.AWS_CD_DIFF_ROLE_ARN }}
           aws-region: us-east-1
+      - name: Export CDK account/region from the assumed OIDC credentials
+        # configure-aws-credentials sets AWS_* but NOT CDK_DEFAULT_ACCOUNT. NewEnv() (internal/infra/env.go)
+        # reads CDK_DEFAULT_ACCOUNT and falls back to a placeholder — so the synth must get the real account
+        # explicitly from the assumed role, or the templates would carry the placeholder (huge/wrong diff).
+        run: |
+          echo "CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_ENV"
+          echo "CDK_DEFAULT_REGION=${AWS_REGION:-us-east-1}" >> "$GITHUB_ENV"
       - name: cdk diff
         run: |
           set -o pipefail
@@ -91,7 +98,13 @@ jobs:
       - run: npm install -g aws-cdk@${{ env.CDK_VERSION }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::367707589526:role/mail-cd-deploy
+          role-to-assume: ${{ secrets.AWS_CD_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
+      - name: Export CDK account/region from the assumed OIDC credentials
+        # See the diff job: NewEnv() needs CDK_DEFAULT_ACCOUNT explicitly (configure-aws-credentials does not
+        # set it). A deploy with the placeholder account would target the wrong account — the export prevents it.
+        run: |
+          echo "CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_ENV"
+          echo "CDK_DEFAULT_REGION=${AWS_REGION:-us-east-1}" >> "$GITHUB_ENV"
       - name: cdk deploy
         run: cdk deploy --all --require-approval never
