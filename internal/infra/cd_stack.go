@@ -11,8 +11,8 @@ import (
 // (native AWS::IAM::OIDCProvider) — the L2 NewOpenIdConnectProvider synthesizes a custom resource + Lambda + a
 // 3rd role without boundary (audit A1). The trust is built with NewFederatedPrincipal(AttrArn,...) because the
 // L1 exposes AttrArn(), not IOIDCProviderRef.
-func NewCdStack(scope constructs.Construct, id string, props *awscdk.StackProps) awscdk.Stack {
-	stack := awscdk.NewStack(scope, jsii.String(id), props)
+func NewCdStack(scope constructs.Construct, id string, props *EnvStackProps) awscdk.Stack {
+	stack := awscdk.NewStack(scope, jsii.String(id), props.StackProps)
 
 	// Native OIDC provider (L1). ThumbprintList omitted → IAM autocompletes via trusted CA.
 	oidc := awsiam.NewCfnOIDCProvider(stack, jsii.String("GithubOidc"), &awsiam.CfnOIDCProviderProps{
@@ -41,7 +41,7 @@ func NewCdStack(scope constructs.Construct, id string, props *awscdk.StackProps)
 	diffRole.AddToPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Effect:    awsiam.Effect_ALLOW,
 		Actions:   jsii.Strings("sts:AssumeRole"),
-		Resources: jsii.Strings(CdkLookupRoleArn),
+		Resources: jsii.Strings(props.Env.CdkLookupRoleArn),
 	}))
 
 	// deploy role — only assumable from environment:production (StringEquals).
@@ -60,8 +60,8 @@ func NewCdStack(scope constructs.Construct, id string, props *awscdk.StackProps)
 	deployRole.AddToPolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
 		Effect:  awsiam.Effect_ALLOW,
 		Actions: jsii.Strings("sts:AssumeRole"),
-		Resources: jsii.Strings(CdkDeployRoleArn, CdkFilePublishingRoleArn,
-			CdkImagePublishingRoleArn, CdkLookupRoleArn),
+		Resources: jsii.Strings(props.Env.CdkDeployRoleArn, props.Env.CdkFilePublishingRoleArn,
+			props.Env.CdkImagePublishingRoleArn, props.Env.CdkLookupRoleArn),
 	}))
 
 	// PRAC-1: tags — paridad con los 4 stacks existentes ("every resource is attributable").

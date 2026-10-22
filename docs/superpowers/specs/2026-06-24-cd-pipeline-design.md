@@ -3,7 +3,7 @@
 > Subproyecto transversal (tarea #23): completa el CI/CD. GitHub Actions despliega los stacks CDK-Go a AWS
 > vía OIDC (sin access keys de larga vida) con approval manual a producción.
 > **Worktree:** `cd-pipeline` (rama `worktree-cd-pipeline`, base `42567c1` = HEAD de develop con SP-4 + METHODOLOGY).
-> **Fecha:** 2026-06-24. **Cuenta:** ErickSA `367707589526` / `us-east-1`. Repo PÚBLICO con Git Flow.
+> **Fecha:** 2026-06-24. **Cuenta:** ErickSA `<ACCOUNT_ID>` / `us-east-1`. Repo PÚBLICO con Git Flow.
 > **Patrón NUEVO de seguridad** (4º principal con poder de mutación = GitHub Actions) → auditoría adversarial tras el spec.
 
 ---
@@ -35,7 +35,7 @@ Datos de la investigación contra doc oficial viva (`15-cd-research-findings.md`
 | GitHub Environment con required reviewers | en repo PÚBLICO disponible sin Pro. Job con `environment:` queda "Waiting" hasta approval. "Prevent self-review" DESACTIVADO para single-dev |
 | Bootstrap version-skew | pinear `aws-cdk@2.258.x` cerca de la lib `awscdk/v2 v2.258.1` para evitar el CLI-vs-lib skew (hallazgo SP-1) |
 | CDK-Go en CI | runner necesita setup-go + setup-node + cdk CLI; `app: "go mod download && go run ./cmd/cdk"` funciona (ya en cdk.json) |
-| Bootstrap roles | `cdk-hnb659fds-{deploy,file-publishing,image-publishing,lookup}-role-367707589526-us-east-1` — asumidos por la CLI durante deploy |
+| Bootstrap roles | `cdk-hnb659fds-{deploy,file-publishing,image-publishing,lookup}-role-<ACCOUNT_ID>-us-east-1` — asumidos por la CLI durante deploy |
 | Lo que la doc NO cubre | single-account + Git Flow → el diseño es **adaptación informada**, no receta oficial (el sample AWS es multi-account + workflow_dispatch) |
 
 ---
@@ -62,7 +62,7 @@ contexto `environment:production`. Aunque alguien evadiera el runner, AWS no le 
         └─────────────────────────┘   │   --require-approval never │
                                        └────┬───────────────────────┘
                                             ▼ (asume los cdk-* roles)
-                              AWS 367707589526 — los 4 stacks
+                              AWS <ACCOUNT_ID> — los 4 stacks
                           (cfn-exec-role con boundary muta los recursos)
 ```
 
@@ -177,7 +177,7 @@ deployment branches = "Selected branches and tags" → `main`.
 - **`permissions` mínimos por job** — diff: `{id-token, contents, pull-requests:write}`; deploy: `{id-token, contents}`.
 - **`pull-requests: write` es del GITHUB_TOKEN, NO del rol OIDC** — credenciales separadas (skill `pr-as-auditable-evidence`).
 - **Kill-switch** — `aws iam delete-role` o quitar el trust corta el CD de inmediato (runbook).
-- **Repo público** — gate NDA sobre workflows + CdStack + runbook (367707589526 publicable; verificar cero marcas prohibidas).
+- **Repo público** — gate NDA sobre workflows + CdStack + runbook (<ACCOUNT_ID> publicable; verificar cero marcas prohibidas).
 
 ---
 

@@ -8,11 +8,14 @@ import (
 	"github.com/aws/jsii-runtime-go"
 )
 
-// synth builds the stack and returns the assertion Template. No AWS calls.
+// synth builds the stack and returns the assertion Template. No AWS calls. Uses NewEnv() (placeholder
+// account offline) via the EnvStackProps wrapper — a nil props would now panic (NewFoundationStack
+// dereferences props.StackProps).
 func synth(t *testing.T) assertions.Template {
 	t.Helper()
 	app := awscdk.NewApp(nil)
-	stack := NewFoundationStack(app, "TestStack", nil)
+	e := NewEnv()
+	stack := NewFoundationStack(app, "TestStack", &EnvStackProps{StackProps: &awscdk.StackProps{}, Env: e})
 	return assertions.Template_FromStack(stack, nil)
 }
 
@@ -107,8 +110,10 @@ func TestPermissionsBoundaryNotInStack(t *testing.T) {
 
 func TestFoundationStackHasClientReadUser(t *testing.T) {
 	app := awscdk.NewApp(nil)
-	stack := NewFoundationStack(app, "FoundationStack", &awscdk.StackProps{
-		Env: &awscdk.Environment{Account: jsii.String(Account), Region: jsii.String(Region)},
+	e := NewEnv()
+	stack := NewFoundationStack(app, "FoundationStack", &EnvStackProps{
+		StackProps: &awscdk.StackProps{Env: &awscdk.Environment{Account: jsii.String(e.Account), Region: jsii.String(e.Region)}},
+		Env:        e,
 	})
 	template := assertions.Template_FromStack(stack, nil)
 	template.HasResourceProperties(jsii.String("AWS::IAM::User"), map[string]any{

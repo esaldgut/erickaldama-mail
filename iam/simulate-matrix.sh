@@ -2,7 +2,9 @@
 # Falsifiability of the allowlist (SEC2-I2): simulate the read-only principal's policy and assert the matrix.
 # Run with an ADMIN/separate profile (simulate-principal-policy needs iam:Simulate*, NOT in the read-only set).
 set -uo pipefail
-ADMIN="${ADMIN_PROFILE:-AdministratorAccess-367707589526}"
+# NDA: the SSO profile name embeds the account id, so it is parametrized. Set ADMIN_PROFILE to your admin
+# profile (e.g. AdministratorAccess-<account>), or EXPECTED_ACCOUNT and let the default compose it.
+ADMIN="${ADMIN_PROFILE:-AdministratorAccess-${EXPECTED_ACCOUNT:?set ADMIN_PROFILE or EXPECTED_ACCOUNT}}"
 PRINCIPAL_ARN="${RO_PRINCIPAL_ARN:?set RO_PRINCIPAL_ARN to the mail-readonly user/role arn}"
 fail=0
 

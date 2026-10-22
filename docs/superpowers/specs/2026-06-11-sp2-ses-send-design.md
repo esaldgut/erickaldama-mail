@@ -1,7 +1,7 @@
 # SP-2 — Identidad SES + envío — Diseño (spec)
 
 > Fecha: 2026-06-11. Subproyecto: SP-2 (tarea #16). Worktree aislado: `sp-2-ses-send`.
-> Cuenta ErickSA `367707589526`, región **us-east-1**. Aprovisionamiento exclusivo vía **AWS CDK Go**.
+> Cuenta ErickSA `<ACCOUNT_ID>`, región **us-east-1**. Aprovisionamiento exclusivo vía **AWS CDK Go**.
 > Primer SES del proyecto: ejercita la receta SES (6 trampas) + verify-before-act. Auditado por 4 agentes
 > adversariales (uno COMPILÓ el código contra awscdk v2.258.1). Hallazgos: `~/.claude/plans/email-project-research/11-sp2-audit-findings.md`.
 
@@ -46,7 +46,7 @@ Hosted zone `Z023932911KA6S98A6ZRW` (erickaldama.com) viva para colgar records.
 ## Arquitectura del stack `SendingStack` (CDK-Go)
 
 ```
-SendingStack (account=367707589526, region=us-east-1)
+SendingStack (account=<ACCOUNT_ID>, region=us-east-1)
 ├── EmailIdentity erickaldama.com  (Identity_PublicHostedZone(zona importada de SP-1))
 │   ├── Easy DKIM RSA-2048 → 3 CNAME auto-publicados (region-suffix vía Fn::GetAtt)
 │   └── Custom MAIL FROM mail.erickaldama.com → MX + SPF TXT auto-publicados; OnMxFailure=USE_DEFAULT_VALUE
@@ -112,8 +112,8 @@ AGENTE (mail-readonly, reads):
 HUMANO (out-of-band, SSO Admin):
   4. Re-aplicar exec-policy con events:*:
        aws iam create-policy-version --policy-arn …:policy/erickaldama-deploy-exec \
-         --policy-document file://iam/deploy-exec-policy.json --set-as-default --profile AdministratorAccess-367707589526
-  5. cdk deploy SendingStack --profile AdministratorAccess-367707589526   (termina con DKIM PENDING)
+         --policy-document file://iam/deploy-exec-policy.json --set-as-default --profile AdministratorAccess-<ACCOUNT_ID>
+  5. cdk deploy SendingStack --profile AdministratorAccess-<ACCOUNT_ID>   (termina con DKIM PENDING)
   → pega outputs al agente
 
 AGENTE (verificación, read-only):

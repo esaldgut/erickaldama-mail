@@ -17,7 +17,7 @@ configure-aws-credentials@v6, github-script@v9) · aws-cdk CLI @2.258.x · Node 
 ## Global Constraints
 
 - **Go 1.26.4** · CDK-Go `awscdk/v2 v2.258.1`. Aplicar modern-go-guidelines (`any` no `interface{}`, etc.).
-- **Cuenta AWS `367707589526`, región `us-east-1`** (constantes, ver `env()` en cmd/cdk/main.go).
+- **Cuenta AWS `<ACCOUNT_ID>`, región `us-east-1`** (constantes, ver `env()` en cmd/cdk/main.go).
 - **Repo PÚBLICO con Git Flow:** cierre = PR a develop con CI verde, NO merge local. Gate NDA sobre todo el output.
 - **OIDC provider: usar el L1 `awsiam.NewCfnOIDCProvider`** (nativo, 2 roles) — NO el L2 `NewOpenIdConnectProvider`
   (custom-resource + Lambda + 3er rol sin boundary). Verificado compilando.
@@ -33,7 +33,7 @@ configure-aws-credentials@v6, github-script@v9) · aws-cdk CLI @2.258.x · Node 
   (gate por tarea), control-subagents-in-worktrees-canonical. Es el primer fogueo de subproject-delivery-canonical.
 
 **Constantes reales (verificadas):** `BoundaryManagedPolicyName = "erickaldama-boundary"` (en naming.go:16).
-Roles bootstrap: `cdk-hnb659fds-{deploy,file-publishing,image-publishing,lookup}-role-367707589526-us-east-1` (los 4 existen).
+Roles bootstrap: `cdk-hnb659fds-{deploy,file-publishing,image-publishing,lookup}-role-<ACCOUNT_ID>-us-east-1` (los 4 existen).
 
 ---
 
@@ -92,7 +92,7 @@ el boundary correcto (mismo patrón que `DenyCreateUserExceptMailClientPrincipal
   "Resource": "*",
   "Condition": {
     "StringNotEqualsIfExists": {
-      "iam:PermissionsBoundary": "arn:aws:iam::367707589526:policy/erickaldama-boundary"
+      "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary"
     }
   }
 }
@@ -125,20 +125,20 @@ git commit -m "feat(cd): boundary v5 — scoped exception for PutRolePermissions
 El usuario aplica out-of-band (SSO Admin). Primero verificar cuántas versiones hay (límite 5; borrar la no-default
 más vieja si hace falta):
 ```bash
-aws iam list-policy-versions --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --profile AdministratorAccess-367707589526 --query 'Versions[].{V:VersionId,Default:IsDefaultVersion}' --output table
+aws iam list-policy-versions --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
+  --profile AdministratorAccess-<ACCOUNT_ID> --query 'Versions[].{V:VersionId,Default:IsDefaultVersion}' --output table
 # crear v5 y hacerla default:
-aws iam create-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
   --policy-document file://iam/erickaldama-boundary.json --set-as-default \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 **El agente NO ejecuta esto** (hook bloquea writes). Espera confirmación del humano.
 
 - [ ] **Step 5: Verificación read-only (agente, tras el humano)**
 
 ```bash
-aws iam get-policy-version --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
-  --version-id v5 --profile AdministratorAccess-367707589526 \
+aws iam get-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
+  --version-id v5 --profile AdministratorAccess-<ACCOUNT_ID> \
   --query 'PolicyVersion.Document.Statement[?Sid==`DenyPutRoleBoundaryExceptErickaldamaBoundary`]' --output json
 ```
 Expected: el statement con la Condition `StringNotEqualsIfExists`. Confirma que `PutRolePermissionsBoundary` ya NO está
@@ -174,10 +174,10 @@ En `internal/infra/naming.go`, antes del `)` final del bloque `const`:
 	DiffRoleName      = "mail-cd-diff"
 	DeployRoleName    = "mail-cd-deploy"
 	// Bootstrap roles the CD roles may assume (verified to exist).
-	CdkLookupRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
-	CdkDeployRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1"
-	CdkFilePublishingRoleArn  = "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1"
-	CdkImagePublishingRoleArn = "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1"
+	CdkLookupRoleArn          = "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-us-east-1"
+	CdkDeployRoleArn          = "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-deploy-role-<ACCOUNT_ID>-us-east-1"
+	CdkFilePublishingRoleArn  = "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-file-publishing-role-<ACCOUNT_ID>-us-east-1"
+	CdkImagePublishingRoleArn = "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-image-publishing-role-<ACCOUNT_ID>-us-east-1"
 ```
 
 - [ ] **Step 2: Escribir el template-assert que falla**
@@ -423,7 +423,7 @@ redundante pero NO conflictivo (ambos resuelven al mismo boundary) — dejarlo h
 Run:
 ```bash
 go test -count=1 ./internal/infra/
-AWS_PROFILE=AdministratorAccess-367707589526 cdk synth CdStack >/dev/null && echo "synth OK"
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk synth CdStack >/dev/null && echo "synth OK"
 ```
 Expected: tests PASS; synth OK.
 
@@ -476,7 +476,7 @@ jobs:
       - run: npm install -g aws-cdk@2.258.1
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::367707589526:role/mail-cd-diff
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff
           aws-region: us-east-1
       - name: cdk diff
         run: cdk diff --all 2>&1 | tee /tmp/diff.txt
@@ -526,7 +526,7 @@ jobs:
       - run: npm install -g aws-cdk@2.258.1
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::367707589526:role/mail-cd-deploy
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-deploy
           aws-region: us-east-1
       - name: cdk deploy
         run: cdk deploy --all --require-approval never
@@ -565,7 +565,7 @@ git commit -m "feat(cd): cd.yml — diff job comments PR, deploy job gated by en
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": { "Federated": "arn:aws:iam::367707589526:oidc-provider/token.actions.githubusercontent.com" },
+      "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com" },
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
@@ -582,7 +582,7 @@ git commit -m "feat(cd): cd.yml — diff job comments PR, deploy job gated by en
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": { "Federated": "arn:aws:iam::367707589526:oidc-provider/token.actions.githubusercontent.com" },
+      "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com" },
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
@@ -621,7 +621,7 @@ git commit -m "docs(cd): auditable trust policy JSONs for the 2 CD roles"
 Run:
 ```bash
 go build ./... && go test -count=1 ./... && go vet ./... && gofmt -l internal/ cmd/
-AWS_PROFILE=AdministratorAccess-367707589526 cdk diff CdStack 2>&1 | grep -E "AWS::IAM::Role|AWS::IAM::OIDCProvider" | head
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk diff CdStack 2>&1 | grep -E "AWS::IAM::Role|AWS::IAM::OIDCProvider" | head
 ```
 Expected: todo verde (incluye los 7 template-asserts del CdStack); el diff muestra `+ OIDCProvider` + 2 `+ Role`, nada
 más (canario: no toca los 4 stacks existentes).
@@ -659,7 +659,7 @@ del primer push a main.**
 
 El usuario ejecuta out-of-band (el CD aún no existe para auto-desplegarse; el boundary v5 de Task 0 ya debe estar vivo):
 ```bash
-AWS_PROFILE=AdministratorAccess-367707589526 cdk deploy CdStack --require-approval never
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk deploy CdStack --require-approval never
 ```
 Crea el OIDC provider nativo + los 2 roles con boundary. **Este es el SMOKE DEFINITIVO de B4:** si el deploy crea los
 roles con boundary → la premisa B4 + el boundary v5 eran correctos; si falla con AccessDenied en alguna acción IAM → ese
@@ -692,9 +692,9 @@ configurado, NO proceder con ningún push a main. Este check es el cierre del ha
 - [ ] **Step 1: Verificación post-deploy (agente, read-only)**
 
 ```bash
-aws iam list-open-id-connect-providers --profile AdministratorAccess-367707589526
-aws iam get-role --role-name mail-cd-diff --profile AdministratorAccess-367707589526 --query 'Role.Arn'
-aws iam get-role --role-name mail-cd-deploy --profile AdministratorAccess-367707589526 --query 'Role.Arn'
+aws iam list-open-id-connect-providers --profile AdministratorAccess-<ACCOUNT_ID>
+aws iam get-role --role-name mail-cd-diff --profile AdministratorAccess-<ACCOUNT_ID> --query 'Role.Arn'
+aws iam get-role --role-name mail-cd-deploy --profile AdministratorAccess-<ACCOUNT_ID> --query 'Role.Arn'
 ```
 Expected: el provider existe; los 2 roles existen con sus ARNs.
 
@@ -705,18 +705,18 @@ empíricamente que el diff role NO puede escalar al deploy-role:
 ```bash
 # El diff role NO debe poder asumir el deploy-role (debe dar implicitDeny):
 aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --policy-source-arn arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff \
   --action-names sts:AssumeRole \
-  --resource-arns arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1 \
-  --profile AdministratorAccess-367707589526 --query 'EvaluationResults[0].EvalDecision' --output text
+  --resource-arns arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-deploy-role-<ACCOUNT_ID>-us-east-1 \
+  --profile AdministratorAccess-<ACCOUNT_ID> --query 'EvaluationResults[0].EvalDecision' --output text
 # Esperado: implicitDeny
 
 # El diff role SÍ puede asumir el lookup-role (debe dar allowed):
 aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::367707589526:role/mail-cd-diff \
+  --policy-source-arn arn:aws:iam::<ACCOUNT_ID>:role/mail-cd-diff \
   --action-names sts:AssumeRole \
-  --resource-arns arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1 \
-  --profile AdministratorAccess-367707589526 --query 'EvaluationResults[0].EvalDecision' --output text
+  --resource-arns arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-us-east-1 \
+  --profile AdministratorAccess-<ACCOUNT_ID> --query 'EvaluationResults[0].EvalDecision' --output text
 # Esperado: allowed
 ```
 Expected: deploy-role → `implicitDeny`; lookup-role → `allowed`. Esto prueba con evidencia binaria la separación
@@ -743,7 +743,7 @@ Run:
 grep -rIE "esagiosapp|yaan|roatech|MercadoPago|476114125529|288761749126|468227865963" \
   .github/ internal/infra/cd_stack.go iam/cd-*.json docs/CD-DEPLOY.md CHANGELOG.md docs/architecture.md || echo "✅ NDA clean source"
 # El output del cdk diff que se comenta en el PR también debe estar limpio (no solo el source):
-AWS_PROFILE=AdministratorAccess-367707589526 cdk diff CdStack 2>&1 | grep -IE "476114125529|288761749126|468227865963|esagiosapp|yaan|MercadoPago" && echo "⚠️ NDA HIT en el diff" || echo "✅ NDA clean diff"
+AWS_PROFILE=AdministratorAccess-<ACCOUNT_ID> cdk diff CdStack 2>&1 | grep -IE "476114125529|288761749126|468227865963|esagiosapp|yaan|MercadoPago" && echo "⚠️ NDA HIT en el diff" || echo "✅ NDA clean diff"
 ```
 Expected: NDA clean en source Y en el diff.
 ```bash

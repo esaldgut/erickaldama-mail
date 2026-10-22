@@ -11,8 +11,9 @@ import (
 func synthReceiving(t *testing.T) assertions.Template {
 	t.Helper()
 	app := awscdk.NewApp(nil)
-	_, bucket := NewMailStorageStack(app, "MailStorageStack", &awscdk.StackProps{})
-	stack := NewReceivingStack(app, "ReceivingStack", &awscdk.StackProps{}, bucket)
+	e := NewEnv()
+	_, bucket := NewMailStorageStack(app, "MailStorageStack", &EnvStackProps{StackProps: &awscdk.StackProps{}, Env: e})
+	stack := NewReceivingStack(app, "ReceivingStack", &EnvStackProps{StackProps: &awscdk.StackProps{}, Env: e}, bucket)
 	return assertions.Template_FromStack(stack, nil)
 }
 

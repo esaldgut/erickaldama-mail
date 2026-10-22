@@ -1,10 +1,12 @@
 package infra
 
 // Canonical identifiers for the erickaldama.com email project (SP-1 foundation).
+//
+// NDA / attack-surface reduction: the AWS Account ID and every ARN that embeds it do NOT live here as
+// literals. They are resolved at synth/deploy from CDK_DEFAULT_ACCOUNT/REGION (from the OIDC-assumed
+// credentials in CI, or --profile locally) and composed in NewEnv() (see env.go), injected via
+// EnvStackProps. Only account-FREE names (domain, resource names, role names, hosted-zone id) stay here.
 const (
-	Account = "367707589526"
-	Region  = "us-east-1"
-
 	DomainName = "erickaldama.com"
 
 	// IAM resource names (stable; referenced by the bootstrap and post-deploy gate).
@@ -25,12 +27,9 @@ const (
 	// Event-routing resource names (SES config-set EventBridge destination + the bounce/complaint Rule).
 	EventDestinationName = "mail-config-eventbridge"
 	BounceRuleName       = "mail-ses-bounce-complaint"
-	// IdentityArn is the SES identity ARN used to scope the send policy.
-	IdentityArn = "arn:aws:ses:us-east-1:367707589526:identity/erickaldama.com"
-	// ConfigSetArn is the SES configuration-set ARN. mail-config is the identity's default config set, so SES
-	// applies it to every send — the send policy must authorize SendRawEmail on BOTH identity AND config-set
-	// (deploy finding: a send via a default config set is AccessDenied without this resource).
-	ConfigSetArn = "arn:aws:ses:us-east-1:367707589526:configuration-set/mail-config"
+	// IdentityArn + ConfigSetArn (the SES identity + config-set ARNs used to scope the send policy — mail-config
+	// is the identity's default config set, so the send policy must authorize SendRawEmail on BOTH, a deploy
+	// finding) now live in Env.IdentityArn / Env.ConfigSetArn (composed in NewEnv, see env.go) — account-bearing.
 	// HostedZoneID is the SP-1 hosted zone for erickaldama.com (CfnOutput of FoundationStack).
 	// Imported by SP-2+ stacks via HostedZone_FromHostedZoneAttributes.
 	HostedZoneID = "Z023932911KA6S98A6ZRW"
@@ -54,8 +53,8 @@ const (
 	InboundMxHost       = "inbound-smtp.us-east-1.amazonaws.com"
 	DmarcReportsAddress = "dmarc-reports@erickaldama.com"
 	OperatorEmail       = "esaldgut@gmail.com" // publishable / benign
-	// ReceiptRuleArn is the ARN used to scope the SES S3 bucket policy and Lambda invoke permission.
-	ReceiptRuleArn = "arn:aws:ses:us-east-1:367707589526:receipt-rule-set/erickaldama-inbound:receipt-rule/store-and-index"
+	// ReceiptRuleArn (used to scope the SES S3 bucket policy + Lambda invoke permission) now lives in
+	// Env.ReceiptRuleArn (composed in NewEnv, see env.go) — account-bearing, kept out of source.
 
 	// SP-4 — client principals (long-lived access keys generated out-of-band; never in CDK/git).
 	ClientReadUserName = "mail-client-read" // dynamodb:Query/GetItem on mail-index + s3:GetObject on inbound/*
@@ -67,11 +66,9 @@ const (
 	GithubRepo      = "esaldgut/erickaldama-mail"
 	DiffRoleName    = "mail-cd-diff"
 	DeployRoleName  = "mail-cd-deploy"
-	// Bootstrap roles the CD roles may assume (verified to exist).
-	CdkLookupRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
-	CdkDeployRoleArn          = "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1"
-	CdkFilePublishingRoleArn  = "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1"
-	CdkImagePublishingRoleArn = "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1"
+	// The 4 cdk-hnb659fds-* bootstrap role ARNs the CD roles may assume now live in
+	// Env.CdkLookupRoleArn / CdkDeployRoleArn / CdkFilePublishingRoleArn / CdkImagePublishingRoleArn
+	// (composed in NewEnv, see env.go) — account-bearing (the account appears twice per ARN), kept out of source.
 )
 
 // projectTags are applied to the stack so every resource is attributable.

@@ -3,7 +3,7 @@
 > **Subproyecto:** SP-4 (tarea #18). Cierra el lazo end-to-end del sistema de correo: el primer
 > componente que **consume** (no aprovisiona) la infra de SP-1/2/3.
 > **Worktree:** `sp-4-tui-client` (rama `worktree-sp-4-tui-client`, base `d9c5a0b` = HEAD de develop).
-> **Fecha:** 2026-06-24. **Cuenta:** ErickSA `367707589526` / `us-east-1`.
+> **Fecha:** 2026-06-24. **Cuenta:** ErickSA `<ACCOUNT_ID>` / `us-east-1`.
 
 ---
 
@@ -39,7 +39,7 @@ Datos extraídos del sistema y de AWS el 2026-06-24, no de supuestos:
 | Deps SES a AÑADIR (binario nuevo, NO hereda del lambda; A7) | `service/ses v1.35.2` (envío SendRawEmail) + `service/sesv2 v1.62.4` (DetectSandbox vía GetAccount). Versiones verificadas vivas 2026-06-24 |
 | Schema `mail-index` (fuente de verdad) | `cmd/lambda/receive/main.go`: `PK="mailbox#<addr-lower>"`, `SK="ts#<RFC3339-UTC>#<RFC5322-MessageID>"`, attrs `messageId, s3Key, from, subject, date` |
 | S3 key del cuerpo | `inbound/<Mail.MessageID>` (SES id). El cuerpo MIME crudo NO está en DynamoDB |
-| `mail-readonly` (gobernanza) | User `arn:aws:iam::367707589526:user/mail-readonly`, profile en `~/.aws/config`. **DENIEGA explícitamente `s3:GetObject`** (Sid `HardDenyMutationReconAndCredentialMinting`, `foundation_stack.go:90-95`) + `ses:Send*`/`sts:AssumeRole*`/`iam:*`. Diseñado como verificador puro: lee **metadata**, NO contenido. **NO sirve como principal de lectura del cliente** (el cliente debe leer cuerpos S3) |
+| `mail-readonly` (gobernanza) | User `arn:aws:iam::<ACCOUNT_ID>:user/mail-readonly`, profile en `~/.aws/config`. **DENIEGA explícitamente `s3:GetObject`** (Sid `HardDenyMutationReconAndCredentialMinting`, `foundation_stack.go:90-95`) + `ses:Send*`/`sts:AssumeRole*`/`iam:*`. Diseñado como verificador puro: lee **metadata**, NO contenido. **NO sirve como principal de lectura del cliente** (el cliente debe leer cuerpos S3) |
 | Envío | policy `mail-send` (solo `ses:SendEmail/SendRawEmail`, identity `erickaldama.com`, Condition `From=erick@erickaldama.com`) attachada a **role** `mail-sender-role` (asumible por `:root`). NO hay user/profile que envíe hoy |
 | Principales del cliente (Task 0) | NO existen aún → se crean en CDK: `mail-client-read` (dynamodb:Query/GetItem `mail-index` + s3:GetObject `inbound/*`) y `mail-sender` (policy `mail-send` directa) |
 | SES estado | **SANDBOX** (`ProductionAccessEnabled=false`), `SendingEnabled=true`, 200/24h, 1/s. Identity `erickaldama.com` verificada para envío (SP-2) |

@@ -1,10 +1,10 @@
 # SP-2 — SES identity + send: deploy runbook & evidence
 
-> Live deploy executed 2026-06-16/17, account `367707589526` (ErickSA), `us-east-1`.
+> Live deploy executed 2026-06-16/17, account `<ACCOUNT_ID>` (ErickSA), `us-east-1`.
 > This is the reproducible runbook plus the **real commands and outputs** from the
 > actual deploy — including two failure modes that the pre-deploy audit did not anticipate
 > and how they were resolved. The agent works read-only as `mail-readonly`; the human runs
-> every mutating step out-of-band with SSO `AdministratorAccess-367707589526`.
+> every mutating step out-of-band with SSO `AdministratorAccess-<ACCOUNT_ID>`.
 
 ## What SP-2 provisions (`SendingStack`)
 
@@ -41,10 +41,10 @@ had no `events:*`, so this is applied first (out-of-band).
 
 ```bash
 aws iam create-policy-version \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-deploy-exec \
   --policy-document file://iam/deploy-exec-policy.json \
   --set-as-default \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 Output:
@@ -55,15 +55,15 @@ Output:
 ### ② Human — first deploy attempt → FAILED (Finding #6)
 
 ```bash
-cdk deploy SendingStack --profile AdministratorAccess-367707589526
+cdk deploy SendingStack --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 It progressed to 5/18 and then:
 ```
 CREATE_FAILED | AWS::Events::Rule | SesEventRule
-Resource handler returned message: "User: arn:aws:sts::367707589526:assumed-role/
-cdk-hnb659fds-cfn-exec-role-367707589526-us-east-1/AWSCloudFormation is not authorized to
-perform: events:DescribeRule on resource: arn:aws:events:us-east-1:367707589526:rule/
+Resource handler returned message: "User: arn:aws:sts::<ACCOUNT_ID>:assumed-role/
+cdk-hnb659fds-cfn-exec-role-<ACCOUNT_ID>-us-east-1/AWSCloudFormation is not authorized to
+perform: events:DescribeRule on resource: arn:aws:events:us-east-1:<ACCOUNT_ID>:rule/
 mail-ses-bounce-complaint because NO PERMISSIONS BOUNDARY allows the events:DescribeRule action
 (Service: EventBridge, Status Code: 400 …) (HandlerErrorCode: AccessDenied)"
 ROLLBACK_IN_PROGRESS … Rollback requested by user.
@@ -82,10 +82,10 @@ The agent edited `iam/erickaldama-boundary.json` (added `"events:*"` to the Allo
 
 ```bash
 aws iam create-policy-version \
-  --policy-arn arn:aws:iam::367707589526:policy/erickaldama-boundary \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary \
   --policy-document file://iam/erickaldama-boundary.json \
   --set-as-default \
-  --profile AdministratorAccess-367707589526
+  --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 Output:
@@ -98,13 +98,13 @@ Waited for the stack to reach `ROLLBACK_COMPLETE` before redeploying.
 ### ② bis Human — redeploy → SUCCESS
 
 ```bash
-cdk deploy SendingStack --profile AdministratorAccess-367707589526
+cdk deploy SendingStack --profile AdministratorAccess-<ACCOUNT_ID>
 ```
 
 ```
 ✅ SendingStack
 Deployment time: 169.82s
-Stack ARN: arn:aws:cloudformation:us-east-1:367707589526:stack/SendingStack/bdc644a0-69e9-11f1-a342-123133e18a75
+Stack ARN: arn:aws:cloudformation:us-east-1:<ACCOUNT_ID>:stack/SendingStack/bdc644a0-69e9-11f1-a342-123133e18a75
 ```
 
 The deploy returns `CREATE_COMPLETE` **with DKIM still PENDING** — DKIM verification is asynchronous
@@ -144,7 +144,7 @@ event path. From must be exactly `erick@erickaldama.com` (the `ses:FromAddress` 
 aws ses send-email --from erick@erickaldama.com \
   --destination "ToAddresses=success@simulator.amazonses.com" \
   --message "Subject={Data=SP-2 smoke success},Body={Text={Data=hello from erickaldama.com}}" \
-  --configuration-set-name mail-config --region us-east-1 --profile AdministratorAccess-367707589526
+  --configuration-set-name mail-config --region us-east-1 --profile AdministratorAccess-<ACCOUNT_ID>
 # repeat with bounce@ and complaint@simulator.amazonses.com
 ```
 
@@ -182,7 +182,7 @@ aws events describe-rule --name mail-ses-bounce-complaint --profile mail-readonl
 ```bash
 aws events list-targets-by-rule --rule mail-ses-bounce-complaint --profile mail-readonly --region us-east-1 \
   --query 'Targets[].Arn'
-# ["arn:aws:sns:us-east-1:367707589526:mail-bounce-complaint"]
+# ["arn:aws:sns:us-east-1:<ACCOUNT_ID>:mail-bounce-complaint"]
 ```
 
 The SES metrics lit up after the smoke (proof the events were generated):

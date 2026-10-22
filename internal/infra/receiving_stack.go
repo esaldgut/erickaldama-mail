@@ -37,15 +37,15 @@ func receiveLambdaEntry() string {
 // NewReceivingStack builds the SP-3 inbound pipeline on top of the imported raw bucket (Approach A).
 // Fleshed out helper-by-helper in tasks 4–9. The bucket policy and rule-set activation live HERE
 // (not in MailStorageStack) to avoid the bucket↔rule cross-stack dependency cycle (audit finding C1).
-func NewReceivingStack(scope constructs.Construct, id string, props *awscdk.StackProps, bucket awss3.IBucket) awscdk.Stack {
-	stack := awscdk.NewStack(scope, jsii.String(id), props)
+func NewReceivingStack(scope constructs.Construct, id string, props *EnvStackProps, bucket awss3.IBucket) awscdk.Stack {
+	stack := awscdk.NewStack(scope, jsii.String(id), props.StackProps)
 
 	table := addReceiveTable(stack)
 	fn, dlq := addReceiveLambda(stack, table)
-	addReceiptRule(stack, bucket, fn)
+	addReceiptRule(stack, bucket, fn, props.Env)
 	addRuleSetActivation(stack)
 	addDmarcAndMx(stack)
-	addObservability(stack, dlq)
+	addObservability(stack, dlq, props.Env)
 
 	for k, v := range sp3Tags() {
 		awscdk.Tags_Of(stack).Add(jsii.String(k), v, nil)
@@ -105,7 +105,7 @@ func addReceiveLambda(stack awscdk.Stack, table awsdynamodb.Table) (awslambda.IF
 // PutObject on the imported bucket via a BucketPolicy created HERE (not bucket.AddToResourcePolicy,
 // which would land the policy in the owning stack and cycle on the rule ARN — audit finding C1), and
 // grants SES lambda:InvokeFunction (or the invoke fails silently — finding I1).
-func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunction) {
+func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunction, env Env) {
 	ruleSet := awsses.NewReceiptRuleSet(stack, jsii.String("InboundRuleSet"), &awsses.ReceiptRuleSetProps{
 		ReceiptRuleSetName: jsii.String(ReceiptRuleSetName),
 	})
@@ -138,8 +138,8 @@ func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunc
 		Resources:  jsii.Strings(*bucket.BucketArn() + "/*"),
 		Conditions: &map[string]any{
 			"StringEquals": map[string]any{
-				"AWS:SourceAccount": Account,
-				"AWS:SourceArn":     ReceiptRuleArn,
+				"AWS:SourceAccount": env.Account,
+				"AWS:SourceArn":     env.ReceiptRuleArn,
 			},
 		},
 	}))
@@ -147,8 +147,8 @@ func addReceiptRule(stack awscdk.Stack, bucket awss3.IBucket, fn awslambda.IFunc
 	fn.AddPermission(jsii.String("AllowSESInvoke"), &awslambda.Permission{
 		Principal:     awsiam.NewServicePrincipal(jsii.String("ses.amazonaws.com"), nil),
 		Action:        jsii.String("lambda:InvokeFunction"),
-		SourceAccount: jsii.String(Account),
-		SourceArn:     jsii.String(ReceiptRuleArn),
+		SourceAccount: jsii.String(env.Account),
+		SourceArn:     jsii.String(env.ReceiptRuleArn),
 	})
 }
 
@@ -191,9 +191,9 @@ func addDmarcAndMx(stack awscdk.Stack) {
 
 // addObservability alarms on DLQ depth>0 and routes it — plus the SP-2 bounce/complaint topic — to the
 // operator's email. Closes the fan-out SP-2 left open (the topic had no subscriber).
-func addObservability(stack awscdk.Stack, dlq awssqs.Queue) {
+func addObservability(stack awscdk.Stack, dlq awssqs.Queue, env Env) {
 	topic := awssns.Topic_FromTopicArn(stack, jsii.String("BounceTopic"),
-		jsii.String("arn:aws:sns:us-east-1:"+Account+":"+BounceTopicName))
+		jsii.String(env.BounceTopicArn))
 	topic.AddSubscription(awssnssubscriptions.NewEmailSubscription(jsii.String(OperatorEmail), nil))
 
 	alarm := awscloudwatch.NewAlarm(stack, jsii.String("DlqDepthAlarm"), &awscloudwatch.AlarmProps{

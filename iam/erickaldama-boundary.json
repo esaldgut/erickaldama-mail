@@ -15,10 +15,10 @@
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
       "Resource": [
-        "arn:aws:iam::367707589526:role/cdk-hnb659fds-deploy-role-367707589526-us-east-1",
-        "arn:aws:iam::367707589526:role/cdk-hnb659fds-file-publishing-role-367707589526-us-east-1",
-        "arn:aws:iam::367707589526:role/cdk-hnb659fds-image-publishing-role-367707589526-us-east-1",
-        "arn:aws:iam::367707589526:role/cdk-hnb659fds-lookup-role-367707589526-us-east-1"
+        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-deploy-role-<ACCOUNT_ID>-us-east-1",
+        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-file-publishing-role-<ACCOUNT_ID>-us-east-1",
+        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-image-publishing-role-<ACCOUNT_ID>-us-east-1",
+        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-us-east-1"
       ]
     },
     {
@@ -38,8 +38,8 @@
         "iam:CreateUser", "iam:CreateAccessKey"
       ],
       "NotResource": [
-        "arn:aws:iam::367707589526:user/mail-client-read",
-        "arn:aws:iam::367707589526:user/mail-sender"
+        "arn:aws:iam::<ACCOUNT_ID>:user/mail-client-read",
+        "arn:aws:iam::<ACCOUNT_ID>:user/mail-sender"
       ]
     },
     {
@@ -49,7 +49,7 @@
       "Resource": "*",
       "Condition": {
         "StringNotEqualsIfExists": {
-          "iam:PermissionsBoundary": "arn:aws:iam::367707589526:policy/erickaldama-boundary"
+          "iam:PermissionsBoundary": "arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-boundary"
         }
       }
     }

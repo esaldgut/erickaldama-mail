@@ -2,7 +2,7 @@
 
 > Subproyecto 0 del sistema de correo erickaldama.com. Transversal: hace la premisa CDK-Go imperativa
 > e idempotente. Debe estar activo antes de que cualquier infra (SP-1/2/3) toque AWS.
-> Fecha: 2026-06-07. Cuenta ErickSA 367707589526. Región us-east-1.
+> Fecha: 2026-06-07. Cuenta ErickSA <ACCOUNT_ID>. Región us-east-1.
 
 ## Context
 

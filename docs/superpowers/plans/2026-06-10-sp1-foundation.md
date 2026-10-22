@@ -4,13 +4,13 @@
 
 **Goal:** Stand up the first real AWS resources of the email project via AWS CDK Go — a public hosted zone for `erickaldama.com` (NS/SOA + CAA), the read-only IAM boundary formalized as a CDK-managed policy attached to the existing `mail-readonly` user, and a permissions boundary that caps every IAM role CFN creates in SP-1..SP-3 — proving the SP-0 governance holds under a real out-of-band deploy.
 
-**Architecture:** A single CDK-Go stack `FoundationStack` (account `367707589526`, region `us-east-1`) built in testability order: (1) the Go module scaffold (`cmd/cdk`, `cdk.json`, `go.mod` deps) buildable offline; (2) the stack constructs TDD'd with the CDK `assertions` module against the synthesized template — zero AWS; (3) the IAM JSON artifacts (exec-policy allowlist + boundary mirror) the human passes to `cdk bootstrap`; (4) the human out-of-band gate (bootstrap + deploy + registrar NS update with SSO Admin); (5) the agent's read-only post-deploy verification (identity unchanged + gate + simulate + dig). The agent never deploys; it writes code, runs synth/diff/test (hook-allowed reads), hands exact commands to the human, and verifies.
+**Architecture:** A single CDK-Go stack `FoundationStack` (account `<ACCOUNT_ID>`, region `us-east-1`) built in testability order: (1) the Go module scaffold (`cmd/cdk`, `cdk.json`, `go.mod` deps) buildable offline; (2) the stack constructs TDD'd with the CDK `assertions` module against the synthesized template — zero AWS; (3) the IAM JSON artifacts (exec-policy allowlist + boundary mirror) the human passes to `cdk bootstrap`; (4) the human out-of-band gate (bootstrap + deploy + registrar NS update with SSO Admin); (5) the agent's read-only post-deploy verification (identity unchanged + gate + simulate + dig). The agent never deploys; it writes code, runs synth/diff/test (hook-allowed reads), hands exact commands to the human, and verifies.
 
 **Tech Stack:** Go 1.26.4 + `github.com/aws/aws-cdk-go/awscdk/v2` (live v2.258.1, NOT hardcoded — `go get @latest`) + `jsii-runtime-go` (transitive) + `constructs/v10`; CDK `assertions` module + `go test` (offline template asserts); AWS IAM JSON policies + `aws iam simulate-principal-policy` (boundary verification, from SP-0); `cdk bootstrap`/`cdk deploy` (human, SSO Admin); `aws route53domains update-domain-nameservers` (human, registrar).
 
 **Source spec:** `docs/superpowers/specs/2026-06-10-sp1-foundation-design.md` (commit f0f5888). Audit findings: `~/.claude/plans/email-project-research/10-sp1-audit-findings.md`.
 
-**Account/region:** ErickSA `367707589526`, `us-east-1`. Apply `aws-cli-pre-flight-canonical` before any `aws` command (verify `get-caller-identity` Account == 367707589526 via `--profile AdministratorAccess-367707589526`).
+**Account/region:** ErickSA `<ACCOUNT_ID>`, `us-east-1`. Apply `aws-cli-pre-flight-canonical` before any `aws` command (verify `get-caller-identity` Account == <ACCOUNT_ID> via `--profile AdministratorAccess-<ACCOUNT_ID>`).
 
 **Live ground truth (verified 2026-06-10):** `erickaldama.com` registered (Amazon Registrar, exp 2027-05-28) but NO hosted zone; registrar points at a dead delegation set (`dig NS` empty). `mail-readonly` user exists with inline policy `mail-readonly-boundary`. SES us-east-1 sandbox, zero identities. `esaldgut.com` zone is pre-existing — DO NOT touch.
 
@@ -119,7 +119,7 @@ func main() {
 // env pins the target account and region (SP-1 deploys only to ErickSA us-east-1).
 func env() *awscdk.Environment {
 	return &awscdk.Environment{
-		Account: jsii.String("367707589526"),
+		Account: jsii.String("<ACCOUNT_ID>"),
 		Region:  jsii.String("us-east-1"),
 	}
 }
@@ -187,7 +187,7 @@ package infra
 
 // Canonical identifiers for the erickaldama.com email project (SP-1 foundation).
 const (
-	Account = "367707589526"
+	Account = "<ACCOUNT_ID>"
 	Region  = "us-east-1"
 
 	DomainName = "erickaldama.com"
@@ -661,7 +661,7 @@ Append this section (verbatim):
 ## SP-1 bootstrap (t=0, human, SSO Admin) — 2026-06-10
 
 The agent NEVER runs these. The human runs them out-of-band with SSO
-`AdministratorAccess-367707589526`. The agent prepares the exact commands and verifies after.
+`AdministratorAccess-<ACCOUNT_ID>`. The agent prepares the exact commands and verifies after.
 
 ### 1. Create the boundary + exec-policy managed policies (first time only)
 The first `cdk bootstrap` references `erickaldama-boundary` by name, so it must exist first.
@@ -670,26 +670,26 @@ For the FIRST bootstrap, create them from the JSON mirrors:
 
     aws iam create-policy --policy-name erickaldama-boundary \
       --policy-document file://iam/erickaldama-boundary.json \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
     aws iam create-policy --policy-name erickaldama-deploy-exec \
       --policy-document file://iam/deploy-exec-policy.json \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
 
 ### 2. Bootstrap the environment (one-time)
-    cdk bootstrap aws://367707589526/us-east-1 \
+    cdk bootstrap aws://<ACCOUNT_ID>/us-east-1 \
       --custom-permissions-boundary erickaldama-boundary \
-      --cloudformation-execution-policies arn:aws:iam::367707589526:policy/erickaldama-deploy-exec \
-      --profile AdministratorAccess-367707589526
+      --cloudformation-execution-policies arn:aws:iam::<ACCOUNT_ID>:policy/erickaldama-deploy-exec \
+      --profile AdministratorAccess-<ACCOUNT_ID>
 
 ### 3. Deploy the FoundationStack
-    cdk deploy FoundationStack --profile AdministratorAccess-367707589526
+    cdk deploy FoundationStack --profile AdministratorAccess-<ACCOUNT_ID>
     # Note the CfnOutput "NameServers" (4 NS) and "HostedZoneId".
 
 ### 4. Update the registrar with the new name servers
     aws route53domains update-domain-nameservers --region us-east-1 \
       --domain-name erickaldama.com \
       --nameservers Name=<ns1> Name=<ns2> Name=<ns3> Name=<ns4> \
-      --profile AdministratorAccess-367707589526
+      --profile AdministratorAccess-<ACCOUNT_ID>
     # Async — poll: aws route53domains get-operation-detail --operation-id <id> --region us-east-1
 
 ### Deferred SP-0/T13 test satisfied here
@@ -788,8 +788,8 @@ git commit -m "feat(sp-1): post-deploy identity check (deferred SP-0/T13 test)"
 Apply `aws-cli-pre-flight-canonical`. Run (agent, read-only):
 
 ```bash
-aws sts get-caller-identity --profile AdministratorAccess-367707589526 --query Account --output text
-# Expected: 367707589526
+aws sts get-caller-identity --profile AdministratorAccess-<ACCOUNT_ID> --query Account --output text
+# Expected: <ACCOUNT_ID>
 go test ./internal/infra/ -v          # template asserts green
 ```
 

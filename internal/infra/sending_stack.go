@@ -16,8 +16,8 @@ import (
 // NewSendingStack creates the SP-2 sending identity: SES domain identity + DKIM + custom
 // MAIL FROM + DMARC + configuration set (EventBridge) + reputation alarms + send IAM.
 // Fleshed out construct-by-construct in tasks 2–5.
-func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackProps) awscdk.Stack {
-	stack := awscdk.NewStack(scope, jsii.String(id), props)
+func NewSendingStack(scope constructs.Construct, id string, props *EnvStackProps) awscdk.Stack {
+	stack := awscdk.NewStack(scope, jsii.String(id), props.StackProps)
 
 	// Tag every resource for attribution (mirror FoundationStack).
 	for k, v := range sp2Tags() {
@@ -27,7 +27,7 @@ func NewSendingStack(scope constructs.Construct, id string, props *awscdk.StackP
 	_, configSet := addSendingIdentity(stack)
 	addEventRouting(stack, configSet)
 	addReputationAlarms(stack)
-	addSendIam(stack)
+	addSendIam(stack, props.Env)
 
 	return stack
 }
@@ -148,7 +148,7 @@ func addReputationAlarms(stack awscdk.Stack) {
 // addSendIam creates the scoped send capability: a mail-send policy (only ses:SendEmail/SendRawEmail,
 // only from the verified identity, only as erick@) on a mail-sender-role assumable by any principal
 // in the account (incl. SSO permission-set roles) — no long-lived keys.
-func addSendIam(stack awscdk.Stack) {
+func addSendIam(stack awscdk.Stack, env Env) {
 	mailSendPolicy := awsiam.NewManagedPolicy(stack, jsii.String("MailSendPolicy"),
 		&awsiam.ManagedPolicyProps{
 			ManagedPolicyName: jsii.String(SendPolicyName),
@@ -158,7 +158,7 @@ func addSendIam(stack awscdk.Stack) {
 					Actions: jsii.Strings("ses:SendEmail", "ses:SendRawEmail"),
 					// Both the identity AND the default config set: SES applies mail-config to every send, so a
 					// send is authorized only when the policy covers the config-set resource too (deploy finding).
-					Resources: jsii.Strings(IdentityArn, ConfigSetArn),
+					Resources: jsii.Strings(env.IdentityArn, env.ConfigSetArn),
 					Conditions: &map[string]interface{}{
 						"StringEquals": map[string]interface{}{"ses:FromAddress": FromAddress},
 					},
@@ -168,7 +168,7 @@ func addSendIam(stack awscdk.Stack) {
 
 	awsiam.NewRole(stack, jsii.String("MailSenderRole"), &awsiam.RoleProps{
 		RoleName:        jsii.String(SenderRoleName),
-		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String(Account)),
+		AssumedBy:       awsiam.NewAccountPrincipal(jsii.String(env.Account)),
 		ManagedPolicies: &[]awsiam.IManagedPolicy{mailSendPolicy},
 	})
 
