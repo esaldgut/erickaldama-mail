@@ -30,7 +30,7 @@ func awsRegion() string {
 // account ID no longer appears as a literal in the source (NDA / attack-surface reduction). The ARN strings
 // are byte-identical to the former literals when the real account/region are resolved from env.
 type Env struct {
-	Account, Region                                                                        string
+	Account, Region                                                                         string
 	IdentityArn, ConfigSetArn, ReceiptRuleArn                                               string
 	CdkLookupRoleArn, CdkDeployRoleArn, CdkFilePublishingRoleArn, CdkImagePublishingRoleArn string
 	DynamoTableArn, BounceTopicArn                                                          string
