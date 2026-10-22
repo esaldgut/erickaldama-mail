@@ -23,6 +23,12 @@ sesión — todo lo que hay que recordar entre sesiones está aquí, versionado 
 | v0.7 | FTS5 en las tools del agente AI (`search_messages`, `Searcher`/`fallbackSearcher`, AR-1) | `7bef535` | #18 |
 | v0.7.1 | Endurecer el `Description` de `search_messages` contra operadores estilo Gmail (declarativo, ASCII, describe el mecanismo) | `b22449f` | #21 |
 
+**Infra (no versión de cliente):**
+
+| Frente | Qué | Merge | PR |
+|---|---|---|---|
+| NDA parametrización | Account ID + ARNs fuera del source público — `Env` struct inyectado (approach #3) + `EnvStackProps`, role ARNs a GitHub secrets, export de `CDK_DEFAULT_ACCOUNT` en CI, docs a `<ACCOUNT_ID>`. Byte-identidad verificada (`cdk diff` vacío); `grep <account>` = 0. | `ab70c95` | #22 |
+
 Los SHA son el commit de merge de cada PR (`gh pr list --state merged`), no el HEAD del branch de feature —
 la fuente de verdad si hace falta re-verificar es el historial de GitHub del repo.
 
@@ -32,6 +38,20 @@ la fuente de verdad si hace falta re-verificar es el historial de GitHub del rep
 
 Ítems diferidos a propósito, con motivo explícito, que hoy viven dispersos entre comentarios de PR y memoria.
 Consolidados aquí para que sobrevivan a través de sesiones.
+
+### Infra NDA (PR #22)
+
+- **Approach #4 (tokens CDK nativos) como evolución futura** — hoy #3 (Env struct) preserva byte-identidad. Si en
+  algún momento se acepta que el template cambie (literal → `{"Ref":"AWS::AccountId"}`) y se reescriben los
+  template-assertion tests para asertar tokens, #4 es el techo idiomático (el account desaparece también del
+  template renderizado, no solo del source). No urgente — #3 ya saca el account del source. Ver el skill
+  `iac-inject-env-never-hardcode-account`.
+- **`Region` sigue como literal `us-east-1`** en varias condiciones IAM (`aws:RequestedRegion`) y en `cd.yml` —
+  NO es fuga de account (región no es secreta), pero si algún día el proyecto se multi-región, parametrizarla
+  por el mismo `Env` struct cierra la portabilidad. Deuda consciente, no urgente.
+- **Los `iam/*.sh` leen `${EXPECTED_ACCOUNT}`** — el humano que los corre out-of-band debe exportarlo (documentado
+  en `docs/BOOTSTRAP.md`). Candidato: un wrapper que lo derive de `aws sts get-caller-identity` para no exportarlo a
+  mano. Menor.
 
 ### v0.7
 

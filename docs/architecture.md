@@ -230,6 +230,52 @@ the DynamoDB table, the SQS DLQ, IAM policies, and the CloudWatch alarms — is 
 This is enforced, not just intended: a `PreToolUse` hook blocks any AWS write that does not come
 through the CDK-Go stack, and a skill-recipe verifies live AWS docs before each step.
 
+### NDA parametrization — the account never lives in the public source (PR #22)
+
+This is a **public** repo, so the AWS Account ID and ARNs are NOT literals in the source. They are resolved
+at synth/deploy and injected — the account never appears in a committed `.go`/`.yml` file (verified:
+`grep -rn <account> .` = 0). The mechanism:
+
+```mermaid
+flowchart LR
+    subgraph ci["CI (GitHub Actions)"]
+        oidc["OIDC assume-role<br/>(role-to-assume from<br/>${{ secrets.AWS_CD_*_ROLE_ARN }})"]
+        export["step: export CDK_DEFAULT_ACCOUNT<br/>= aws sts get-caller-identity"]
+    end
+    subgraph local["Local (human)"]
+        profile["--profile AdministratorAccess-&lt;account&gt;<br/>(imperative — never the shell default)"]
+    end
+    newenv["NewEnv() · internal/infra/env.go<br/>reads CDK_DEFAULT_ACCOUNT / REGION<br/>fallback 000000000000 (offline synth/test)"]
+    env["Env struct + EnvStackProps<br/>composes ARNs with fmt.Sprintf<br/>(byte-identical to the former literals)"]
+    stacks["5 CDK-Go stacks<br/>(account injected, no literal)"]
+    tpl["cdk synth → template<br/>byte-identical · empty cdk diff"]
+
+    oidc --> export --> newenv
+    profile --> newenv
+    newenv --> env --> stacks --> tpl
+
+    classDef ci fill:#1a2332,stroke:#3fb950,stroke-width:1px,color:#fff;
+    classDef core fill:#1a2332,stroke:#7b68ee,stroke-width:1px,color:#fff;
+    classDef store fill:#1a2332,stroke:#ff9900,stroke-width:1px,color:#fff;
+    class oidc,export ci;
+    class profile,newenv,env core;
+    class stacks,tpl store;
+```
+
+**Approach #3 (Env struct injected), not #4 (CDK tokens):** `NewEnv()` composes each ARN from `Env.Account`
+with `fmt.Sprintf`, producing strings **byte-identical** to the former literals — so the synthesized template
+does not change (the `cdk diff` in CI comes back empty). This preserves the live CD (no infra churn) while
+removing the account from the source. The CDK-native-tokens alternative (#4, `Fn::Sub`/`AWS::AccountId`) would
+change the template (breaking byte-identity + the template-assertion tests), and the 4 `cdk-hnb659fds-*` role
+ARNs carry the account **inside the name**, forcing `Fn::Sub` anyway. The reusable rule is the skill
+`iac-inject-env-never-hardcode-account` (#3 floor, #4 ceiling, `const→var` prohibited). See
+[`CHANGELOG.md`](../CHANGELOG.md#infra--nda) and the design spec under `docs/superpowers/specs/`.
+
+> **Operational rule (discovered by the spike):** every `cdk`/`aws` command for this account uses
+> `--profile AdministratorAccess-<account>` **explicitly** — the CDK CLI populates `CDK_DEFAULT_ACCOUNT` from
+> the shell's active credentials, and the default here pointed at a *different* account, so the spike first
+> synthesized the wrong account until `--profile` was pinned (`aws-cli-pre-flight-canonical`).
+
 ## Key decisions (audited against Well-Architected)
 
 | Decision | Rationale |
@@ -243,3 +289,4 @@ through the CDK-Go stack, and a skill-recipe verifies live AWS docs before each 
 | AI default = Ollama local (`qwen3:32b`), not Claude API | Mail corpus never crosses the network without explicit opt-in; `qwen3:32b` is Ollama's reference model for tool-calling |
 | Two disjoint IAM users (`mail-client-read` / `mail-sender`) | Least-privilege split: read path cannot send; send path cannot read the inbox |
 | `ErrSandboxRecipient` typed sentinel (not string-match) | SES sandbox rejects non-verified recipients; typed error lets callers handle it cleanly without fragile string comparison |
+| Account/ARNs via `Env` struct injection, not source literals (NDA, PR #22) | Public repo — the account is resolved at synth from `CDK_DEFAULT_ACCOUNT`, never committed. Approach #3 preserves byte-identity (empty `cdk diff`); #4 (CDK tokens) would change the template and break the live CD |

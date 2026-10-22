@@ -28,6 +28,13 @@ substring fallback that fires only on real infra failure (invariant AR-1). v0.7.
 hardened the tool Description (describe the search MECHANISM, ASCII-pure) so a local
 LLM stops inventing Gmail-style from: operators — a purely declarative change (no
 runtime path altered). Added the FTS5 cache node + backend edges below.
+
+NDA parametrization (2026-08, PR #22): the AWS Account ID + ARNs no longer appear as
+literals in the public repo. The account is resolved at synth from CDK_DEFAULT_ACCOUNT
+(exported in cd.yml from sts get-caller-identity on the OIDC-assumed role) and injected
+via NewEnv()/EnvStackProps into the 5 stacks; role-to-assume comes from GitHub secrets.
+cdk synth stays byte-identical (verified: empty cdk diff in CI). Added the account-
+resolution node + edges in the CI/CD cluster below.
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -96,6 +103,11 @@ with Diagram(
         oidc = IAM("OIDC provider\ntoken.actions.\ngithubusercontent.com")
         diff_iam = IAM("mail-cd-diff\nread-only · lookup only")
         deploy_iam = IAM("mail-cd-deploy\nsub=environment:production")
+        # NDA parametrization (PR #22): role ARNs come from GitHub secrets; the account is NOT a source
+        # literal — it is resolved at synth from CDK_DEFAULT_ACCOUNT, exported from the OIDC-assumed role.
+        acct_resolve = IAM(
+            "Export CDK_DEFAULT_ACCOUNT\n(sts get-caller-identity on\nthe assumed role)\n→ Env/EnvStackProps\nno account literal in source"
+        )
 
     # Receive flow
     sender >> Edge(label="MX") >> dns >> ses_in
@@ -142,4 +154,12 @@ with Diagram(
     gha >> Edge(label="deploy\n(approval gate)") >> deploy_iam
     diff_iam >> Edge(label="AssumeRoleWithWebIdentity", style="dashed") >> oidc
     deploy_iam >> Edge(label="AssumeRoleWithWebIdentity", style="dashed") >> oidc
+
+    # NDA parametrization (PR #22): the account is resolved from the assumed role at synth, NOT a source
+    # literal. role-to-assume comes from GitHub secrets; a cd.yml step exports CDK_DEFAULT_ACCOUNT from
+    # `sts get-caller-identity`, which NewEnv()/EnvStackProps inject into the 5 stacks. cdk synth/deploy
+    # then produce byte-identical templates (verified: empty cdk diff in CI) with no account literal in git.
+    diff_iam >> Edge(label="sts get-caller-identity", style="dashed") >> acct_resolve
+    deploy_iam >> Edge(label="sts get-caller-identity", style="dashed") >> acct_resolve
+    acct_resolve >> Edge(label="CDK_DEFAULT_ACCOUNT\n→ byte-identical synth") >> gha
     deploy_iam >> Edge(label="cdk deploy → mutates", style="dashed") >> ses_in

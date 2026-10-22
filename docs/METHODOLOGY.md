@@ -203,6 +203,62 @@ mismatch exacto — validar, no confiar, aplicado al propio diagnóstico.
 
 ---
 
+## La auditoría en capas, 9º fogueo (caso infra NDA, PR #22) — la auditoría del PLAN y el spike como go/no-go
+
+El frente NDA (sacar el Account ID + ARNs del repo público, parametrizándolos con un `Env` struct inyectado) es el
+**noveno fogueo**, y es el primero donde la pieza de auditoría que caza el defecto más caro **no es sobre el código
+ni sobre el texto — es sobre el PLAN de implementación**, antes de escribir una sola línea. Y donde el **spike**
+(probar el patrón en 1 unidad antes de propagarlo a 5) cazó, en vivo, un defecto que ninguna auditoría estática
+pudo ver porque vivía en el entorno de ejecución del CI.
+
+**Sub-lección — auditar el PLAN caza clases que la auditoría del código no puede, porque el código aún no existe.**
+El plan de implementación pasó por una auditoría adversarial de 3 frentes (byte-identidad de los `fmt.Sprintf` vs
+los literales reales · blast-radius de borrar las constantes · coherencia + CI). Cazó **3 CRIT + 4 MAJOR** antes de
+tocar código, cada uno un defecto que habría roto la ejecución:
+
+| Hallazgo | Sev | Qué habría pasado sin cazarlo |
+|---|---|---|
+| 2 consumidores omitidos del plan (`sending_stack.go:171` `NewAccountPrincipal`, `receiving_stack.go:142,151` `ReceiptRuleArn`) | CRIT | compile break — el plan migraba unas referencias y dejaba otras adyacentes |
+| `CDK_DEFAULT_ACCOUNT` NO lo setea `configure-aws-credentials` (verbatim de su README) | CRIT | el synth del CI usaría el placeholder → diff gigante / deploy a la cuenta equivocada |
+| threading no-uniforme (las 5 firmas de stack difieren: `bucket` de receiving, 2 returns de mail_storage) | MAJOR | un 4º param `env` no encajaba en todas → se diseñó el `EnvStackProps` wrapper |
+| baseline byte-identidad all-stacks nunca capturado | MAJOR | Task 4 diffearía contra un HEAD ya mutado, sin nada que comparar |
+| trampa de consistencia `NewEnv()` en tests | MAJOR | template y assert podían derivar de cuentas distintas bajo el placeholder |
+| 5º test (`mail_storage_stack_test.go`) omitido del plan | MINOR | churn del wrapper sin cubrir ese call-site |
+
+Las siete corridas anteriores auditaron *artefactos que ya existían* (código, un `description`). v0.7.1→v0.7.2 (NDA)
+probó que el mismo aparato adversarial aplica al **plan** — y que ahí caza la clase más barata de arreglar y más
+cara de no cazar: un plan con un consumidor omitido garantiza un compile break; un plan que apuesta a una variable
+de entorno implícita garantiza un diff gigante en CI. El plan es código-por-escribir; se audita como código.
+
+**Sub-lección — el spike es el go/no-go, y cazó el CRIT del CI EN VIVO antes de propagar.** El approach #3 asume que
+construir los ARN desde `Env.Account` con `fmt.Sprintf` produce strings byte-idénticos → template idéntico. En vez
+de propagarlo a los 5 stacks por fe, el spike lo probó en 1 (`SendingStack`): capturar el template de HEAD →
+parametrizar solo ese → `cdk synth` → `diff` contra el baseline. El primer `diff` **NO fue vacío** — sintetizó los
+ARN con `288761749126`/`us-west-2` (otra cuenta del ecosistema) en vez de `<ACCOUNT_ID>`/`us-east-1`. Causa: la CDK
+CLI popula `CDK_DEFAULT_ACCOUNT` de las credenciales ACTIVAS de la shell, y el default apuntaba a otra cuenta. El
+diff equivocado **no fue un fallo del approach — fue el spike cazando en vivo exactamente el CRIT que la auditoría
+del plan había señalado** sobre `CDK_DEFAULT_ACCOUNT`. Con `cdk synth --profile AdministratorAccess-<account>`
+explícito, el diff fue vacío. Dos lecciones operativas nacieron del spike: (1) `--profile` explícito es imperativo
+en todo comando `cdk`/`aws` del frente (nunca confiar en el default — `aws-cli-pre-flight-canonical`); (2) el CI
+necesita un step que **exporte `CDK_DEFAULT_ACCOUNT` explícito** desde el rol OIDC asumido, porque
+`configure-aws-credentials` no lo hace. Sin el spike, ambos defectos habrían aparecido en el `cdk-diff` job del CI
+(o peor, en un deploy a la cuenta equivocada). El spike convirtió un go/no-go de 1 stack en la prueba de todo el
+approach — y su `diff` equivocado fue la señal, no el ruido.
+
+**Sub-lección — el método de byte-identidad tiene su propia trampa: el asset del Lambda.** Al verificar
+byte-identidad de un template CDK con un Lambda bundleado, el `S3Key`/`aws:asset:path` del asset SIEMPRE difiere
+entre synths (varía por el hash del build Go — timestamps, orden de compilación), ajeno al cambio. El `diff` de
+byte-identidad debe hacerse sobre los `*.template.json` **excluyendo** las líneas de `asset.*`/`S3Key`: un `diff`
+que solo muestra esas líneas es un PASS de byte-identidad, no un fallo. Verificado en los 5 stacks (el único diff
+fue el asset de `ReceivingStack`, benigno). Y el gate end-to-end fue el `cdk-diff` job del PR corriendo con el rol
+OIDC real + el export de `CDK_DEFAULT_ACCOUNT` → comentó diff vacío, probando que el CD funciona con el account
+resuelto del entorno. Skill universal destilado: `iac-inject-env-never-hardcode-account` (#3 piso, #4 techo, el
+`const→var` con `os.Getenv` en init PROHIBIDO por estado global capturado temprano). Y la lección
+`local-env-hides-ci-precondition`: el `build & test` del CI tiene un gate `gofmt -l` que `go build`/`vet`/`test`
+local NO ejercitan — un `.go` creado con Write puede quedar gofmt-desalineado y pasar local pero romper CI.
+
+---
+
 ## Disciplinas transversales
 
 - **Validar, no confiar** — cada reporte de subagente (y cada prescripción de fix de un revisor) se verifica
